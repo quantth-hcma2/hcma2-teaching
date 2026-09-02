@@ -221,6 +221,25 @@ tr:hover td{background:#fafbfc;}
 #presQrBig{display:flex; justify-content:center; align-items:center;}
 #presQrBig img,#presQrBig canvas{width:min(68vw,560px)!important; height:min(68vw,560px)!important; max-width:560px; max-height:560px;}
 .pres-qr-popup-code{font-size:clamp(24px,4vw,40px); font-weight:900; color:#0f172a; letter-spacing:2px; margin-top:14px;}
+.pres-open-wall{
+  width:min(980px,78vw); display:grid; grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:14px; align-content:start;
+}
+.pres-open-card{
+  background:#fff; color:#0f172a; border-radius:14px; padding:16px 18px;
+  text-align:left; font-size:clamp(16px,1.5vw,22px); line-height:1.45;
+  box-shadow:0 4px 14px rgba(0,0,0,.12); overflow-wrap:anywhere;
+}
+.pres-open-card .num{font-size:12px;color:#64748b;font-weight:800;margin-bottom:5px;text-transform:uppercase;letter-spacing:.4px;}
+.pres-open-empty{
+  width:min(820px,76vw); padding:30px; border:1px dashed rgba(255,255,255,.35);
+  border-radius:16px; color:rgba(255,255,255,.75); font-size:20px;
+}
+@media(max-width:900px){
+  .pres-open-wall{grid-template-columns:1fr;width:min(760px,88vw);}
+}
+.report-contact-print{display:none;}
+
 @media(max-width:600px){
   .pres-qr-popup{padding:12px;}
   .pres-qr-popup-card{padding:22px 14px 18px;}
@@ -288,8 +307,13 @@ tr:hover td{background:#fafbfc;}
   .site-footer .zalo-contact{width:100%; justify-content:center; flex-wrap:wrap;}
 }
 @media print{
-  .site-footer{box-shadow:none; border-top:1px solid #d1d5db; margin-top:12px; padding:8px 0; font-size:10px;}
-  .site-footer .zalo-contact img{width:26px; height:26px;}
+  .site-footer{display:none !important;}
+  .report-contact-print{
+    display:flex !important; align-items:center; justify-content:center; gap:8px; flex-wrap:wrap;
+    border-top:1px solid #d1d5db; margin-top:8px; padding-top:7px; font-size:9.5pt; color:#4b5563;
+    break-inside:avoid; page-break-inside:avoid;
+  }
+  .report-contact-print a{color:#155e75;text-decoration:none;font-weight:700;}
 }
 
 </style>
@@ -1649,6 +1673,49 @@ function aggregateForChart(question, options, responseDocs){
     borderSkipped:false
   }]};
 }
+
+const percentLabelsPlugin = {
+  id:"percentLabels",
+  afterDatasetsDraw(chart, args, pluginOpts){
+    if(!pluginOpts || pluginOpts.display===false) return;
+    const chartType = chart.config.type;
+    const isPie = chartType==="pie" || chartType==="doughnut";
+    const isStacked = pluginOpts.mode==="stacked";
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.textAlign="center";
+    ctx.textBaseline="middle";
+    ctx.font=`700 ${pluginOpts.fontSize||12}px ${getComputedStyle(document.body).fontFamily||"Arial"}`;
+
+    if(isPie){
+      const ds = chart.data.datasets[0];
+      const vals = (ds?.data||[]).map(v=>Number(v)||0);
+      const total = vals.reduce((a,b)=>a+b,0);
+      if(total>0){
+        const meta = chart.getDatasetMeta(0);
+        meta.data.forEach((arc,i)=>{
+          const val=vals[i], pct=val/total*100;
+          if(val<=0 || pct < (pluginOpts.minPercent||5)) return;
+          const p=arc.tooltipPosition();
+          ctx.fillStyle="#ffffff";
+          ctx.fillText(`${Math.round(pct*10)/10}%`,p.x,p.y);
+        });
+      }
+    }else if(isStacked){
+      chart.data.datasets.forEach((ds,di)=>{
+        const val=Number(ds.data?.[0])||0;
+        if(val < (pluginOpts.minPercent||8)) return;
+        const el=chart.getDatasetMeta(di).data?.[0];
+        if(!el) return;
+        const p=el.tooltipPosition();
+        ctx.fillStyle="#ffffff";
+        ctx.fillText(`${Math.round(val*10)/10}%`,p.x,p.y);
+      });
+    }
+    ctx.restore();
+  }
+};
+
 function chartOptions(question, chartType, agg, mode){
   const isReport=mode==="report", isPresentation=mode==="presentation";
   const base={
@@ -1662,7 +1729,13 @@ function chartOptions(question, chartType, agg, mode){
         position:"bottom",
         labels:{boxWidth:14,padding:14,font:{size:isPresentation?14:12}}
       },
-      tooltip:{enabled:true}
+      tooltip:{enabled:true},
+      percentLabels:{
+        display:chartType==="pie"||chartType==="donut"||chartType==="stacked",
+        mode:chartType==="stacked"?"stacked":"pie",
+        minPercent:chartType==="stacked"?8:5,
+        fontSize:isPresentation?16:(isReport?12:12)
+      }
     }
   };
 
@@ -1714,7 +1787,17 @@ function chartOptions(question, chartType, agg, mode){
   // Cột đứng mặc định.
   base.plugins.legend.display=false;
   base.scales={
-    x:{grid:{display:false},ticks:{autoSkip:false,maxRotation:35,minRotation:0}},
+    x:{grid:{display:false},ticks:{
+      autoSkip:false,maxRotation:isPresentation?0:35,minRotation:0,
+      font:{size:isPresentation?13:11},
+      callback:function(value){
+        const label=this.getLabelForValue(value);
+        if(!isPresentation || typeof label!=="string" || label.length<=22) return label;
+        const words=label.split(/\s+/); const lines=[]; let line="";
+        words.forEach(w=>{ const next=(line+" "+w).trim(); if(next.length>22 && line){lines.push(line);line=w;}else line=next; });
+        if(line) lines.push(line); return lines.slice(0,3);
+      }
+    }},
     y:{beginAtZero:true,title:{display:true,text:question.type==="multiple"?"Lượt chọn":"Số học viên"},ticks:{precision:0,stepSize:1}}
   };
   return base;
@@ -1739,8 +1822,11 @@ function chartSummaryHtml(question, options, responseDocs){
   if(type==="ranking"){
     if(!responseDocs.length || !options.length) return "";
     const agg=aggregateForChart(question,options,responseDocs);
-    const top=agg.labels[0], score=agg.datasets[0].data[0]??0;
-    return `<div class="chart-summary"><span class="metric"><b>Xếp hạng cao nhất:</b> ${esc(top||"—")} (${score} điểm)</span><span class="metric"><b>Cách tính:</b> hạng 1 = ${options.length} điểm → hạng ${options.length} = 1 điểm</span></div>`;
+    const vals=agg.datasets[0]?.data||[];
+    const score=Math.max(0,...vals);
+    const winners=agg.labels.filter((_,i)=>Number(vals[i])===Number(score));
+    const winnerText=winners.map(x=>esc(x)).join(" · ");
+    return `<div class="chart-summary"><span class="metric"><b>Xếp hạng cao nhất:</b> ${winnerText||"—"} (${score} điểm)${winners.length>1?" — Đồng hạng":""}</span><span class="metric"><b>Cách tính:</b> hạng 1 = ${options.length} điểm → hạng ${options.length} = 1 điểm</span></div>`;
   }
   if(type==="likert"){
     if(!responseDocs.length || !options.length) return "";
@@ -1759,8 +1845,9 @@ function chartSummaryHtml(question, options, responseDocs){
     const agg=aggregateForChart(question,options,responseDocs);
     const vals=agg.datasets[0]?.data||[];
     const maxVal=Math.max(0,...vals);
-    const idx=vals.indexOf(maxVal);
-    return `<div class="chart-summary"><span class="metric"><b>Người trả lời:</b> ${responseDocs.length}</span>${idx>=0?`<span class="metric"><b>Được chọn nhiều nhất:</b> ${esc(agg.labels[idx])} (${maxVal})</span>`:""}</div>`;
+    const winners=agg.labels.filter((_,i)=>Number(vals[i])===Number(maxVal) && maxVal>0);
+    const winnerText=winners.map(x=>esc(x)).join(" · ");
+    return `<div class="chart-summary"><span class="metric"><b>Người trả lời:</b> ${responseDocs.length}</span>${winners.length?`<span class="metric"><b>Được chọn nhiều nhất:</b> ${winnerText} (${maxVal})${winners.length>1?" — Đồng hạng":""}</span>`:""}</div>`;
   }
   return "";
 }
@@ -1784,7 +1871,7 @@ function renderChart(canvasEl, question, options, responseDocs, mode){
     const opts=chartOptions(question,chartType,agg,mode||"default");
     const key=canvasEl.id || ("chart_"+Math.random().toString(36).slice(2));
     if(!canvasEl.id) canvasEl.id=key;
-    __chartInstances[key]=new Chart(canvasEl,{type,data:agg,options:opts});
+    __chartInstances[key]=new Chart(canvasEl,{type,data:agg,options:opts,plugins:[percentLabelsPlugin]});
   }catch(e){
     console.warn("Không thể vẽ biểu đồ:",e);
     if(canvasEl.parentElement && !canvasEl.parentElement.querySelector(".chart-error")){
@@ -1802,7 +1889,7 @@ function renderAggregateChart(canvasEl, question, aggData, chartType, mode){
     const opts=chartOptions(question,chartType,aggData,mode||"default");
     const key=canvasEl.id || ("chart_"+Math.random().toString(36).slice(2));
     if(!canvasEl.id) canvasEl.id=key;
-    __chartInstances[key]=new Chart(canvasEl,{type,data:aggData,options:opts});
+    __chartInstances[key]=new Chart(canvasEl,{type,data:aggData,options:opts,plugins:[percentLabelsPlugin]});
   }catch(e){ console.warn("Không thể vẽ biểu đồ tổng hợp:",e); }
 }
 
@@ -1950,9 +2037,22 @@ async function teacherLiveControl(c, sessionId){
       // để Presentation View / Student View (đăng nhập ẩn danh) có thể hiển thị
       // số lượt trả lời & biểu đồ mà KHÔNG cần quyền đọc trực tiếp responses.
       const agg = (q.type!=="open") ? aggregateForChart(q, options, docs) : null;
+      // Với câu hỏi mở, chỉ đưa NỘI DUNG ẩn danh đã rút gọn sang session để Presentation
+      // có thể dựng Opinion Wall. Không đưa participantId hay metadata cá nhân.
+      const openAnswers = q.type==="open"
+        ? docs
+            .map(d=>({text:String(d.answer||"").trim(), ts:d.submittedAt?.toMillis?d.submittedAt.toMillis():0}))
+            .filter(x=>x.text)
+            .sort((a,b)=>b.ts-a.ts)
+            .slice(0,24)
+            .map(x=>x.text.slice(0,500))
+        : null;
       updateDoc(sessionRef, {
         responseCount: totalAll, updatedAt: serverTimestamp(),
-        liveAggregate: { questionId: q.id, chartType: q.chartType, agg, respondedCount: docs.length, updatedAt: Timestamp.now() }
+        liveAggregate: {
+          questionId: q.id, chartType: q.chartType, agg, respondedCount: docs.length,
+          openAnswers, updatedAt: Timestamp.now()
+        }
       }).catch(()=>{});
       if(q.type==="open"){
         renderOpenList(docs);
@@ -2199,6 +2299,12 @@ async function teacherReportView(c, sessionId){
           `<div>${b.docs.length? b.docs.map((d,j)=>`<div class="report-open-answer"><b>Ý kiến #${j+1}:</b> ${esc(d.answer||"")}</div>`).join(""):"<p class='mut'>Chưa có câu trả lời.</p>"}</div>` :
           `<div class="report-chart-wrap"><canvas id="repChart${b.idx}"></canvas></div>${chartSummaryHtml(b.q,b.options,b.docs)}`}
       </div>`).join("")}
+    <div class="report-contact-print">
+      <span>Mọi chi tiết cần góp ý vui lòng liên hệ</span>
+      <a href="http://zaloapp.com/qr/p/ktmqnk7cqp04">Zalo</a>
+      <span>hoặc email:</span>
+      <a href="mailto:quantth@hcma2.edu.vn">quantth@hcma2.edu.vn</a>
+    </div>
     `;
     $("#btnBackRep").onclick = ()=>{ window.history.length>1 ? window.location.hash="" : (window.location.hash=""); STATE.teacherNav="reports"; teacherRoute(); };
     $("#btnPrint").onclick = ()=>window.print();
@@ -2673,12 +2779,17 @@ function renderPresQuestion(session, sid, question, options){
   const agg = session.liveAggregate && session.liveAggregate.questionId===question.id ? session.liveAggregate : null;
   const count = agg ? agg.respondedCount : 0;
   const showChart = session.showResults==="live" && agg && agg.agg && question.chartType!=="list";
+  const showOpenWall = question.type==="open" && session.showResults==="live" && agg;
+  const openAnswers = showOpenWall && Array.isArray(agg.openAnswers) ? agg.openAnswers : [];
   $("#presRoot").innerHTML = `${presTopBar()}
     <div class="meta">${esc(session.className||"")} · ${esc(session.title)}</div>
     <div class="qtext">${esc(question.question)}</div>
     ${session.showResponderCount!==false?`<div class="mut" style="color:#fff;opacity:.85;margin-bottom:16px;">${count} người đã trả lời</div>`:`<div style="margin-bottom:16px;"></div>`}
     <div class="pres-grid">
       ${showChart?`<div class="pres-chart-wrap"><div class="chart-box chart-box-lg"><canvas id="presChart"></canvas></div></div>`:""}
+      ${showOpenWall ? (openAnswers.length
+        ? `<div class="pres-open-wall">${openAnswers.map((a,i)=>`<div class="pres-open-card"><div class="num">Ý kiến ${i+1}</div>${esc(a)}</div>`).join("")}</div>`
+        : `<div class="pres-open-empty">Đang chờ ý kiến của học viên…</div>`) : ""}
       <div class="pres-qr-wrap clickable" id="presQrWrap" role="button" tabindex="0" aria-label="Phóng to mã QR">
         <div id="presQr"></div>
         <p style="font-weight:800;font-size:20px;margin-top:8px;">${esc(session.shortCode||"")}</p>

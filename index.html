@@ -1,0 +1,2270 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
+<title>HCMA2 - TEACHING</title>
+<meta name="description" content="Nền tảng hỗ trợ giảng dạy và tương tác với học viên theo thời gian thực." />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2220%22 fill=%22%23155e75%22/><text x=%2250%22 y=%2266%22 font-size=%2258%22 text-anchor=%22middle%22 fill=%22white%22 font-family=%22Arial%22>H</text></svg>">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<style>
+/* ============================================================
+   HCMA2 - TEACHING — Stylesheet
+   ============================================================ */
+:root{
+  --brand:#155e75; --brand-dark:#0e4a5c; --brand-light:#e8f4f7;
+  --accent:#0891b2; --ok:#16a34a; --warn:#ca8a04; --danger:#dc2626;
+  --bg:#f6f8f9; --card:#ffffff; --text:#1f2937; --text-mute:#6b7280;
+  --border:#e5e7eb; --radius:12px; --shadow:0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  font-family:var(--font); background:var(--bg); color:var(--text);
+  -webkit-font-smoothing:antialiased; line-height:1.5; font-size:15px;
+}
+#app{min-height:100vh;}
+h1,h2,h3,h4{margin:0 0 8px; font-weight:700; line-height:1.3;}
+p{margin:0 0 10px;}
+a{color:var(--accent);}
+button, input, select, textarea{font-family:inherit; font-size:inherit;}
+.hidden{display:none !important;}
+.container{max-width:1180px; margin:0 auto; padding:0 16px;}
+.narrow{max-width:480px;}
+
+/* Buttons */
+.btn{
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  padding:11px 18px; border-radius:10px; border:1px solid transparent;
+  background:var(--brand); color:#fff; font-weight:600; cursor:pointer;
+  min-height:44px; transition:filter .15s, transform .05s; text-decoration:none;
+}
+.btn:hover{filter:brightness(1.08);}
+.btn:active{transform:scale(.98);}
+.btn:disabled{opacity:.5; cursor:not-allowed;}
+.btn-sm{padding:7px 12px; min-height:34px; font-size:13px; border-radius:8px;}
+.btn-lg{padding:15px 26px; font-size:16px; min-height:52px; border-radius:12px;}
+.btn-outline{background:#fff; color:var(--brand); border-color:var(--brand);}
+.btn-ghost{background:transparent; color:var(--text); border-color:var(--border);}
+.btn-danger{background:var(--danger);}
+.btn-warn{background:var(--warn);}
+.btn-ok{background:var(--ok);}
+.btn-block{width:100%;}
+.btn-icon{padding:8px; min-width:40px;}
+.btn:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible{
+  outline:3px solid #93c5fd; outline-offset:2px;
+}
+
+/* Cards / layout */
+.card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:20px;}
+.card + .card{margin-top:14px;}
+.grid{display:grid; gap:14px;}
+.grid-2{grid-template-columns:repeat(2,1fr);}
+.grid-3{grid-template-columns:repeat(3,1fr);}
+.grid-4{grid-template-columns:repeat(4,1fr);}
+@media(max-width:900px){.grid-4{grid-template-columns:repeat(2,1fr);} .grid-3{grid-template-columns:repeat(2,1fr);}}
+@media(max-width:600px){.grid-2,.grid-3,.grid-4{grid-template-columns:1fr;}}
+
+/* Forms */
+label{display:block; font-weight:600; font-size:13px; margin-bottom:5px; color:#374151;}
+input[type=text], input[type=email], input[type=password], input[type=number], input[type=date],
+select, textarea{
+  width:100%; padding:11px 12px; border:1.5px solid var(--border); border-radius:9px;
+  background:#fff; color:var(--text); min-height:44px;
+}
+textarea{min-height:88px; resize:vertical;}
+.field{margin-bottom:14px;}
+.hint{font-size:12.5px; color:var(--text-mute); margin-top:4px;}
+.error-text{font-size:13px; color:var(--danger); margin-top:6px;}
+
+/* Topbar */
+.topbar{
+  background:var(--brand); color:#fff; padding:0 16px; height:60px;
+  display:flex; align-items:center; justify-content:space-between; position:sticky; top:0; z-index:40;
+  box-shadow:0 2px 6px rgba(0,0,0,.12);
+}
+.topbar .brand{font-weight:800; font-size:17px; letter-spacing:.3px; display:flex; align-items:center; gap:8px;}
+.topbar .brand small{font-weight:500; opacity:.85; font-size:11px;}
+.topbar-right{display:flex; align-items:center; gap:10px;}
+.topbar select, .topbar .who{color:#fff;}
+.who{font-size:13px; opacity:.9;}
+.hamburger{display:none; background:transparent; border:none; color:#fff; font-size:22px; cursor:pointer;}
+
+/* Shell with sidebar */
+.shell{display:flex; min-height:calc(100vh - 60px);}
+.sidebar{
+  width:230px; background:#fff; border-right:1px solid var(--border); padding:14px 10px; flex-shrink:0;
+}
+.sidebar button.navlink{
+  display:flex; align-items:center; gap:10px; width:100%; text-align:left; background:none; border:none;
+  padding:11px 12px; border-radius:9px; cursor:pointer; color:var(--text); font-weight:600; font-size:14px; margin-bottom:2px;
+}
+.sidebar button.navlink:hover{background:var(--brand-light);}
+.sidebar button.navlink.active{background:var(--brand); color:#fff;}
+.main{flex:1; padding:20px; min-width:0;}
+@media(max-width:820px){
+  .sidebar{position:fixed; left:-250px; top:60px; bottom:0; z-index:50; transition:left .2s; box-shadow:2px 0 10px rgba(0,0,0,.15); overflow:auto;}
+  .sidebar.open{left:0;}
+  .hamburger{display:block;}
+  .main{padding:14px;}
+}
+
+/* Tables */
+table{width:100%; border-collapse:collapse; font-size:13.5px;}
+th,td{text-align:left; padding:10px 8px; border-bottom:1px solid var(--border); vertical-align:middle;}
+th{color:var(--text-mute); font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:.4px;}
+tr:hover td{background:#fafbfc;}
+.table-wrap{overflow-x:auto;}
+
+/* Badges */
+.badge{display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700;}
+.badge-green{background:#dcfce7; color:#166534;}
+.badge-yellow{background:#fef9c3; color:#854d0e;}
+.badge-red{background:#fee2e2; color:#991b1b;}
+.badge-gray{background:#f1f5f9; color:#475569;}
+.badge-blue{background:#dbeafe; color:#1e40af;}
+
+/* Stat tiles */
+.stat{background:#fff; border:1px solid var(--border); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow);}
+.stat .num{font-size:30px; font-weight:800; color:var(--brand);}
+.stat .lbl{font-size:13px; color:var(--text-mute); font-weight:600; margin-top:2px;}
+
+/* Toast */
+#toast-root{position:fixed; top:16px; right:16px; z-index:999; display:flex; flex-direction:column; gap:8px; max-width:340px;}
+.toast{background:#1f2937; color:#fff; padding:12px 16px; border-radius:10px; box-shadow:0 6px 16px rgba(0,0,0,.25); font-size:13.5px; animation:slidein .18s ease-out;}
+.toast.ok{background:#166534;} .toast.err{background:#991b1b;} .toast.warn{background:#92400e;}
+@keyframes slidein{from{transform:translateX(30px); opacity:0;} to{transform:translateX(0); opacity:1;}}
+
+/* Loading */
+.spinner{width:22px; height:22px; border:3px solid rgba(0,0,0,.12); border-top-color:var(--brand); border-radius:50%; animation:spin .7s linear infinite; display:inline-block;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.center-screen{min-height:100vh; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:14px; padding:24px; text-align:center;}
+
+/* Auth screens */
+.auth-wrap{min-height:100vh; display:flex; align-items:center; justify-content:center; background:linear-gradient(160deg,var(--brand),#0891b2); padding:20px;}
+.auth-card{background:#fff; border-radius:16px; width:100%; max-width:420px; padding:32px 28px; box-shadow:0 20px 50px rgba(0,0,0,.25);}
+.auth-logo{text-align:center; margin-bottom:18px;}
+.auth-logo .t1{font-size:22px; font-weight:800; color:var(--brand);}
+.auth-logo .t2{font-size:12px; color:var(--text-mute); letter-spacing:1px; text-transform:uppercase;}
+.tabbar{display:flex; border:1px solid var(--border); border-radius:10px; overflow:hidden; margin-bottom:18px;}
+.tabbar button{flex:1; padding:10px; border:none; background:#f8fafc; cursor:pointer; font-weight:700; color:var(--text-mute);}
+.tabbar button.active{background:var(--brand); color:#fff;}
+
+/* Wizard */
+.wizard-steps{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:18px;}
+.wizard-steps .step{padding:6px 12px; border-radius:999px; font-size:12px; font-weight:700; background:#f1f5f9; color:var(--text-mute);}
+.wizard-steps .step.active{background:var(--brand); color:#fff;}
+.wizard-steps .step.done{background:var(--ok); color:#fff;}
+.wizard-nav{display:flex; justify-content:space-between; margin-top:20px; gap:10px;}
+.option-row{display:flex; gap:8px; align-items:center; margin-bottom:8px;}
+.option-row input[type=text]{flex:1;}
+.type-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px;}
+.type-card{border:2px solid var(--border); border-radius:12px; padding:14px; cursor:pointer; text-align:center;}
+.type-card:hover{border-color:var(--accent);}
+.type-card.active{border-color:var(--brand); background:var(--brand-light);}
+.type-card .ic{font-size:26px; margin-bottom:6px;}
+.type-card .nm{font-weight:700; font-size:13px;}
+
+/* Live control */
+.live-grid{display:grid; grid-template-columns:1.3fr 1fr; gap:16px;}
+@media(max-width:900px){.live-grid{grid-template-columns:1fr;}}
+.qcount{display:flex; gap:6px; flex-wrap:wrap; margin:10px 0;}
+.qcount button{border:1.5px solid var(--border); background:#fff; border-radius:8px; padding:6px 10px; cursor:pointer; font-weight:700; font-size:12.5px;}
+.qcount button.active{background:var(--brand); color:#fff; border-color:var(--brand);}
+.qcount button.answered::after{content:" ✓";}
+
+/* Student view */
+.student-shell{min-height:100vh; background:var(--brand); display:flex; flex-direction:column;}
+.student-top{color:#fff; text-align:center; padding:18px 16px 8px;}
+.student-top .logo{font-weight:800; font-size:15px; letter-spacing:1px;}
+.student-card{background:#fff; border-radius:20px 20px 0 0; flex:1; padding:22px 18px 40px; margin-top:10px;}
+.opt-btn{
+  display:flex; align-items:center; gap:12px; width:100%; text-align:left; padding:15px 16px; margin-bottom:10px;
+  border:2px solid var(--border); border-radius:12px; background:#fff; cursor:pointer; font-size:15px; font-weight:600;
+}
+.opt-btn .mark{width:22px; height:22px; border-radius:50%; border:2px solid #cbd5e1; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:12px; color:#fff;}
+.opt-btn.selected{border-color:var(--brand); background:var(--brand-light);}
+.opt-btn.selected .mark{background:var(--brand); border-color:var(--brand);}
+.opt-btn.correct{border-color:var(--ok); background:#f0fdf4;}
+.opt-btn.wrong{border-color:var(--danger); background:#fef2f2;}
+.timer-pill{display:inline-flex; align-items:center; gap:6px; background:#fff2; color:#fff; border-radius:999px; padding:6px 14px; font-weight:700; font-size:13px;}
+
+/* Presentation */
+.pres-shell{background:#0b2530; color:#fff; min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:30px; text-align:center;}
+.pres-shell .qtext{font-size:clamp(22px,4vw,40px); font-weight:800; max-width:1000px; margin-bottom:20px;}
+.pres-shell .meta{opacity:.75; margin-bottom:26px; font-size:15px;}
+.pres-grid{display:flex; gap:40px; align-items:center; flex-wrap:wrap; justify-content:center;}
+.pres-chart-wrap{width:min(760px,90vw); background:#fff; border-radius:16px; padding:20px;}
+.pres-qr-wrap{background:#fff; border-radius:16px; padding:18px; text-align:center;}
+
+/* Misc */
+.flex{display:flex; align-items:center;}
+.flex-between{display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;}
+.gap-8{gap:8px;} .gap-12{gap:12px;}
+.mt-8{margin-top:8px;} .mt-14{margin-top:14px;} .mt-20{margin-top:20px;}
+.mut{color:var(--text-mute);}
+.small{font-size:12.5px;}
+.section-title{display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;}
+.chip{display:inline-block; padding:4px 10px; border-radius:999px; background:#f1f5f9; font-size:12px; font-weight:700; margin-right:6px;}
+.empty-state{text-align:center; padding:50px 20px; color:var(--text-mute);}
+.empty-state .ic{font-size:40px; margin-bottom:10px;}
+.modal-backdrop{position:fixed; inset:0; background:rgba(15,23,32,.55); display:flex; align-items:center; justify-content:center; z-index:200; padding:16px;}
+.modal{background:#fff; border-radius:16px; padding:24px; max-width:520px; width:100%; max-height:90vh; overflow:auto;}
+.modal-lg{max-width:820px;}
+@media print{
+  .no-print{display:none !important;}
+  body{background:#fff;}
+}
+</style>
+</head>
+<body>
+<div id="toast-root" aria-live="polite"></div>
+<div id="app">
+  <div class="center-screen">
+    <div class="spinner" role="status" aria-label="Đang tải"></div>
+    <div class="mut">Đang tải HCMA2 - TEACHING…</div>
+  </div>
+</div>
+
+<!-- ============================================================
+     APP SCRIPT — loaded as ES module (Firebase v10 modular SDK)
+     ============================================================ -->
+<script type="module">
+/* ============================================================
+   HCMA2 - TEACHING — Application Script
+   Firebase Web SDK (modular, via CDN) — không cần npm/build.
+   ============================================================ */
+import {
+  initializeApp
+} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+import {
+  getAnalytics, isSupported as analyticsIsSupported
+} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-analytics.js";
+import {
+  getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword,
+  signOut, sendPasswordResetEmail, signInAnonymously, updateProfile, setPersistence,
+  browserLocalPersistence
+} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import {
+  getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, getDoc, getDocs,
+  query, where, orderBy, limit, onSnapshot, serverTimestamp, Timestamp, writeBatch, increment,
+  getCountFromServer, collectionGroup
+} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+/* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyCLApl_uMpJFttUFjy4ZgFIyIq3y9XA8ZA",
+  authDomain: "bo-phieu-hcma2.firebaseapp.com",
+  projectId: "bo-phieu-hcma2",
+  storageBucket: "bo-phieu-hcma2.firebasestorage.app",
+  messagingSenderId: "233841168130",
+  appId: "1:233841168130:web:a5fbe30520c55c4fae3c1b",
+  measurementId: "G-GH9TNBMN4M"
+};
+
+const fbApp = initializeApp(firebaseConfig);
+const auth = getAuth(fbApp);
+const db = getFirestore(fbApp);
+setPersistence(auth, browserLocalPersistence).catch(()=>{});
+
+// ---------------- App Firebase THỨ HAI — dành riêng cho Học viên & Trình chiếu ----------------
+// LÝ DO (xem FIX 7 / mục giới hạn trong README):
+// Firebase Auth lưu trạng thái đăng nhập theo TỪNG App instance, namespace theo tên app
+// trong localStorage của trình duyệt. Nếu Học viên/Trình chiếu dùng CHUNG app với
+// Giảng viên/Admin trên cùng trình duyệt, sẽ có 2 rủi ro nghiêm trọng:
+//  (1) participantId của học viên có thể vô tình trùng với uid đang đăng nhập của giảng viên;
+//  (2) việc ký ẩn danh cho học viên có thể ghi đè/ảnh hưởng phiên đăng nhập giảng viên ở tab khác.
+// Giải pháp: tạo MỘT App instance thứ hai, độc lập hoàn toàn ("public"), chỉ dùng cho
+// luồng Học viên và Trình chiếu — hai phiên đăng nhập tồn tại song song, không giao nhau.
+const publicApp = initializeApp(firebaseConfig, "public");
+const publicAuth = getAuth(publicApp);
+const publicDb = getFirestore(publicApp);
+setPersistence(publicAuth, browserLocalPersistence).catch(()=>{});
+
+// Analytics: chỉ dùng để thống kê sử dụng, KHÔNG dùng để lưu dữ liệu bỏ phiếu.
+// Nếu môi trường không hỗ trợ (ví dụ bị chặn bởi trình chặn quảng cáo), app vẫn chạy bình thường.
+let analytics = null;
+analyticsIsSupported().then((ok) => { if (ok) { try { analytics = getAnalytics(fbApp); } catch (e) { /* bỏ qua */ } } }).catch(()=>{});
+function logEvent_(name, params){ try{ if(analytics){ import("https://www.gstatic.com/firebasejs/10.12.5/firebase-analytics.js").then(m=>m.logEvent(analytics,name,params||{})); } }catch(e){} }
+
+/* ---------------- Base URL (tự xác định, tương thích subdirectory GitHub Pages) ---------------- */
+const APP_BASE_URL = window.location.origin + window.location.pathname;
+
+/* ---------------- Hằng số nghiệp vụ ---------------- */
+const QUESTION_TYPES = {
+  single:   { label:"Một lựa chọn",  icon:"⭘", needsOptions:true,  defaultChart:"bar",         allowedCharts:["bar","hbar","pie","donut"] },
+  multiple: { label:"Nhiều lựa chọn",icon:"☑", needsOptions:true,  defaultChart:"hbar",        allowedCharts:["hbar","bar"] },
+  truefalse:{ label:"Đúng / Sai",    icon:"✓✗",needsOptions:true, fixedOptions:["Đúng","Sai"], defaultChart:"donut", allowedCharts:["donut","pie","bar"] },
+  likert:   { label:"Likert",        icon:"📊",needsOptions:true,  defaultChart:"stacked",     allowedCharts:["stacked","hbar"] },
+  scale:    { label:"Thang điểm",    icon:"🎚️",needsOptions:false, defaultChart:"distribution",allowedCharts:["distribution"] },
+  ranking:  { label:"Xếp hạng",      icon:"🏆",needsOptions:true,  defaultChart:"hbar",        allowedCharts:["hbar"] },
+  open:     { label:"Câu hỏi mở",    icon:"✍️",needsOptions:false, defaultChart:"list",        allowedCharts:["list"] },
+};
+const CHART_LABELS = { bar:"Cột đứng", hbar:"Cột ngang", pie:"Tròn (Pie)", donut:"Donut", stacked:"Stacked 100%", distribution:"Phân bố", list:"Danh sách" };
+const TIMER_PRESETS = [ {label:"Không giới hạn", value:0}, {label:"30 giây", value:30}, {label:"1 phút", value:60}, {label:"2 phút", value:120}, {label:"5 phút", value:300} ];
+const LIBRARY_CATEGORIES = ["Khởi động","Kiểm tra kiến thức","Tình huống","Thảo luận","Khảo sát","Ôn tập","Đánh giá"];
+
+/* ---------------- Tiện ích chung ---------------- */
+const $ = (sel, root) => (root||document).querySelector(sel);
+const $$ = (sel, root) => Array.from((root||document).querySelectorAll(sel));
+const appRoot = () => document.getElementById("app");
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function fmtDate(ts){
+  try{
+    const d = ts && ts.toDate ? ts.toDate() : (ts instanceof Date ? ts : (ts ? new Date(ts) : null));
+    if(!d) return "—";
+    return d.toLocaleString("vi-VN", { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit" });
+  }catch(e){ return "—"; }
+}
+function fmtDateShort(ts){
+  try{
+    const d = ts && ts.toDate ? ts.toDate() : (ts instanceof Date ? ts : (ts?new Date(ts):null));
+    if(!d) return "—";
+    return d.toLocaleDateString("vi-VN");
+  }catch(e){ return "—"; }
+}
+function genToken(len){
+  len = len || 28;
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+  const arr = new Uint32Array(len);
+  crypto.getRandomValues(arr);
+  let out = "";
+  for(let i=0;i<len;i++) out += chars[arr[i] % chars.length];
+  return out;
+}
+function genShortCode(){
+  const L = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const N = "0123456789";
+  let code = "";
+  for(let i=0;i<3;i++) code += L[Math.floor(Math.random()*L.length)];
+  code += "-";
+  for(let i=0;i<3;i++) code += N[Math.floor(Math.random()*N.length)];
+  return code;
+}
+function toast(msg, type){
+  const root = document.getElementById("toast-root");
+  const t = document.createElement("div");
+  t.className = "toast " + (type||"");
+  t.textContent = msg;
+  root.appendChild(t);
+  setTimeout(()=>{ t.style.opacity="0"; t.style.transition="opacity .3s"; setTimeout(()=>t.remove(),300); }, 3800);
+}
+function debounce(fn, ms){ let h; return (...a)=>{ clearTimeout(h); h=setTimeout(()=>fn(...a), ms); }; }
+
+/* Bẫy lỗi Firebase → thông báo tiếng Việt dễ hiểu */
+function mapError(err){
+  const code = (err && (err.code||"")) + "";
+  const map = {
+    "auth/invalid-email":"Địa chỉ email không hợp lệ.",
+    "auth/user-disabled":"Tài khoản đã bị vô hiệu hóa.",
+    "auth/user-not-found":"Email hoặc mật khẩu không đúng.",
+    "auth/wrong-password":"Email hoặc mật khẩu không đúng.",
+    "auth/invalid-credential":"Email hoặc mật khẩu không đúng.",
+    "auth/invalid-login-credentials":"Email hoặc mật khẩu không đúng.",
+    "auth/email-already-in-use":"Email này đã được đăng ký. Vui lòng đăng nhập.",
+    "auth/weak-password":"Mật khẩu quá yếu. Vui lòng dùng ít nhất 6 ký tự.",
+    "auth/too-many-requests":"Bạn đã thử quá nhiều lần. Vui lòng thử lại sau ít phút.",
+    "auth/network-request-failed":"Mất kết nối mạng. Vui lòng kiểm tra Internet và thử lại.",
+    "auth/popup-closed-by-user":"Cửa sổ đăng nhập đã bị đóng.",
+    "auth/operation-not-allowed":"Phương thức đăng nhập chưa được bật trong Firebase.",
+    "permission-denied":"Bạn không có quyền thực hiện thao tác này.",
+    "unavailable":"Không thể kết nối máy chủ. Đang thử kết nối lại…",
+    "deadline-exceeded":"Kết nối quá chậm. Vui lòng thử lại.",
+    "not-found":"Không tìm thấy dữ liệu yêu cầu.",
+    "already-exists":"Dữ liệu đã tồn tại.",
+    "resource-exhausted":"Hệ thống đang quá tải. Vui lòng thử lại sau."
+  };
+  if(map[code]) return map[code];
+  if(!navigator.onLine) return "Mất kết nối mạng. Đang thử kết nối lại…";
+  return "Đã xảy ra lỗi. Vui lòng thử lại. (" + (code || "unknown") + ")";
+}
+
+/* ---------------- Trạng thái toàn cục ---------------- */
+const STATE = {
+  user: null,        // firebase auth user (email/password, hoặc anonymous cho student/presentation)
+  profile: null,      // users/{uid} doc data (chỉ có với teacher/admin)
+  authReady: false,
+  listeners: [],       // các onSnapshot đang mở, dọn dẹp khi đổi route
+  teacherNav: "overview",
+  adminNav: "overview",
+  wizard: null,        // trạng thái wizard tạo phiên
+  student: { sessionId:null, token:null, session:null, question:null, options:[], myResponse:null },
+};
+function clearListeners(){ STATE.listeners.forEach(u=>{ try{u();}catch(e){} }); STATE.listeners = []; }
+function track(unsub){ STATE.listeners.push(unsub); return unsub; }
+
+/* ---------------- FIX 10: theo dõi trạng thái tài khoản (users/{uid}) theo thời gian thực ---------------- */
+// Đây là một listener ĐỘC LẬP với clearListeners()/STATE.listeners ở trên (vốn bị dọn dẹp
+// mỗi khi đổi route/tab điều hướng) — nó phải tồn tại xuyên suốt cả phiên làm việc của
+// Giảng viên/Admin để phát hiện ngay khi Admin khóa (suspended) tài khoản đang mở Dashboard,
+// thay vì chỉ kiểm tra một lần lúc đăng nhập.
+let __profileUnsub = null;
+function startProfileWatch(uid){
+  stopProfileWatch();
+  __profileUnsub = onSnapshot(doc(db,"users",uid), (snap)=>{
+    if(!snap.exists()) return; // lỗi mạng thoáng qua hoặc tài khoản đang được tạo — giữ nguyên UI
+    const prevStatus = STATE.profile ? STATE.profile.status : null;
+    const newProfile = snap.data();
+    STATE.profile = newProfile;
+    if(prevStatus === "active" && newProfile.status !== "active"){
+      // Admin vừa đổi trạng thái (suspended/pending/khác) trong khi Dashboard đang mở:
+      // dừng NGAY các listener nghiệp vụ khác (lớp/phiên/câu hỏi/phản hồi...) vì từ giờ
+      // Firestore Rules sẽ từ chối chúng, rồi khóa màn hình lập tức.
+      clearListeners();
+      renderInternalApp();
+      toast("Tài khoản của bạn vừa bị quản trị viên thay đổi trạng thái.", "warn");
+    }
+  }, (err)=>{ /* best-effort — bỏ qua lỗi tạm thời, không làm gián đoạn phiên làm việc */ });
+}
+function stopProfileWatch(){ if(__profileUnsub){ try{ __profileUnsub(); }catch(e){} __profileUnsub = null; } }
+
+/* ---------------- Router ---------------- */
+// Bên ngoài (không cần đăng nhập): ?mode=student  ?mode=presentation  ?join=TOKEN
+// Bên trong (teacher/admin, sau đăng nhập): dùng hash routing, ví dụ #/classes #/sessions/xxx/live
+function getQueryParams(){ return new URLSearchParams(window.location.search); }
+function getMode(){
+  const q = getQueryParams();
+  if(q.has("join")) return "student";
+  return q.get("mode");
+}
+function navigateHash(hash){ window.location.hash = hash; }
+window.addEventListener("hashchange", ()=>{
+  if(!STATE.profile) return;
+  clearListeners();
+  if(STATE.profile.role==="admin") adminRoute(STATE.adminNav);
+  else if(STATE.profile.role==="teacher") teacherRoute();
+});
+
+/* ---------------- Modal / form helpers dùng chung ---------------- */
+function openModal(html, large){
+  let host = document.getElementById("globalModal");
+  if(!host){ host = document.createElement("div"); host.id="globalModal"; document.body.appendChild(host); }
+  host.innerHTML = `<div class="modal-backdrop" id="modalBackdrop"><div class="modal ${large?'modal-lg':''}">${html}</div></div>`;
+  $("#modalBackdrop").addEventListener("click", (e)=>{ if(e.target.id==="modalBackdrop") closeModal(); });
+  return host;
+}
+function closeModal(){ const h = document.getElementById("globalModal"); if(h) h.innerHTML=""; }
+
+/* ---------------- Khởi động ---------------- */
+function boot(){
+  const mode = getMode();
+  if(mode === "student"){
+    clearListeners();
+    renderStudentEntry();
+    return;
+  }
+  if(mode === "presentation"){
+    clearListeners();
+    renderPresentationEntry();
+    return;
+  }
+  // Mặc định: màn hình đăng nhập giảng viên/admin
+  onAuthStateChanged(auth, async (user) => {
+    STATE.authReady = true;
+    // Khi đang trong luồng đăng ký thủ công (authFlowLock), luồng đó tự chịu
+    // trách nhiệm render để tránh việc onAuthStateChanged "chen ngang" xóa mất
+    // form đang thao tác giữa chừng (race condition giữa tạo tài khoản Auth và
+    // ghi hồ sơ Firestore users/{uid}).
+    if(authFlowLock) return;
+    if(!user){ stopProfileWatch(); STATE.user = null; STATE.profile = null; renderAuthScreen(); return; }
+    if(user.isAnonymous){
+      // Người dùng ẩn danh không thuộc luồng teacher/admin — quay lại màn hình đăng nhập.
+      stopProfileWatch(); STATE.user = null; STATE.profile = null; renderAuthScreen(); return;
+    }
+    await loadProfileAndRenderForUser(user);
+  });
+}
+let authFlowLock = false;
+async function loadProfileAndRenderForUser(user){
+  STATE.user = user;
+  try{
+    const snap = await getDoc(doc(db,"users",user.uid));
+    STATE.profile = snap.exists() ? snap.data() : null;
+  }catch(e){
+    toast(mapError(e), "err");
+    STATE.profile = null;
+  }
+  if(!STATE.profile){ stopProfileWatch(); renderNeedsProfileScreen(); return; }
+  // cập nhật lastLoginAt (best-effort, không chặn UI)
+  updateDoc(doc(db,"users",user.uid), { lastLoginAt: serverTimestamp(), updatedAt: serverTimestamp() }).catch(()=>{});
+  // FIX 10: bắt đầu theo dõi trạng thái tài khoản theo thời gian thực, xuyên suốt phiên làm việc.
+  startProfileWatch(user.uid);
+  renderInternalApp();
+}
+
+/* ---------------- Màn hình đăng nhập / đăng ký giảng viên ---------------- */
+function renderAuthScreen(){
+  clearListeners();
+  appRoot().innerHTML = `
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <div class="auth-logo">
+        <div class="t1">HCMA2 - TEACHING</div>
+        <div class="t2">Nền tảng giảng dạy tương tác</div>
+      </div>
+      <div class="tabbar">
+        <button id="tabLogin" class="active">Đăng nhập</button>
+        <button id="tabRegister">Đăng ký giảng viên</button>
+      </div>
+      <div id="authFormWrap"></div>
+      <p class="small mut" style="text-align:center;margin-top:16px;">Học viên không cần đăng nhập — chỉ cần quét mã QR do giảng viên cung cấp.</p>
+    </div>
+  </div>`;
+  $("#tabLogin").onclick = ()=>{ $("#tabLogin").classList.add("active"); $("#tabRegister").classList.remove("active"); renderLoginForm(); };
+  $("#tabRegister").onclick = ()=>{ $("#tabRegister").classList.add("active"); $("#tabLogin").classList.remove("active"); renderRegisterForm(); };
+  renderLoginForm();
+}
+function renderLoginForm(){
+  $("#authFormWrap").innerHTML = `
+    <form id="loginForm">
+      <div class="field"><label>Email</label><input type="email" id="loginEmail" required autocomplete="username"></div>
+      <div class="field"><label>Mật khẩu</label><input type="password" id="loginPass" required autocomplete="current-password"></div>
+      <div id="loginErr" class="error-text hidden"></div>
+      <button type="submit" class="btn btn-block btn-lg" id="loginBtn">Đăng nhập</button>
+      <div style="text-align:center;margin-top:12px;">
+        <a href="#" id="forgotLink" class="small">Quên mật khẩu?</a>
+      </div>
+    </form>`;
+  $("#loginForm").onsubmit = async (e)=>{
+    e.preventDefault();
+    const btn = $("#loginBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px;"></span> Đang đăng nhập…';
+    $("#loginErr").classList.add("hidden");
+    try{
+      await signInWithEmailAndPassword(auth, $("#loginEmail").value.trim(), $("#loginPass").value);
+    }catch(err){
+      $("#loginErr").textContent = mapError(err); $("#loginErr").classList.remove("hidden");
+    }finally{ btn.disabled=false; btn.textContent = "Đăng nhập"; }
+  };
+  $("#forgotLink").onclick = async (e)=>{
+    e.preventDefault();
+    const email = prompt("Nhập email tài khoản để nhận liên kết đặt lại mật khẩu:");
+    if(!email) return;
+    try{ await sendPasswordResetEmail(auth, email.trim()); toast("Đã gửi email đặt lại mật khẩu (nếu tài khoản tồn tại).","ok"); }
+    catch(err){ toast(mapError(err),"err"); }
+  };
+}
+function renderRegisterForm(){
+  $("#authFormWrap").innerHTML = `
+    <form id="regForm">
+      <div class="field"><label>Họ và tên</label><input type="text" id="regName" required></div>
+      <div class="field"><label>Email</label><input type="email" id="regEmail" required autocomplete="username"></div>
+      <div class="field"><label>Mật khẩu (tối thiểu 6 ký tự)</label><input type="password" id="regPass" required minlength="6" autocomplete="new-password"></div>
+      <div id="regErr" class="error-text hidden"></div>
+      <button type="submit" class="btn btn-block btn-lg" id="regBtn">Đăng ký tài khoản giảng viên</button>
+      <p class="hint" style="text-align:center;margin-top:10px;">Tài khoản sẽ ở trạng thái <b>chờ cấp phép</b> cho đến khi quản trị viên duyệt.</p>
+    </form>`;
+  $("#regForm").onsubmit = async (e)=>{
+    e.preventDefault();
+    const btn = $("#regBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px;"></span> Đang tạo tài khoản…';
+    $("#regErr").classList.add("hidden");
+    // Đọc toàn bộ giá trị form NGAY TỪ ĐẦU (trước khi có bất kỳ await nào),
+    // vì DOM có thể bị vẽ lại giữa chừng nếu onAuthStateChanged kích hoạt.
+    const name = $("#regName").value.trim();
+    const email = $("#regEmail").value.trim();
+    const pass = $("#regPass").value;
+    authFlowLock = true; // tạm khóa render tự động từ onAuthStateChanged
+    try{
+      const cred = await createUserWithEmailAndPassword(auth, email, pass);
+      await updateProfile(cred.user, { displayName: name });
+      await setDoc(doc(db,"users",cred.user.uid), {
+        uid: cred.user.uid, email: cred.user.email, displayName: name,
+        role: "teacher", status: "pending",
+        createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+        approvedAt: null, approvedBy: null, lastLoginAt: serverTimestamp()
+      });
+      toast("Đăng ký thành công! Vui lòng chờ quản trị viên cấp phép.","ok");
+      authFlowLock = false;
+      await loadProfileAndRenderForUser(cred.user);
+    }catch(err){
+      authFlowLock = false;
+      if(auth.currentUser){ await loadProfileAndRenderForUser(auth.currentUser); return; }
+      if($("#regErr")){ $("#regErr").textContent = mapError(err); $("#regErr").classList.remove("hidden"); }
+      if($("#regBtn")){ $("#regBtn").disabled=false; $("#regBtn").textContent = "Đăng ký tài khoản giảng viên"; }
+    }
+  };
+}
+function renderNeedsProfileScreen(){
+  appRoot().innerHTML = `<div class="center-screen">
+    <h2>Không tìm thấy hồ sơ người dùng</h2>
+    <p class="mut">Tài khoản của bạn chưa có hồ sơ trong hệ thống. Vui lòng đăng ký lại hoặc liên hệ quản trị viên.</p>
+    <button class="btn" id="btnLogout2">Đăng xuất</button>
+  </div>`;
+  $("#btnLogout2").onclick = ()=>signOut(auth);
+}
+
+/* ---------------- Sau khi có profile: điều hướng theo role/status ---------------- */
+function renderInternalApp(){
+  const p = STATE.profile;
+  if(!p) return renderNeedsProfileScreen();
+  if(p.status === "pending"){
+    appRoot().innerHTML = pendingSuspendedScreen("⏳","Tài khoản của bạn đang chờ quản trị viên cấp phép.","Vui lòng quay lại sau, hoặc liên hệ quản trị viên hệ thống.");
+    $("#btnLogoutX").onclick = ()=>signOut(auth);
+    return;
+  }
+  if(p.status === "suspended"){
+    appRoot().innerHTML = pendingSuspendedScreen("🔒","Tài khoản của bạn đã bị tạm khóa.","Vui lòng liên hệ quản trị viên.");
+    $("#btnLogoutX").onclick = ()=>signOut(auth);
+    return;
+  }
+  if(p.status !== "active"){
+    appRoot().innerHTML = pendingSuspendedScreen("⚠️","Tài khoản không ở trạng thái hoạt động.","Vui lòng liên hệ quản trị viên.");
+    $("#btnLogoutX").onclick = ()=>signOut(auth);
+    return;
+  }
+  if(p.role === "admin") return renderAdminShell();
+  if(p.role === "teacher") return renderTeacherShell();
+  appRoot().innerHTML = pendingSuspendedScreen("⚠️","Vai trò tài khoản không hợp lệ.","Vui lòng liên hệ quản trị viên.");
+  $("#btnLogoutX").onclick = ()=>signOut(auth);
+}
+function pendingSuspendedScreen(icon, title, sub){
+  return `<div class="center-screen">
+    <div style="font-size:44px;">${icon}</div>
+    <h2>${esc(title)}</h2>
+    <p class="mut">${esc(sub)}</p>
+    <button class="btn btn-outline" id="btnLogoutX">Đăng xuất</button>
+  </div>`;
+}
+
+/* ============================================================
+   ADMIN MODULE
+   ============================================================ */
+const ADMIN_MENU = [
+  {key:"overview", label:"Tổng quan", icon:"🏠"},
+  {key:"teachers", label:"Quản lý giảng viên", icon:"👩‍🏫"},
+  {key:"classes", label:"Lớp học", icon:"🏫"},
+  {key:"sessions", label:"Phiên tương tác", icon:"🗳️"},
+  {key:"stats", label:"Thống kê hệ thống", icon:"📈"},
+  {key:"settings", label:"Cài đặt", icon:"⚙️"},
+];
+function shellTemplate(brandSub, menu, activeKey, who){
+  return `
+  <div class="topbar">
+    <div class="flex gap-12">
+      <button class="hamburger" id="btnHamburger" aria-label="Mở menu">☰</button>
+      <div class="brand">HCMA2 - TEACHING <small>${esc(brandSub)}</small></div>
+    </div>
+    <div class="topbar-right">
+      <span class="who">${esc(who)}</span>
+      <button class="btn btn-sm btn-outline" style="background:transparent;color:#fff;border-color:#fff6;" id="btnLogoutTop">Đăng xuất</button>
+    </div>
+  </div>
+  <div class="shell">
+    <div class="sidebar" id="sidebarNav">
+      ${menu.map(m=>`<button class="navlink ${m.key===activeKey?'active':''}" data-nav="${m.key}">${m.icon} ${esc(m.label)}</button>`).join("")}
+    </div>
+    <div class="main" id="mainContent"><div class="center-screen"><span class="spinner"></span></div></div>
+  </div>`;
+}
+function wireShellNav(menu, onNav){
+  $("#btnLogoutTop").onclick = ()=>signOut(auth);
+  $("#btnHamburger").onclick = ()=>$("#sidebarNav").classList.toggle("open");
+  $$("#sidebarNav .navlink").forEach(btn=>{
+    btn.onclick = ()=>{
+      $$("#sidebarNav .navlink").forEach(b=>b.classList.remove("active"));
+      btn.classList.add("active");
+      $("#sidebarNav").classList.remove("open");
+      onNav(btn.dataset.nav);
+    };
+  });
+}
+function renderAdminShell(){
+  clearListeners();
+  appRoot().innerHTML = shellTemplate("SYSTEM OVERVIEW", ADMIN_MENU, STATE.adminNav, STATE.profile.displayName || STATE.profile.email);
+  wireShellNav(ADMIN_MENU, (key)=>{ STATE.adminNav = key; clearListeners(); adminRoute(key); });
+  adminRoute(STATE.adminNav);
+}
+function adminRoute(key){
+  const c = $("#mainContent");
+  if(!c) return;
+  if(key==="overview") return adminOverview(c);
+  if(key==="teachers") return adminTeachers(c);
+  if(key==="classes") return adminClassesView(c);
+  if(key==="sessions") return adminSessionsView(c);
+  if(key==="stats") return adminStats(c);
+  if(key==="settings") return adminSettings(c);
+}
+
+async function adminOverview(c){
+  c.innerHTML = `<h2>HCMA2 - TEACHING - SYSTEM OVERVIEW</h2><div class="grid grid-4" id="ovGrid"></div>
+    <div class="card mt-20"><h3>Giảng viên chờ cấp phép gần đây</h3><div id="ovPending" class="table-wrap"><div class="mut">Đang tải…</div></div></div>`;
+  try{
+    const usersCol = collection(db,"users");
+    const [total, active, pending, suspended, classesCnt, sessionsCnt] = await Promise.all([
+      getCountFromServer(query(usersCol, where("role","==","teacher"))),
+      getCountFromServer(query(usersCol, where("role","==","teacher"), where("status","==","active"))),
+      getCountFromServer(query(usersCol, where("role","==","teacher"), where("status","==","pending"))),
+      getCountFromServer(query(usersCol, where("role","==","teacher"), where("status","==","suspended"))),
+      getCountFromServer(collection(db,"classes")),
+      getCountFromServer(collection(db,"sessions")),
+    ]);
+    let respCount = 0;
+    try{ const r = await getCountFromServer(collectionGroup(db,"responses")); respCount = r.data().count; }catch(e){ respCount = null; }
+    const tiles = [
+      [total.data().count, "Tổng giảng viên"],
+      [active.data().count, "Đang hoạt động"],
+      [pending.data().count, "Chờ cấp phép"],
+      [suspended.data().count, "Đã khóa"],
+      [classesCnt.data().count, "Tổng lớp"],
+      [sessionsCnt.data().count, "Tổng phiên"],
+      [respCount==null?"—":respCount, "Tổng lượt trả lời"],
+    ];
+    $("#ovGrid").innerHTML = tiles.map(([n,l])=>`<div class="stat"><div class="num">${n}</div><div class="lbl">${esc(l)}</div></div>`).join("");
+    const pendingQ = query(usersCol, where("role","==","teacher"), where("status","==","pending"), orderBy("createdAt","desc"), limit(10));
+    const snap = await getDocs(pendingQ);
+    if(snap.empty){ $("#ovPending").innerHTML = `<div class="empty-state"><div class="ic">✅</div>Không có giảng viên nào đang chờ cấp phép.</div>`; }
+    else{
+      $("#ovPending").innerHTML = `<table><thead><tr><th>Tên</th><th>Email</th><th>Ngày đăng ký</th><th></th></tr></thead><tbody>
+        ${snap.docs.map(d=>{ const u=d.data(); return `<tr><td>${esc(u.displayName||"—")}</td><td>${esc(u.email)}</td><td>${fmtDate(u.createdAt)}</td>
+          <td><button class="btn btn-sm btn-ok" data-approve="${d.id}">DUYỆT</button></td></tr>`; }).join("")}
+      </tbody></table>`;
+      $$("[data-approve]").forEach(b=>b.onclick=()=>approveTeacher(b.dataset.approve, ()=>adminOverview(c)));
+    }
+  }catch(e){
+    c.innerHTML = errorBlock(e, ()=>adminOverview(c));
+  }
+}
+function errorBlock(e, retryFn){
+  console.error(e);
+  return `<div class="card"><div class="empty-state"><div class="ic">⚠️</div><p>${esc(mapError(e))}</p>
+    <button class="btn btn-outline" id="btnRetryErr">THỬ LẠI</button></div></div>`
+    + (()=>{ setTimeout(()=>{ const b=$("#btnRetryErr"); if(b) b.onclick=retryFn; },0); return ""; })();
+}
+
+async function approveTeacher(uid, cb){
+  try{
+    await updateDoc(doc(db,"users",uid), { status:"active", approvedAt: serverTimestamp(), approvedBy: STATE.user.uid, updatedAt: serverTimestamp() });
+    toast("Đã duyệt tài khoản giảng viên.","ok");
+    cb && cb();
+  }catch(e){ toast(mapError(e),"err"); }
+}
+async function suspendTeacher(uid, cb){
+  if(!confirm("Khóa tài khoản giảng viên này? Giảng viên sẽ không thể sử dụng hệ thống.")) return;
+  try{
+    await updateDoc(doc(db,"users",uid), { status:"suspended", updatedAt: serverTimestamp() });
+    toast("Đã khóa tài khoản.","ok"); cb && cb();
+  }catch(e){ toast(mapError(e),"err"); }
+}
+async function reactivateTeacher(uid, cb){
+  try{
+    await updateDoc(doc(db,"users",uid), { status:"active", updatedAt: serverTimestamp() });
+    toast("Đã mở khóa tài khoản.","ok"); cb && cb();
+  }catch(e){ toast(mapError(e),"err"); }
+}
+async function sendResetLink(email){
+  try{ await sendPasswordResetEmail(auth, email); toast("Đã gửi email đặt lại mật khẩu tới "+email,"ok"); }
+  catch(e){ toast(mapError(e),"err"); }
+}
+
+function statusBadge(status){
+  if(status==="active") return `<span class="badge badge-green">🟢 Hoạt động</span>`;
+  if(status==="pending") return `<span class="badge badge-yellow">🟡 Chờ cấp phép</span>`;
+  if(status==="suspended") return `<span class="badge badge-red">🔴 Đã khóa</span>`;
+  return `<span class="badge badge-gray">${esc(status)}</span>`;
+}
+
+let adminTeacherCache = [];
+async function adminTeachers(c){
+  c.innerHTML = `
+  <div class="section-title"><h2>Quản lý giảng viên</h2></div>
+  <div class="card">
+    <div class="flex-between mt-8">
+      <input type="text" id="tSearch" placeholder="Tìm theo tên hoặc email…" style="max-width:280px;">
+      <select id="tFilter" style="max-width:200px;">
+        <option value="">Tất cả trạng thái</option>
+        <option value="active">🟢 Hoạt động</option>
+        <option value="pending">🟡 Chờ cấp phép</option>
+        <option value="suspended">🔴 Đã khóa</option>
+      </select>
+    </div>
+    <div class="table-wrap mt-14" id="teacherTableWrap"><div class="center-screen" style="min-height:120px;"><span class="spinner"></span></div></div>
+  </div>
+  <div id="teacherDetailModal"></div>`;
+
+  const teachersQ = query(collection(db,"users"), where("role","==","teacher"), orderBy("createdAt","desc"));
+  track(onSnapshot(teachersQ, async (snap)=>{
+    adminTeacherCache = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    // đếm số lớp/phiên cho mỗi giảng viên (song song, chỉ khi danh sách không quá lớn)
+    renderTeacherTable();
+  }, (err)=>{ $("#teacherTableWrap").innerHTML = errorBlock(err, ()=>adminTeachers(c)); }));
+
+  $("#tSearch").addEventListener("input", debounce(renderTeacherTable, 200));
+  $("#tFilter").addEventListener("change", renderTeacherTable);
+
+  async function renderTeacherTable(){
+    const kw = ($("#tSearch").value||"").toLowerCase().trim();
+    const fl = $("#tFilter").value;
+    let list = adminTeacherCache.filter(u=>{
+      if(fl && u.status!==fl) return false;
+      if(kw && !((u.displayName||"").toLowerCase().includes(kw) || (u.email||"").toLowerCase().includes(kw))) return false;
+      return true;
+    });
+    if(list.length===0){ $("#teacherTableWrap").innerHTML = `<div class="empty-state"><div class="ic">👩‍🏫</div>Không có giảng viên phù hợp.</div>`; return; }
+    $("#teacherTableWrap").innerHTML = `<table><thead><tr><th>Tên</th><th>Email</th><th>Trạng thái</th><th>Ngày đăng ký</th><th>Đăng nhập gần nhất</th><th>Thao tác</th></tr></thead>
+    <tbody>${list.map(u=>`
+      <tr>
+        <td>${esc(u.displayName||"—")}</td>
+        <td>${esc(u.email)}</td>
+        <td>${statusBadge(u.status)}</td>
+        <td>${fmtDateShort(u.createdAt)}</td>
+        <td>${fmtDate(u.lastLoginAt)}</td>
+        <td class="flex gap-8" style="flex-wrap:wrap;">
+          ${u.status==="pending"?`<button class="btn btn-sm btn-ok" data-a="approve" data-id="${u.id}">DUYỆT</button>`:""}
+          ${u.status==="active"?`<button class="btn btn-sm btn-danger" data-a="suspend" data-id="${u.id}">KHÓA</button>`:""}
+          ${u.status==="suspended"?`<button class="btn btn-sm btn-ok" data-a="reactivate" data-id="${u.id}">MỞ KHÓA</button>`:""}
+          <button class="btn btn-sm btn-outline" data-a="detail" data-id="${u.id}">XEM CHI TIẾT</button>
+          <button class="btn btn-sm btn-ghost" data-a="reset" data-id="${u.id}">GỬI LINK ĐẶT LẠI MẬT KHẨU</button>
+        </td>
+      </tr>`).join("")}</tbody></table>`;
+    $$("[data-a]").forEach(b=>{
+      b.onclick = ()=>{
+        const id=b.dataset.id, act=b.dataset.a;
+        const u = adminTeacherCache.find(x=>x.id===id);
+        if(act==="approve") approveTeacher(id);
+        else if(act==="suspend") suspendTeacher(id);
+        else if(act==="reactivate") reactivateTeacher(id);
+        else if(act==="reset") sendResetLink(u.email);
+        else if(act==="detail") showTeacherDetail(u);
+      };
+    });
+  }
+}
+async function showTeacherDetail(u){
+  const modal = $("#teacherDetailModal");
+  modal.innerHTML = `<div class="modal-backdrop"><div class="modal">
+    <div class="flex-between"><h3>${esc(u.displayName||u.email)}</h3><button class="btn btn-sm btn-ghost" id="closeDetail">✕</button></div>
+    <div id="detailBody"><div class="center-screen" style="min-height:100px;"><span class="spinner"></span></div></div>
+  </div></div>`;
+  $("#closeDetail").onclick = ()=>{ modal.innerHTML=""; };
+  try{
+    const [classesCnt, sessionsCnt] = await Promise.all([
+      getCountFromServer(query(collection(db,"classes"), where("ownerId","==",u.id))),
+      getCountFromServer(query(collection(db,"sessions"), where("ownerId","==",u.id))),
+    ]);
+    $("#detailBody").innerHTML = `
+      <p><b>Email:</b> ${esc(u.email)}</p>
+      <p><b>Trạng thái:</b> ${statusBadge(u.status)}</p>
+      <p><b>Ngày đăng ký:</b> ${fmtDate(u.createdAt)}</p>
+      <p><b>Ngày cấp phép:</b> ${fmtDate(u.approvedAt)}</p>
+      <p><b>Lần đăng nhập gần nhất:</b> ${fmtDate(u.lastLoginAt)}</p>
+      <p><b>Số lớp:</b> ${classesCnt.data().count}</p>
+      <p><b>Số phiên:</b> ${sessionsCnt.data().count}</p>
+    `;
+  }catch(e){ $("#detailBody").innerHTML = errorBlock(e, ()=>showTeacherDetail(u)); }
+}
+
+async function adminClassesView(c){
+  c.innerHTML = `<h2>Lớp học (toàn hệ thống)</h2><div class="card"><div class="table-wrap" id="acWrap"><div class="center-screen" style="min-height:120px;"><span class="spinner"></span></div></div></div>`;
+  try{
+    const snap = await getDocs(query(collection(db,"classes"), orderBy("createdAt","desc"), limit(200)));
+    if(snap.empty){ $("#acWrap").innerHTML = `<div class="empty-state"><div class="ic">🏫</div>Chưa có lớp học nào.</div>`; return; }
+    const owners = {}; adminTeacherCache.forEach(u=>owners[u.id]=u.displayName||u.email);
+    $("#acWrap").innerHTML = `<table><thead><tr><th>Tên lớp</th><th>Mã lớp</th><th>Giảng viên</th><th>Sĩ số</th><th>Ngày tạo</th></tr></thead><tbody>
+      ${snap.docs.map(d=>{ const x=d.data(); return `<tr><td>${esc(x.name)}</td><td>${esc(x.code||"—")}</td><td>${esc(owners[x.ownerId]||x.ownerId)}</td><td>${x.studentCount??"—"}</td><td>${fmtDateShort(x.createdAt)}</td></tr>`; }).join("")}
+    </tbody></table>`;
+  }catch(e){ $("#acWrap").innerHTML = errorBlock(e, ()=>adminClassesView(c)); }
+}
+async function adminSessionsView(c){
+  c.innerHTML = `<h2>Phiên tương tác (toàn hệ thống)</h2><div class="card"><div class="table-wrap" id="asWrap"><div class="center-screen" style="min-height:120px;"><span class="spinner"></span></div></div></div>`;
+  try{
+    const snap = await getDocs(query(collection(db,"sessions"), orderBy("createdAt","desc"), limit(200)));
+    if(snap.empty){ $("#asWrap").innerHTML = `<div class="empty-state"><div class="ic">🗳️</div>Chưa có phiên nào.</div>`; return; }
+    const owners = {}; adminTeacherCache.forEach(u=>owners[u.id]=u.displayName||u.email);
+    $("#asWrap").innerHTML = `<table><thead><tr><th>Hoạt động</th><th>Giảng viên</th><th>Trạng thái</th><th>Số câu hỏi</th><th>Lượt trả lời</th><th>Ngày tạo</th></tr></thead><tbody>
+      ${snap.docs.map(d=>{ const x=d.data(); return `<tr><td>${esc(x.title)}</td><td>${esc(owners[x.ownerId]||x.ownerId)}</td><td>${sessionStatusBadge(x.status)}</td><td>${x.questionCount??0}</td><td>${x.responseCount??0}</td><td>${fmtDateShort(x.createdAt)}</td></tr>`; }).join("")}
+    </tbody></table>`;
+  }catch(e){ $("#asWrap").innerHTML = errorBlock(e, ()=>adminSessionsView(c)); }
+}
+function sessionStatusBadge(s){
+  const map = {draft:["Nháp","badge-gray"], ready:["Sẵn sàng","badge-blue"], open:["Đang mở","badge-green"], closed:["Đã đóng","badge-yellow"], archived:["Lưu trữ","badge-gray"]};
+  const [l,cl] = map[s] || [s,"badge-gray"];
+  return `<span class="badge ${cl}">${esc(l)}</span>`;
+}
+async function adminStats(c){
+  c.innerHTML = `<h2>Thống kê hệ thống</h2><div class="grid grid-2">
+    <div class="card"><h3>Giảng viên theo trạng thái</h3><canvas id="chTeachers" height="200"></canvas></div>
+    <div class="card"><h3>Phiên theo trạng thái</h3><canvas id="chSessions" height="200"></canvas></div>
+  </div>`;
+  try{
+    const usersCol = collection(db,"users");
+    const [active,pending,suspended] = await Promise.all([
+      getCountFromServer(query(usersCol, where("role","==","teacher"), where("status","==","active"))),
+      getCountFromServer(query(usersCol, where("role","==","teacher"), where("status","==","pending"))),
+      getCountFromServer(query(usersCol, where("role","==","teacher"), where("status","==","suspended"))),
+    ]);
+    const sCol = collection(db,"sessions");
+    const [draft,ready,open,closed,archived] = await Promise.all(
+      ["draft","ready","open","closed","archived"].map(s=>getCountFromServer(query(sCol, where("status","==",s))))
+    );
+    try{
+      new Chart($("#chTeachers"), { type:"doughnut", data:{ labels:["Hoạt động","Chờ cấp phép","Đã khóa"], datasets:[{ data:[active.data().count,pending.data().count,suspended.data().count], backgroundColor:["#16a34a","#ca8a04","#dc2626"] }] } , options:{plugins:{legend:{position:"bottom"}}}});
+      new Chart($("#chSessions"), { type:"bar", data:{ labels:["Nháp","Sẵn sàng","Đang mở","Đã đóng","Lưu trữ"], datasets:[{ data:[draft,ready,open,closed,archived].map(x=>x.data().count), backgroundColor:"#155e75" }] }, options:{plugins:{legend:{display:false}}} });
+    }catch(e){ console.warn("Không thể vẽ biểu đồ thống kê:", e); }
+  }catch(e){ c.innerHTML += errorBlock(e, ()=>adminStats(c)); }
+}
+function adminSettings(c){
+  const p = STATE.profile;
+  c.innerHTML = `<h2>Cài đặt</h2><div class="card narrow">
+    <p><b>Tên:</b> ${esc(p.displayName||"—")}</p>
+    <p><b>Email:</b> ${esc(p.email)}</p>
+    <p><b>Vai trò:</b> Quản trị viên hệ thống</p>
+    <button class="btn btn-outline mt-14" id="btnResetSelf">Gửi email đặt lại mật khẩu cho tôi</button>
+  </div>`;
+  $("#btnResetSelf").onclick = ()=>sendResetLink(p.email);
+}
+
+/* ============================================================
+   TEACHER MODULE
+   ============================================================ */
+const TEACHER_MENU = [
+  {key:"overview", label:"Tổng quan", icon:"🏠"},
+  {key:"classes", label:"Lớp học", icon:"🏫"},
+  {key:"create", label:"Tạo tương tác", icon:"➕"},
+  {key:"library", label:"Thư viện câu hỏi", icon:"📚"},
+  {key:"history", label:"Lịch sử phiên", icon:"🕓"},
+  {key:"reports", label:"Báo cáo", icon:"📄"},
+  {key:"account", label:"Tài khoản", icon:"👤"},
+];
+function renderTeacherShell(){
+  clearListeners();
+  appRoot().innerHTML = shellTemplate("Giảng viên", TEACHER_MENU, STATE.teacherNav, STATE.profile.displayName || STATE.profile.email);
+  wireShellNav(TEACHER_MENU, (key)=>{ STATE.teacherNav = key; window.location.hash = ""; clearListeners(); teacherRoute(); });
+  teacherRoute();
+}
+function teacherRoute(){
+  const c = $("#mainContent");
+  if(!c) return;
+  const hash = window.location.hash || "";
+  if(hash.startsWith("#/live/")) return teacherLiveControl(c, decodeURIComponent(hash.split("/")[2]));
+  if(hash.startsWith("#/report/")) return teacherReportView(c, decodeURIComponent(hash.split("/")[2]));
+  if(hash.startsWith("#/wizard")){ const parts=hash.split("/"); return teacherWizard(c, parts[2]?decodeURIComponent(parts[2]):null); }
+  const key = STATE.teacherNav;
+  if(key==="overview") return teacherOverview(c);
+  if(key==="classes") return teacherClasses(c);
+  if(key==="create"){ window.location.hash="#/wizard"; return teacherWizard(c,null); }
+  if(key==="library") return teacherLibrary(c);
+  if(key==="history") return teacherHistory(c);
+  if(key==="reports") return teacherReportsList(c);
+  if(key==="account") return teacherAccount(c);
+}
+
+async function teacherOverview(c){
+  const uid = STATE.user.uid;
+  c.innerHTML = `<h2>Xin chào, ${esc(STATE.profile.displayName||STATE.profile.email)} 👋</h2>
+    <div class="grid grid-4" id="tOvGrid"></div>
+    <div class="mt-20"><button class="btn btn-lg" id="btnNewSession">+ TẠO TƯƠNG TÁC MỚI</button></div>
+    <div class="card mt-20"><h3>Phiên gần đây</h3><div class="table-wrap" id="tOvRecent"><div class="mut">Đang tải…</div></div></div>`;
+  $("#btnNewSession").onclick = ()=>{ window.location.hash = "#/wizard"; };
+  try{
+    const classesQ = query(collection(db,"classes"), where("ownerId","==",uid));
+    const sessionsQ = query(collection(db,"sessions"), where("ownerId","==",uid));
+    const [classesCnt, sessionsCnt] = await Promise.all([getCountFromServer(classesQ), getCountFromServer(sessionsQ)]);
+    const sessSnap = await getDocs(query(collection(db,"sessions"), where("ownerId","==",uid), orderBy("createdAt","desc"), limit(8)));
+    let totalResponses = 0, totalExpected = 0;
+    const classSnap = await getDocs(classesQ);
+    const classMap = {}; classSnap.docs.forEach(d=>classMap[d.id]=d.data());
+    sessSnap.docs.forEach(d=>{
+      const s = d.data();
+      totalResponses += s.responseCount||0;
+      const cls = classMap[s.classId];
+      if(cls && cls.studentCount) totalExpected += (cls.studentCount * (s.questionCount||1));
+    });
+    const rate = totalExpected>0 ? Math.min(100, Math.round(totalResponses/totalExpected*100)) + "%" : "—";
+    $("#tOvGrid").innerHTML = [
+      [classesCnt.data().count,"Số lớp"], [sessionsCnt.data().count,"Số phiên"],
+      [totalResponses,"Tổng lượt trả lời (gần đây)"], [rate,"Tỷ lệ tham gia (ước tính)"]
+    ].map(([n,l])=>`<div class="stat"><div class="num">${n}</div><div class="lbl">${esc(l)}</div></div>`).join("");
+    if(sessSnap.empty){ $("#tOvRecent").innerHTML = `<div class="empty-state"><div class="ic">🗳️</div>Chưa có phiên tương tác nào. Hãy tạo phiên đầu tiên!</div>`; }
+    else{
+      $("#tOvRecent").innerHTML = `<table><thead><tr><th>Hoạt động</th><th>Trạng thái</th><th>Câu hỏi</th><th>Lượt trả lời</th><th>Ngày tạo</th><th></th></tr></thead><tbody>
+        ${sessSnap.docs.map(d=>{ const s=d.data(); return `<tr><td>${esc(s.title)}</td><td>${sessionStatusBadge(s.status)}</td><td>${s.questionCount||0}</td><td>${s.responseCount||0}</td><td>${fmtDateShort(s.createdAt)}</td>
+          <td><button class="btn btn-sm btn-outline" data-open="${d.id}">MỞ</button></td></tr>`; }).join("")}
+      </tbody></table>`;
+      $$("[data-open]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/live/"+encodeURIComponent(b.dataset.open); });
+    }
+  }catch(e){ $("#tOvGrid").innerHTML = errorBlock(e, ()=>teacherOverview(c)); }
+}
+
+/* ---------- Lớp học ---------- */
+async function teacherClasses(c){
+  c.innerHTML = `<div class="section-title"><h2>Lớp học</h2><button class="btn" id="btnNewClass">+ Tạo lớp mới</button></div>
+    <div class="card"><div class="table-wrap" id="classTable"><div class="center-screen" style="min-height:120px;"><span class="spinner"></span></div></div></div>`;
+  $("#btnNewClass").onclick = ()=>openClassForm(null);
+  const uid = STATE.user.uid;
+  const q = query(collection(db,"classes"), where("ownerId","==",uid), orderBy("createdAt","desc"));
+  track(onSnapshot(q, async (snap)=>{
+    if(snap.empty){ $("#classTable").innerHTML = `<div class="empty-state"><div class="ic">🏫</div>Chưa có lớp học nào. Ví dụ: K76.A01, K76.A02…</div>`; return; }
+    const rows = await Promise.all(snap.docs.map(async d=>{
+      const x = d.data();
+      let sessCnt = "—";
+      try{ const cnt = await getCountFromServer(query(collection(db,"sessions"), where("classId","==",d.id))); sessCnt = cnt.data().count; }catch(e){}
+      return `<tr><td>${esc(x.name)}</td><td>${esc(x.code||"—")}</td><td>${x.studentCount??"—"}</td><td>${sessCnt}</td><td>${fmtDateShort(x.createdAt)}</td>
+        <td class="flex gap-8"><button class="btn btn-sm btn-outline" data-edit="${d.id}">SỬA</button><button class="btn btn-sm btn-danger" data-del="${d.id}">XÓA</button></td></tr>`;
+    }));
+    $("#classTable").innerHTML = `<table><thead><tr><th>Tên lớp</th><th>Mã lớp</th><th>Sĩ số</th><th>Số phiên</th><th>Ngày tạo</th><th>Thao tác</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+    $$("[data-edit]").forEach(b=>b.onclick=()=>{ const d=snap.docs.find(x=>x.id===b.dataset.edit); openClassForm({id:d.id,...d.data()}); });
+    $$("[data-del]").forEach(b=>b.onclick=()=>deleteClass(b.dataset.del));
+  }, (err)=>{ $("#classTable").innerHTML = errorBlock(err, ()=>teacherClasses(c)); }));
+}
+function openClassForm(existing){
+  openModal(`
+    <h3>${existing?"Sửa lớp học":"Tạo lớp học mới"}</h3>
+    <form id="classForm">
+      <div class="field"><label>Tên lớp *</label><input type="text" id="clName" required value="${existing?esc(existing.name):""}" placeholder="Ví dụ: K76.A01"></div>
+      <div class="field"><label>Mã lớp</label><input type="text" id="clCode" value="${existing?esc(existing.code||""):""}"></div>
+      <div class="field"><label>Khóa học</label><input type="text" id="clYear" value="${existing?esc(existing.academicYear||""):""}" placeholder="Ví dụ: 2025-2026"></div>
+      <div class="field"><label>Sĩ số</label><input type="number" id="clCount" min="0" value="${existing&&existing.studentCount!=null?existing.studentCount:""}"></div>
+      <div class="field"><label>Mô tả</label><textarea id="clDesc">${existing?esc(existing.description||""):""}</textarea></div>
+      <div id="clErr" class="error-text hidden"></div>
+      <div class="flex-between mt-14">
+        <button type="button" class="btn btn-ghost" id="clCancel">Hủy</button>
+        <button type="submit" class="btn" id="clSave">${existing?"Lưu thay đổi":"Tạo lớp"}</button>
+      </div>
+    </form>`);
+  $("#clCancel").onclick = closeModal;
+  $("#classForm").onsubmit = async (e)=>{
+    e.preventDefault();
+    const name = $("#clName").value.trim();
+    if(!name){ $("#clErr").textContent="Tên lớp không được để trống."; $("#clErr").classList.remove("hidden"); return; }
+    const data = {
+      name, code: $("#clCode").value.trim(), academicYear: $("#clYear").value.trim(),
+      studentCount: $("#clCount").value? Number($("#clCount").value) : null,
+      description: $("#clDesc").value.trim(), status:"active", updatedAt: serverTimestamp()
+    };
+    const btn = $("#clSave"); btn.disabled = true;
+    try{
+      if(existing){ await updateDoc(doc(db,"classes",existing.id), data); toast("Đã lưu thay đổi lớp học.","ok"); }
+      else{ data.ownerId = STATE.user.uid; data.createdAt = serverTimestamp(); await addDoc(collection(db,"classes"), data); toast("Đã tạo lớp học mới.","ok"); }
+      closeModal();
+    }catch(err){ $("#clErr").textContent = mapError(err); $("#clErr").classList.remove("hidden"); }
+    finally{ btn.disabled=false; }
+  };
+}
+async function deleteClass(id){
+  if(!confirm("Xóa lớp học này? Các phiên đã tạo trước đó sẽ không bị xóa.")) return;
+  try{ await deleteDoc(doc(db,"classes",id)); toast("Đã xóa lớp học.","ok"); }
+  catch(e){ toast(mapError(e),"err"); }
+}
+
+/* ---------- Thư viện câu hỏi ---------- */
+async function teacherLibrary(c){
+  c.innerHTML = `<div class="section-title"><h2>Thư viện câu hỏi</h2><button class="btn" id="btnNewLib">+ Lưu câu hỏi mới</button></div>
+    <div class="flex gap-8 mt-8" style="flex-wrap:wrap;" id="libFilterBar">
+      <button class="chip" data-cat="" style="cursor:pointer;border:1.5px solid var(--brand);color:var(--brand);">Tất cả</button>
+      ${LIBRARY_CATEGORIES.map(cat=>`<button class="chip" data-cat="${esc(cat)}" style="cursor:pointer;">${esc(cat)}</button>`).join("")}
+    </div>
+    <div class="grid grid-3 mt-14" id="libGrid"><div class="mut">Đang tải…</div></div>`;
+  $("#btnNewLib").onclick = ()=>openLibraryForm(null);
+  const uid = STATE.user.uid;
+  const q = query(collection(db,"library"), where("ownerId","==",uid), orderBy("createdAt","desc"));
+  let cache = [];
+  track(onSnapshot(q, (snap)=>{
+    cache = snap.docs.map(d=>({id:d.id, ...d.data()}));
+    renderLib("");
+  }, (err)=>{ $("#libGrid").innerHTML = errorBlock(err, ()=>teacherLibrary(c)); }));
+  $$("#libFilterBar .chip").forEach(b=>b.onclick=()=>{
+    $$("#libFilterBar .chip").forEach(x=>x.style.cssText="cursor:pointer;");
+    b.style.cssText="cursor:pointer;border:1.5px solid var(--brand);color:var(--brand);";
+    renderLib(b.dataset.cat);
+  });
+  function renderLib(cat){
+    const list = cat ? cache.filter(x=>x.category===cat) : cache;
+    if(list.length===0){ $("#libGrid").innerHTML = `<div class="empty-state" style="grid-column:1/-1;"><div class="ic">📚</div>Thư viện trống. Hãy lưu câu hỏi để dùng lại sau.</div>`; return; }
+    $("#libGrid").innerHTML = list.map(x=>`
+      <div class="card">
+        <span class="chip">${esc(x.category)}</span> <span class="chip">${esc(QUESTION_TYPES[x.type]?.label||x.type)}</span>
+        <p class="mt-8" style="font-weight:600;">${esc(x.question)}</p>
+        <div class="flex gap-8 mt-8">
+          <button class="btn btn-sm btn-outline" data-e="${x.id}">SỬA</button>
+          <button class="btn btn-sm btn-ghost" data-cp="${x.id}">SAO CHÉP</button>
+          <button class="btn btn-sm btn-danger" data-d="${x.id}">XÓA</button>
+        </div>
+      </div>`).join("");
+    $$("[data-e]").forEach(b=>b.onclick=()=>openLibraryForm(cache.find(x=>x.id===b.dataset.e)));
+    $$("[data-cp]").forEach(b=>b.onclick=async ()=>{
+      const item = cache.find(x=>x.id===b.dataset.cp);
+      const {id, createdAt, updatedAt, ...rest} = item;
+      try{ await addDoc(collection(db,"library"), {...rest, question: rest.question+" (bản sao)", createdAt:serverTimestamp(), updatedAt:serverTimestamp()}); toast("Đã sao chép câu hỏi.","ok"); }
+      catch(e){ toast(mapError(e),"err"); }
+    });
+    $$("[data-d]").forEach(b=>b.onclick=async ()=>{
+      if(!confirm("Xóa câu hỏi này khỏi thư viện?")) return;
+      try{ await deleteDoc(doc(db,"library",b.dataset.d)); toast("Đã xóa.","ok"); }catch(e){ toast(mapError(e),"err"); }
+    });
+  }
+}
+function openLibraryForm(existing){
+  const type = existing?.type || "single";
+  openModal(`
+    <h3>${existing?"Sửa câu hỏi thư viện":"Lưu câu hỏi vào thư viện"}</h3>
+    <form id="libForm">
+      <div class="field"><label>Phân loại</label><select id="libCat">${LIBRARY_CATEGORIES.map(cat=>`<option ${existing&&existing.category===cat?"selected":""}>${esc(cat)}</option>`).join("")}</select></div>
+      <div class="field"><label>Loại câu hỏi</label><select id="libType">${Object.entries(QUESTION_TYPES).map(([k,v])=>`<option value="${k}" ${type===k?"selected":""}>${v.icon} ${esc(v.label)}</option>`).join("")}</select></div>
+      <div class="field"><label>Nội dung câu hỏi *</label><textarea id="libQ" required>${existing?esc(existing.question):""}</textarea></div>
+      <div class="field" id="libOptWrap"></div>
+      <div id="libErr" class="error-text hidden"></div>
+      <div class="flex-between mt-14">
+        <button type="button" class="btn btn-ghost" id="libCancel">Hủy</button>
+        <button type="submit" class="btn">${existing?"Lưu thay đổi":"Lưu vào thư viện"}</button>
+      </div>
+    </form>`, true);
+  $("#libCancel").onclick = closeModal;
+  function renderOptEditor(){
+    const t = $("#libType").value;
+    if(t==="truefalse"){
+      // Đúng/Sai luôn cố định — không cho sửa, nhưng VẪN được ghi vào Firestore khi lưu.
+      $("#libOptWrap").innerHTML = `<label>Phương án</label><p class="hint">Câu hỏi Đúng/Sai luôn có sẵn 2 phương án cố định: <strong>Đúng</strong> và <strong>Sai</strong> (không cần nhập tay).</p>`;
+      return;
+    }
+    if(!QUESTION_TYPES[t].needsOptions){ $("#libOptWrap").innerHTML = `<p class="hint">Loại câu hỏi này không cần phương án cố định.</p>`; return; }
+    const opts = (existing && existing.type===t && existing.options) ? existing.options : ["",""];
+    $("#libOptWrap").innerHTML = `<label>Phương án</label><div id="libOptions">${opts.map((o,i)=>optionRowHtml(o,i)).join("")}</div>
+      <button type="button" class="btn btn-sm btn-outline" id="libAddOpt">+ Thêm phương án</button>`;
+    $("#libAddOpt").onclick = ()=>{ $("#libOptions").insertAdjacentHTML("beforeend", optionRowHtml("", $("#libOptions").children.length)); wireOptRemove(); };
+    wireOptRemove();
+  }
+  function wireOptRemove(){ $$(".optRemove").forEach(b=>b.onclick=()=>b.closest(".option-row").remove()); }
+  $("#libType").onchange = renderOptEditor;
+  renderOptEditor();
+  $("#libForm").onsubmit = async (e)=>{
+    e.preventDefault();
+    const t = $("#libType").value, qtext = $("#libQ").value.trim();
+    if(!qtext){ $("#libErr").textContent="Nội dung câu hỏi không được để trống."; $("#libErr").classList.remove("hidden"); return; }
+    let options = null;
+    if(t==="truefalse"){
+      // Luôn ghi cố định 2 phương án Đúng/Sai vào Firestore, bất kể trạng thái UI.
+      options = QUESTION_TYPES.truefalse.fixedOptions.slice();
+    } else if(QUESTION_TYPES[t].needsOptions){
+      options = $$("#libOptions .optText").map(i=>i.value.trim()).filter(v=>v);
+      if(options.length<2){ $("#libErr").textContent="Cần ít nhất 2 phương án."; $("#libErr").classList.remove("hidden"); return; }
+    }
+    const data = { category: $("#libCat").value, type:t, question:qtext, options, updatedAt: serverTimestamp() };
+    try{
+      if(existing){ await updateDoc(doc(db,"library",existing.id), data); toast("Đã lưu thay đổi.","ok"); }
+      else{ data.ownerId = STATE.user.uid; data.createdAt = serverTimestamp(); await addDoc(collection(db,"library"), data); toast("Đã lưu vào thư viện.","ok"); }
+      closeModal();
+    }catch(err){ $("#libErr").textContent = mapError(err); $("#libErr").classList.remove("hidden"); }
+  };
+}
+function optionRowHtml(val, idx){
+  return `<div class="option-row"><input type="text" class="optText" value="${esc(val)}" placeholder="Phương án ${idx+1}"><button type="button" class="btn btn-sm btn-ghost optRemove">✕</button></div>`;
+}
+
+/* ============================================================
+   WIZARD TẠO PHIÊN TƯƠNG TÁC (9 bước)
+   ============================================================ */
+const WIZARD_STEP_LABELS = ["Tên hoạt động","Chọn lớp","Câu hỏi","Loại câu hỏi","Phương án","Biểu đồ","Thiết lập","Xem trước","Bắt đầu"];
+function blankQuestion(){ return { question:"", description:"", type:"single", options:["",""], required:true, chartType:null, scaleMin:1, scaleMax:5, timeLimit:0, allowChangeAnswer:false }; }
+function initWizard(){
+  STATE.wizard = {
+    step:1, title:"", classId:"", classesCache:[], questions:[blankQuestion()], qIndex:0,
+    settings:{ timeLimit:0, showResults:"hidden", allowChangeAnswer:false, anonymous:true, showResponderCount:true, allowMultipleResponses:false }
+  };
+}
+async function teacherWizard(c, ignore){
+  if(!STATE.wizard) initWizard();
+  if(STATE.wizard.classesCache.length===0){
+    try{ const snap = await getDocs(query(collection(db,"classes"), where("ownerId","==",STATE.user.uid), orderBy("createdAt","desc"))); STATE.wizard.classesCache = snap.docs.map(d=>({id:d.id,...d.data()})); }catch(e){}
+  }
+  renderWizard(c);
+}
+function wizardShellHtml(bodyHtml){
+  const w = STATE.wizard;
+  return `<h2>Tạo tương tác mới</h2>
+  <div class="wizard-steps">${WIZARD_STEP_LABELS.map((l,i)=>{
+    const n=i+1; const cls = n<w.step?"done":(n===w.step?"active":"");
+    return `<span class="step ${cls}">${n}. ${esc(l)}</span>`;
+  }).join("")}</div>
+  <div class="card">${bodyHtml}</div>`;
+}
+function renderWizard(c){
+  const w = STATE.wizard;
+  const steps = {
+    1: wizStep1, 2: wizStep2, 3: wizStep3, 4: wizStep4, 5: wizStep5, 6: wizStep6, 7: wizStep7, 8: wizStep8
+  };
+  (steps[w.step] || wizStep1)(c);
+}
+function wizNavHtml(showBack, nextLabel){
+  return `<div class="wizard-nav">
+    <button type="button" class="btn btn-ghost" id="wizBack" ${showBack?"":"disabled style='visibility:hidden'"}>← Quay lại</button>
+    <div class="flex gap-8">
+      <button type="button" class="btn btn-ghost" id="wizCancel">Hủy bỏ</button>
+      <button type="button" class="btn" id="wizNext">${esc(nextLabel||"Tiếp tục →")}</button>
+    </div>
+  </div>`;
+}
+function wireWizNav(onBack, onNext){
+  $("#wizCancel").onclick = ()=>{ if(confirm("Hủy bỏ tạo phiên? Dữ liệu đang nhập sẽ mất.")){ STATE.wizard=null; STATE.teacherNav="overview"; window.location.hash=""; teacherRoute(); } };
+  if($("#wizBack")) $("#wizBack").onclick = onBack;
+  $("#wizNext").onclick = onNext;
+}
+
+function wizStep1(c){
+  const w = STATE.wizard;
+  c.innerHTML = wizardShellHtml(`
+    <div class="field"><label>Tên hoạt động *</label><input type="text" id="wTitle" value="${esc(w.title)}" placeholder="Ví dụ: Khảo sát đầu giờ - Chương 1"></div>
+    <div id="wErr" class="error-text hidden"></div>
+    ${wizNavHtml(false)}`);
+  wireWizNav(null, ()=>{
+    const v = $("#wTitle").value.trim();
+    if(!v){ $("#wErr").textContent="Vui lòng nhập tên hoạt động."; $("#wErr").classList.remove("hidden"); return; }
+    w.title = v; w.step=2; renderWizard($("#mainContent"));
+  });
+}
+function wizStep2(c){
+  const w = STATE.wizard;
+  c.innerHTML = wizardShellHtml(`
+    ${w.classesCache.length===0?`<p class="mut">Bạn chưa có lớp học nào. Vui lòng tạo lớp trước.</p><button class="btn btn-outline" id="wCreateClassQuick">+ Tạo lớp nhanh</button>`:
+    `<div class="field"><label>Chọn lớp *</label><select id="wClass">
+      <option value="">— Chọn lớp —</option>
+      ${w.classesCache.map(cl=>`<option value="${cl.id}" ${w.classId===cl.id?"selected":""}>${esc(cl.name)}</option>`).join("")}
+    </select></div>`}
+    <div id="wErr" class="error-text hidden"></div>
+    ${wizNavHtml(true)}`);
+  if(w.classesCache.length===0){
+    $("#wCreateClassQuick").onclick = ()=>{
+      openClassForm(null);
+      const origClose = closeModal;
+      const check = setInterval(async ()=>{
+        if(!document.getElementById("globalModal") || document.getElementById("globalModal").innerHTML===""){
+          clearInterval(check);
+          const snap = await getDocs(query(collection(db,"classes"), where("ownerId","==",STATE.user.uid), orderBy("createdAt","desc")));
+          w.classesCache = snap.docs.map(d=>({id:d.id,...d.data()}));
+          renderWizard($("#mainContent"));
+        }
+      }, 500);
+    };
+    wireWizNav(()=>{ w.step=1; renderWizard(c); }, ()=>{ $("#wErr").textContent="Vui lòng tạo lớp trước khi tiếp tục."; $("#wErr").classList.remove("hidden"); });
+    return;
+  }
+  wireWizNav(()=>{ w.step=1; renderWizard(c); }, ()=>{
+    const v = $("#wClass").value;
+    if(!v){ $("#wErr").textContent="Vui lòng chọn lớp."; $("#wErr").classList.remove("hidden"); return; }
+    w.classId = v; w.step=3; renderWizard($("#mainContent"));
+  });
+}
+function wizQuestionListBar(){
+  const w = STATE.wizard;
+  return `<div class="flex gap-8 mt-8" style="flex-wrap:wrap;">
+    ${w.questions.map((q,i)=>`<button type="button" class="btn btn-sm ${i===w.qIndex?'':'btn-outline'}" data-goq="${i}">Câu ${i+1}</button>`).join("")}
+  </div>`;
+}
+function wireQuestionListBar(rerender){
+  $$("[data-goq]").forEach(b=>b.onclick=()=>{ STATE.wizard.qIndex = Number(b.dataset.goq); STATE.wizard.step=3; rerender(); });
+}
+function wizStep3(c){
+  const w = STATE.wizard; const q = w.questions[w.qIndex];
+  c.innerHTML = wizardShellHtml(`
+    ${w.questions.length>1?wizQuestionListBar():""}
+    <div class="field mt-14"><label>Nội dung câu hỏi *</label><textarea id="wQ" placeholder="Nhập nội dung câu hỏi…">${esc(q.question)}</textarea></div>
+    <div class="field"><label>Mô tả / gợi ý (không bắt buộc)</label><input type="text" id="wQDesc" value="${esc(q.description||"")}"></div>
+    <div id="wErr" class="error-text hidden"></div>
+    ${wizNavHtml(true)}`);
+  wireQuestionListBar(()=>renderWizard(c));
+  wireWizNav(()=>{ w.step=2; renderWizard(c); }, ()=>{
+    const v = $("#wQ").value.trim();
+    if(!v){ $("#wErr").textContent="Vui lòng nhập nội dung câu hỏi."; $("#wErr").classList.remove("hidden"); return; }
+    q.question=v; q.description=$("#wQDesc").value.trim(); w.step=4; renderWizard($("#mainContent"));
+  });
+}
+function wizStep4(c){
+  const w = STATE.wizard; const q = w.questions[w.qIndex];
+  c.innerHTML = wizardShellHtml(`
+    <div class="type-grid">
+      ${Object.entries(QUESTION_TYPES).map(([k,v])=>`
+        <div class="type-card ${q.type===k?'active':''}" data-type="${k}">
+          <div class="ic">${v.icon}</div><div class="nm">${esc(v.label)}</div>
+        </div>`).join("")}
+    </div>
+    ${wizNavHtml(true)}`);
+  $$(".type-card").forEach(el=>el.onclick=()=>{ $$(".type-card").forEach(x=>x.classList.remove("active")); el.classList.add("active"); q.type = el.dataset.type; });
+  wireWizNav(()=>{ w.step=3; renderWizard(c); }, ()=>{
+    if(q.type==="truefalse") q.options=["Đúng","Sai"];
+    if(q.type==="likert" && (!q.options || q.options.length!==5 || q.options[0]==="")) q.options=["Hoàn toàn không đồng ý","Không đồng ý","Phân vân","Đồng ý","Hoàn toàn đồng ý"];
+    if((q.type==="single"||q.type==="multiple"||q.type==="ranking") && (!q.options || q.options.some(o=>false))){ if(!q.options || q.options.length<2) q.options=["",""]; }
+    q.chartType = QUESTION_TYPES[q.type].defaultChart;
+    w.step=5; renderWizard($("#mainContent"));
+  });
+}
+function wizStep5(c){
+  const w = STATE.wizard; const q = w.questions[w.qIndex]; const meta = QUESTION_TYPES[q.type];
+  let body = "";
+  if(q.type==="truefalse"){
+    body = `<p class="hint">Câu Đúng/Sai sử dụng 2 phương án cố định: <b>Đúng</b> và <b>Sai</b>.</p>`;
+  } else if(q.type==="scale"){
+    body = `<div class="grid grid-2">
+      <div class="field"><label>Giá trị nhỏ nhất</label><input type="number" id="wScaleMin" value="${q.scaleMin}"></div>
+      <div class="field"><label>Giá trị lớn nhất</label><input type="number" id="wScaleMax" value="${q.scaleMax}"></div>
+    </div>`;
+  } else if(q.type==="open"){
+    body = `<p class="hint">Học viên sẽ nhập câu trả lời dạng văn bản tự do. Không cần thiết lập phương án.</p>`;
+  } else {
+    body = `<label>${q.type==="ranking"?"Các mục cần xếp hạng":(q.type==="likert"?"Nhãn mức độ (có thể tùy chỉnh)":"Phương án")}</label>
+    <div id="wOptions">${q.options.map((o,i)=>optionRowHtml(o,i)).join("")}</div>
+    <button type="button" class="btn btn-sm btn-outline mt-8" id="wAddOpt">+ Thêm phương án</button>`;
+  }
+  c.innerHTML = wizardShellHtml(`${body}<div id="wErr" class="error-text hidden"></div>${wizNavHtml(true)}`);
+  if($("#wAddOpt")) $("#wAddOpt").onclick = ()=>{ $("#wOptions").insertAdjacentHTML("beforeend", optionRowHtml("", $("#wOptions").children.length)); $$(".optRemove").forEach(b=>b.onclick=()=>b.closest(".option-row").remove()); };
+  $$(".optRemove").forEach(b=>b.onclick=()=>b.closest(".option-row").remove());
+  wireWizNav(()=>{ w.step=4; renderWizard(c); }, ()=>{
+    if(q.type==="truefalse"){
+      // Cố định 2 phương án Đúng/Sai — giáo viên không cần (và không thể) nhập tay,
+      // nhưng dữ liệu VẪN được ghi vào Firestore (questions/{id}/options) như mọi loại có phương án khác.
+      q.options = QUESTION_TYPES.truefalse.fixedOptions.slice();
+    } else if(q.type==="scale"){
+      const mn=Number($("#wScaleMin").value), mx=Number($("#wScaleMax").value);
+      if(isNaN(mn)||isNaN(mx)||mn>=mx){ $("#wErr").textContent="Thang điểm không hợp lệ (giá trị nhỏ nhất phải nhỏ hơn giá trị lớn nhất)."; $("#wErr").classList.remove("hidden"); return; }
+      q.scaleMin=mn; q.scaleMax=mx;
+    } else if(meta.needsOptions){
+      const vals = $$("#wOptions .optText").map(i=>i.value.trim()).filter(v=>v);
+      const uniq = new Set(vals);
+      if(vals.length<2){ $("#wErr").textContent="Cần ít nhất 2 phương án."; $("#wErr").classList.remove("hidden"); return; }
+      if(q.type==="ranking" && uniq.size!==vals.length){ $("#wErr").textContent="Các mục xếp hạng không được trùng nhau."; $("#wErr").classList.remove("hidden"); return; }
+      q.options = vals;
+    }
+    w.step=6; renderWizard($("#mainContent"));
+  });
+}
+function wizStep6(c){
+  const w = STATE.wizard; const q = w.questions[w.qIndex]; const meta = QUESTION_TYPES[q.type];
+  if(!q.chartType) q.chartType = meta.defaultChart;
+  c.innerHTML = wizardShellHtml(`
+    <p class="hint">Biểu đồ phù hợp với loại câu hỏi "<b>${esc(meta.label)}</b>":</p>
+    <div class="type-grid">
+      ${meta.allowedCharts.map(ct=>`<div class="type-card ${q.chartType===ct?'active':''}" data-chart="${ct}"><div class="ic">📊</div><div class="nm">${esc(CHART_LABELS[ct])}</div></div>`).join("")}
+    </div>
+    <div class="flex-between mt-20" style="flex-wrap:wrap;gap:10px;">
+      <button type="button" class="btn btn-ghost" id="wizBack">← Quay lại</button>
+      <div class="flex gap-8">
+        <button type="button" class="btn btn-ghost" id="wizCancel">Hủy bỏ</button>
+        <button type="button" class="btn btn-outline" id="wizAddQ">+ Thêm câu hỏi khác</button>
+        <button type="button" class="btn" id="wizContinue">Tiếp tục thiết lập phiên →</button>
+      </div>
+    </div>`);
+  $$(".type-card").forEach(el=>el.onclick=()=>{ $$(".type-card").forEach(x=>x.classList.remove("active")); el.classList.add("active"); q.chartType = el.dataset.chart; });
+  $("#wizCancel").onclick = ()=>{ if(confirm("Hủy bỏ tạo phiên? Dữ liệu đang nhập sẽ mất.")){ STATE.wizard=null; STATE.teacherNav="overview"; window.location.hash=""; teacherRoute(); } };
+  $("#wizBack").onclick = ()=>{ w.step=5; renderWizard(c); };
+  $("#wizAddQ").onclick = ()=>{ w.questions.push(blankQuestion()); w.qIndex = w.questions.length-1; w.step=3; renderWizard($("#mainContent")); };
+  $("#wizContinue").onclick = ()=>{ w.step=7; renderWizard($("#mainContent")); };
+}
+function wizStep7(c){
+  const w = STATE.wizard; const s = w.settings;
+  c.innerHTML = wizardShellHtml(`
+    <div class="field"><label>Thời gian trả lời mỗi câu</label>
+      <select id="wTimer">${TIMER_PRESETS.map(t=>`<option value="${t.value}" ${s.timeLimit===t.value?"selected":""}>${esc(t.label)}</option>`).join("")}
+        <option value="custom" ${!TIMER_PRESETS.some(t=>t.value===s.timeLimit)?"selected":""}>Tùy chỉnh…</option>
+      </select>
+    </div>
+    <div class="field hidden" id="wCustomTimerWrap"><label>Số giây tùy chỉnh</label><input type="number" id="wCustomTimer" min="5" value="${s.timeLimit||60}"></div>
+    <div class="field"><label>Hiển thị kết quả cho học viên</label>
+      <select id="wShowResults"><option value="hidden" ${s.showResults==='hidden'?'selected':''}>Ẩn (chỉ hiện "đã trả lời")</option><option value="live" ${s.showResults==='live'?'selected':''}>Trực tiếp (Live)</option></select>
+    </div>
+    <label class="flex gap-8 mt-14"><input type="checkbox" id="wAllowChange" ${s.allowChangeAnswer?"checked":""} style="width:auto;min-height:auto;"> Cho phép học viên đổi câu trả lời trước khi phiên đóng</label>
+    <label class="flex gap-8 mt-8"><input type="checkbox" id="wShowCount" ${s.showResponderCount?"checked":""} style="width:auto;min-height:auto;"> Hiển thị số người đã trả lời</label>
+    <p class="hint mt-8">Học viên luôn trả lời ẩn danh (không có tài khoản) — đây là thiết kế cố định của hệ thống, không thể tắt.</p>
+    ${wizNavHtml(true)}`);
+  $("#wTimer").onchange = ()=>{ $("#wCustomTimerWrap").classList.toggle("hidden", $("#wTimer").value!=="custom"); };
+  if($("#wTimer").value==="custom") $("#wCustomTimerWrap").classList.remove("hidden");
+  wireWizNav(()=>{ w.step=6; renderWizard(c); }, ()=>{
+    const tv = $("#wTimer").value;
+    s.timeLimit = tv==="custom" ? Math.max(5, Number($("#wCustomTimer").value)||60) : Number(tv);
+    s.showResults = $("#wShowResults").value;
+    s.allowChangeAnswer = $("#wAllowChange").checked;
+    s.anonymous = true; // V1: học viên luôn ẩn danh, không có UI để tắt (không có khái niệm tài khoản học viên)
+    s.showResponderCount = $("#wShowCount").checked;
+    w.questions.forEach(q=>{ q.timeLimit = s.timeLimit; q.allowChangeAnswer = s.allowChangeAnswer; });
+    w.step=8; renderWizard($("#mainContent"));
+  });
+}
+function wizStep8(c){
+  const w = STATE.wizard; const s = w.settings;
+  const cls = w.classesCache.find(x=>x.id===w.classId);
+  c.innerHTML = wizardShellHtml(`
+    <h3>${esc(w.title)}</h3>
+    <p class="mut">Lớp: <b>${esc(cls?cls.name:"—")}</b> · ${w.questions.length} câu hỏi · Thời gian: ${s.timeLimit?s.timeLimit+"s":"Không giới hạn"} · Kết quả: ${s.showResults==="live"?"Trực tiếp":"Ẩn"}</p>
+    ${w.questions.map((q,i)=>`
+      <div class="card">
+        <div class="flex-between"><b>Câu ${i+1}: ${esc(q.question)}</b><span class="chip">${esc(QUESTION_TYPES[q.type].label)}</span></div>
+        ${q.type==="scale"?`<p class="small mut mt-8">Thang điểm từ ${q.scaleMin} đến ${q.scaleMax}</p>`:
+          (QUESTION_TYPES[q.type].needsOptions?`<ul class="small mut">${q.options.map(o=>`<li>${esc(o)}</li>`).join("")}</ul>`:`<p class="small mut mt-8">Câu hỏi mở — nhập văn bản tự do</p>`)}
+        <span class="chip">Biểu đồ: ${esc(CHART_LABELS[q.chartType])}</span>
+      </div>`).join("")}
+    <div id="wErr" class="error-text hidden mt-14"></div>
+    <div class="wizard-nav">
+      <button type="button" class="btn btn-ghost" id="wizBack">← Quay lại</button>
+      <div class="flex gap-8">
+        <button type="button" class="btn btn-ghost" id="wizCancel">Hủy bỏ</button>
+        <button type="button" class="btn btn-lg btn-ok" id="wizFinish">BẮT ĐẦU — Tạo phiên</button>
+      </div>
+    </div>`);
+  $("#wizCancel").onclick = ()=>{ if(confirm("Hủy bỏ tạo phiên? Dữ liệu đang nhập sẽ mất.")){ STATE.wizard=null; STATE.teacherNav="overview"; window.location.hash=""; teacherRoute(); } };
+  $("#wizBack").onclick = ()=>{ w.step=6; w.qIndex=w.questions.length-1; renderWizard(c); };
+  $("#wizFinish").onclick = async ()=>{
+    const btn = $("#wizFinish"); btn.disabled=true; btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px;"></span> Đang tạo phiên…';
+    try{ await finalizeWizard(); }
+    catch(err){ $("#wErr").textContent = mapError(err); $("#wErr").classList.remove("hidden"); btn.disabled=false; btn.textContent="BẮT ĐẦU — Tạo phiên"; }
+  };
+}
+async function finalizeWizard(){
+  const w = STATE.wizard; const s = w.settings;
+  const batch = writeBatch(db);
+  const sessionRef = doc(collection(db,"sessions"));
+  const firstQRef = doc(collection(db,"questions"));
+  const cls = w.classesCache.find(x=>x.id===w.classId);
+  const sessionData = {
+    ownerId: STATE.user.uid, classId: w.classId, className: cls?cls.name:"", title: w.title, description: "",
+    status: "ready", accessToken: genToken(28), shortCode: genShortCode(),
+    showResults: s.showResults, allowMultipleResponses: s.allowMultipleResponses, anonymous: s.anonymous,
+    showResponderCount: s.showResponderCount,
+    startedAt: null, closedAt: null, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    questionCount: w.questions.length, responseCount: 0, activeQuestionId: null,
+    activeQuestionStartedAt: null, sessionGroupId: null, roundNumber: 1
+  };
+  batch.set(sessionRef, sessionData);
+  const joinCodeRef = doc(db,"joinCodes",sessionData.shortCode);
+  batch.set(joinCodeRef, { sessionId: sessionRef.id, ownerId: STATE.user.uid, createdAt: serverTimestamp() });
+  // FIX 8: ánh xạ accessToken -> sessionId, cho phép học viên tra cứu sessionId thật
+  // bằng GET-theo-ID (không LIST được) mà không cần nhúng sessionId trực tiếp trong link/QR.
+  const tokenRef = doc(db,"sessionTokens",sessionData.accessToken);
+  batch.set(tokenRef, { sessionId: sessionRef.id, ownerId: STATE.user.uid, createdAt: serverTimestamp() });
+  const qRefs = [];
+  w.questions.forEach((q, i)=>{
+    const qRef = i===0 ? firstQRef : doc(collection(db,"questions"));
+    qRefs.push(qRef);
+    const meta = QUESTION_TYPES[q.type];
+    batch.set(qRef, {
+      sessionId: sessionRef.id, ownerId: STATE.user.uid, order: i, type: q.type,
+      question: q.question, description: q.description||"", required: true,
+      chartType: q.chartType || meta.defaultChart, timeLimit: q.timeLimit||0,
+      allowChangeAnswer: !!q.allowChangeAnswer,
+      scaleMin: q.type==="scale"?q.scaleMin:null, scaleMax: q.type==="scale"?q.scaleMax:null,
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+    });
+    if(meta.needsOptions){
+      q.options.forEach((optText, oi)=>{
+        const optRef = doc(collection(db,"questions",qRef.id,"options"));
+        batch.set(optRef, {
+          label: String.fromCharCode(65+oi), text: optText, order: oi,
+          value: q.type==="likert" ? (oi+1) : (q.type==="ranking" ? null : null),
+          isCorrect: null, createdAt: serverTimestamp()
+        });
+      });
+    }
+  });
+  await batch.commit();
+  STATE.wizard = null;
+  toast("Đã tạo phiên tương tác thành công!","ok");
+  window.location.hash = "#/live/" + encodeURIComponent(sessionRef.id);
+}
+
+/* ============================================================
+   CHART ENGINE (dùng chung: điều khiển trực tiếp, trình chiếu, báo cáo)
+   ============================================================ */
+const PALETTE = ["#155e75","#0891b2","#16a34a","#ca8a04","#dc2626","#7c3aed","#db2777","#0d9488","#ea580c","#4338ca"];
+function aggregateForChart(question, options, responseDocs){
+  const type = question.type;
+  if(type==="scale"){
+    const labels = []; for(let v=question.scaleMin; v<=question.scaleMax; v++) labels.push(String(v));
+    const counts = labels.map(()=>0);
+    responseDocs.forEach(r=>{ const v = r.answer; const idx = labels.indexOf(String(v)); if(idx>=0) counts[idx]++; });
+    return { labels, datasets:[{ data:counts, backgroundColor:PALETTE[0] }] };
+  }
+  if(type==="ranking"){
+    const n = options.length;
+    const scores = {}; options.forEach(o=>scores[o.id]=0);
+    responseDocs.forEach(r=>{
+      const order = r.selectedOptions||[];
+      order.forEach((optId, pos)=>{ if(scores[optId]!=null) scores[optId] += (n - pos); });
+    });
+    const sorted = [...options].sort((a,b)=>scores[b.id]-scores[a.id]);
+    return { labels: sorted.map(o=>o.text), datasets:[{ data: sorted.map(o=>scores[o.id]), backgroundColor:PALETTE[0] }] };
+  }
+  if(type==="likert"){
+    const total = responseDocs.length || 1;
+    const counts = options.map(o=>responseDocs.filter(r=>(r.selectedOptions||[]).includes(o.id)).length);
+    return { labels:["Kết quả"], datasets: options.map((o,i)=>({ label:o.text, data:[Math.round(counts[i]/total*1000)/10], backgroundColor:PALETTE[i%PALETTE.length] })) };
+  }
+  // single / multiple / truefalse
+  const counts = options.map(o=>responseDocs.filter(r=>(r.selectedOptions||[]).includes(o.id)).length);
+  return { labels: options.map(o=>o.text), datasets:[{ data:counts, backgroundColor: options.map((_,i)=>PALETTE[i%PALETTE.length]) }] };
+}
+let __chartInstances = {};
+function renderChart(canvasEl, question, options, responseDocs){
+  if(!canvasEl) return;
+  const chartType = question.chartType || QUESTION_TYPES[question.type].defaultChart;
+  if(chartType==="list") return; // câu hỏi mở dùng danh sách, không dùng Chart.js
+  try{
+    const agg = aggregateForChart(question, options, responseDocs);
+    const key = canvasEl.id;
+    if(__chartInstances[key]) { __chartInstances[key].destroy(); delete __chartInstances[key]; }
+    let type="bar", opts={ responsive:true, plugins:{ legend:{ display:chartType==="stacked" || chartType==="pie" || chartType==="donut" } }, scales:{} };
+    if(chartType==="bar"){ type="bar"; }
+    else if(chartType==="hbar"){ type="bar"; opts.indexAxis="y"; }
+    else if(chartType==="pie"){ type="pie"; }
+    else if(chartType==="donut"){ type="doughnut"; }
+    else if(chartType==="distribution"){ type="bar"; }
+    else if(chartType==="stacked"){
+      type="bar"; opts.indexAxis="y"; opts.scales={ x:{ stacked:true, max:100, ticks:{ callback:v=>v+"%" } }, y:{ stacked:true } };
+    }
+    __chartInstances[key] = new Chart(canvasEl, { type, data: agg, options: opts });
+  }catch(e){
+    // Không để một lỗi vẽ biểu đồ (VD: thư viện Chart.js chưa tải kịp) làm hỏng
+    // toàn bộ màn hình — chỉ hiển thị thông báo thay thế ngay tại vị trí biểu đồ.
+    console.warn("Không thể vẽ biểu đồ:", e);
+    if(canvasEl.parentElement) canvasEl.parentElement.insertAdjacentHTML("beforeend", `<p class="hint">Không thể tải biểu đồ. Vui lòng tải lại trang.</p>`);
+  }
+}
+
+/* ============================================================
+   QR CODE — hiển thị, phóng to, tải PNG, copy link
+   ============================================================ */
+function studentJoinUrl(session, sessionId){
+  // FIX 8: liên kết QR chỉ chứa accessToken (chuỗi ngẫu nhiên mật mã học, 28 ký tự) —
+  // KHÔNG nhúng sessionId trực tiếp. Trình duyệt học viên phải GET đúng
+  // sessionTokens/{token} (không được LIST) mới suy ra được sessionId thật.
+  return `${APP_BASE_URL}?mode=student&t=${encodeURIComponent(session.accessToken)}`;
+}
+function showQrModal(session, sessionId){
+  const url = studentJoinUrl(session, sessionId);
+  openModal(`
+    <h3>Mã QR tham gia</h3>
+    <p class="mut">Học viên quét mã hoặc truy cập liên kết bên dưới để tham gia "${esc(session.title)}".</p>
+    <div style="text-align:center;padding:14px;background:#fff;border-radius:12px;" id="qrHolder"></div>
+    <p style="text-align:center;font-size:24px;font-weight:800;letter-spacing:2px;margin:10px 0;">${esc(session.shortCode)}</p>
+    <p class="hint" style="text-align:center;">Mã tham gia dự phòng (nếu không quét được QR)</p>
+    <div class="field"><input type="text" id="qrLinkText" readonly value="${esc(url)}"></div>
+    <div class="flex gap-8" style="justify-content:center;flex-wrap:wrap;">
+      <button class="btn btn-outline" id="btnCopyLink">Copy liên kết</button>
+      <button class="btn btn-outline" id="btnDownloadQr">Tải PNG</button>
+      <button class="btn btn-ghost" id="btnCloseQr">Đóng</button>
+    </div>`, true);
+  new QRCode(document.getElementById("qrHolder"), { text:url, width:220, height:220, colorDark:"#0b2530", colorLight:"#ffffff" });
+  $("#btnCloseQr").onclick = closeModal;
+  $("#btnCopyLink").onclick = async ()=>{ try{ await navigator.clipboard.writeText(url); toast("Đã copy liên kết tham gia.","ok"); }catch(e){ $("#qrLinkText").select(); document.execCommand("copy"); toast("Đã copy liên kết.","ok"); } };
+  $("#btnDownloadQr").onclick = ()=>{
+    setTimeout(()=>{
+      const holder = document.getElementById("qrHolder");
+      const canvas = holder.querySelector("canvas");
+      const a = document.createElement("a");
+      if(canvas){ a.href = canvas.toDataURL("image/png"); }
+      else{ const img = holder.querySelector("img"); a.href = img.src; }
+      a.download = "QR-"+(session.shortCode||"session")+".png";
+      a.click();
+    }, 100);
+  };
+}
+
+/* ============================================================
+   ĐIỀU KHIỂN PHIÊN TRỰC TIẾP (Teacher Live Control)
+   ============================================================ */
+async function teacherLiveControl(c, sessionId){
+  c.innerHTML = `<div class="center-screen" style="min-height:300px;"><span class="spinner"></span></div>`;
+  let sessionRef = doc(db,"sessions",sessionId);
+  let sessionSnap;
+  try{ sessionSnap = await getDoc(sessionRef); }catch(e){ c.innerHTML = errorBlock(e, ()=>teacherLiveControl(c,sessionId)); return; }
+  if(!sessionSnap.exists()){ c.innerHTML = `<div class="empty-state"><div class="ic">🚫</div>Không tìm thấy phiên tương tác.</div>`; return; }
+  let session = sessionSnap.data();
+  if(session.ownerId !== STATE.user.uid){ c.innerHTML = `<div class="empty-state"><div class="ic">⛔</div>Bạn không có quyền truy cập phiên này.</div>`; return; }
+
+  let questions = [];
+  try{
+    const qs = await getDocs(query(collection(db,"questions"), where("sessionId","==",sessionId), orderBy("order","asc")));
+    questions = qs.docs.map(d=>({id:d.id, ...d.data()}));
+  }catch(e){ c.innerHTML = errorBlock(e, ()=>teacherLiveControl(c,sessionId)); return; }
+  if(questions.length===0){ c.innerHTML = `<div class="empty-state"><div class="ic">❓</div>Phiên này chưa có câu hỏi nào.</div>`; return; }
+
+  const liveCounts = {};
+  await Promise.all(questions.map(async q=>{
+    try{ const cnt = await getCountFromServer(query(collection(db,"sessions",sessionId,"responses"), where("questionId","==",q.id))); liveCounts[q.id] = cnt.data().count; }
+    catch(e){ liveCounts[q.id] = 0; }
+  }));
+
+  let curIndex = questions.findIndex(q=>q.id===session.activeQuestionId);
+  if(curIndex<0) curIndex = 0;
+
+  renderShell();
+
+  function renderShell(){
+    c.innerHTML = `
+    <div class="flex-between no-print">
+      <h2 style="margin:0;">${esc(session.title)}</h2>
+      ${sessionStatusBadge(session.status)}
+    </div>
+    <div class="flex gap-8 mt-8 no-print" style="flex-wrap:wrap;">
+      ${session.status==="ready"||session.status==="draft" ? `<button class="btn btn-ok" id="btnOpenSession">MỞ PHIÊN</button>`:""}
+      ${session.status==="open" ? `<button class="btn btn-danger" id="btnCloseSession">ĐÓNG BÌNH CHỌN</button>`:""}
+      ${session.status==="closed" ? `<button class="btn btn-warn" id="btnReopenSession">MỞ LẠI PHIÊN</button><button class="btn btn-ghost" id="btnArchiveSession">KẾT THÚC PHIÊN</button>`:""}
+      <button class="btn btn-outline" id="btnShowQr" ${session.status==="draft"?"disabled":""}>HIỂN THỊ QR</button>
+      <button class="btn btn-outline" id="btnPresent" ${session.status==="draft"?"disabled":""}>HIỂN THỊ TRÌNH CHIẾU</button>
+      <button class="btn ${session.showResults==='live'?'btn-warn':'btn-outline'}" id="btnToggleResults">${session.showResults==='live'?"ẨN KẾT QUẢ":"HIỂN THỊ KẾT QUẢ"}</button>
+      <button class="btn btn-ghost" id="btnBackDash">← Về tổng quan</button>
+    </div>
+    <div class="live-grid mt-14">
+      <div>
+        <div class="card">
+          <div class="qcount">${questions.map((q,i)=>`<button data-q="${i}" class="${i===curIndex?'active':''}">Câu ${i+1}</button>`).join("")}</div>
+          <div class="flex-between no-print">
+            <button class="btn btn-sm btn-outline" id="btnPrevQ" ${curIndex===0?"disabled":""}>← CÂU TRƯỚC</button>
+            <button class="btn btn-sm btn-outline" id="btnNextQ" ${curIndex===questions.length-1?"disabled":""}>CÂU TIẾP →</button>
+          </div>
+          <h3 class="mt-14" id="curQText"></h3>
+          <div id="curQBody"></div>
+        </div>
+      </div>
+      <div>
+        <div class="stat"><div class="num" id="respCount">0</div><div class="lbl">Học viên đã trả lời câu này</div></div>
+        <div class="card mt-14"><canvas id="liveChart" height="220"></canvas></div>
+      </div>
+    </div>`;
+    $("#btnBackDash").onclick = ()=>{ window.location.hash=""; STATE.teacherNav="overview"; teacherRoute(); };
+    $$(".qcount [data-q]").forEach(b=>b.onclick=()=>switchQuestion(Number(b.dataset.q)));
+    if($("#btnPrevQ")) $("#btnPrevQ").onclick = ()=>switchQuestion(curIndex-1);
+    if($("#btnNextQ")) $("#btnNextQ").onclick = ()=>switchQuestion(curIndex+1);
+    if($("#btnOpenSession")) $("#btnOpenSession").onclick = openSession;
+    if($("#btnCloseSession")) $("#btnCloseSession").onclick = closeSession;
+    if($("#btnReopenSession")) $("#btnReopenSession").onclick = reopenSession;
+    if($("#btnArchiveSession")) $("#btnArchiveSession").onclick = archiveSession;
+    if($("#btnShowQr")) $("#btnShowQr").onclick = ()=>showQrModal(session, sessionId);
+    if($("#btnPresent")) $("#btnPresent").onclick = ()=>window.open(`${APP_BASE_URL}?mode=presentation&sid=${encodeURIComponent(sessionId)}`, "_blank");
+    if($("#btnToggleResults")) $("#btnToggleResults").onclick = toggleResults;
+    renderCurrentQuestion();
+  }
+
+  async function renderCurrentQuestion(){
+    const q = questions[curIndex];
+    $("#curQText").textContent = `Câu ${curIndex+1}: ${q.question}`;
+    let options = [];
+    if(QUESTION_TYPES[q.type].needsOptions){
+      try{ const os = await getDocs(query(collection(db,"questions",q.id,"options"), orderBy("order","asc"))); options = os.docs.map(d=>({id:d.id,...d.data()})); }catch(e){}
+    }
+    if(q.type==="open"){
+      $("#curQBody").innerHTML = `<div id="openList" class="mt-8"><div class="mut">Đang tải câu trả lời…</div></div>`;
+    } else {
+      $("#curQBody").innerHTML = `<p class="mut small">Biểu đồ: ${esc(CHART_LABELS[q.chartType])} · Thời gian: ${q.timeLimit?q.timeLimit+"s":"Không giới hạn"}</p>`;
+    }
+    watchResponses(q, options);
+  }
+  function watchResponses(q, options){
+    clearListeners();
+    const respQ = query(collection(db,"sessions",sessionId,"responses"), where("questionId","==",q.id));
+    track(onSnapshot(respQ, (snap)=>{
+      const docs = snap.docs.map(d=>d.data());
+      liveCounts[q.id] = docs.length;
+      $("#respCount") && ($("#respCount").textContent = docs.length);
+      const totalAll = Object.values(liveCounts).reduce((a,b)=>a+b,0);
+      // Ghi lại dữ liệu tổng hợp AN TOÀN (không chứa câu trả lời cá nhân) vào session
+      // để Presentation View / Student View (đăng nhập ẩn danh) có thể hiển thị
+      // số lượt trả lời & biểu đồ mà KHÔNG cần quyền đọc trực tiếp responses.
+      const agg = (q.type!=="open") ? aggregateForChart(q, options, docs) : null;
+      updateDoc(sessionRef, {
+        responseCount: totalAll, updatedAt: serverTimestamp(),
+        liveAggregate: { questionId: q.id, chartType: q.chartType, agg, respondedCount: docs.length, updatedAt: Timestamp.now() }
+      }).catch(()=>{});
+      if(q.type==="open"){
+        renderOpenList(docs);
+      } else {
+        const canvas = $("#liveChart");
+        if(canvas) renderChart(canvas, q, options, docs);
+      }
+    }, (err)=>{ toast(mapError(err),"err"); }));
+    // vẫn theo dõi thay đổi trạng thái session (đóng/mở từ nơi khác)
+    track(onSnapshot(sessionRef, (snap)=>{ if(snap.exists()){ session = snap.data(); } }));
+  }
+  function renderOpenList(docs){
+    const el = $("#openList"); if(!el) return;
+    const answers = docs.map(d=>d.answer).filter(Boolean);
+    const freq = {};
+    answers.join(" ").toLowerCase().replace(/[.,!?;:"'()]/g,"").split(/\s+/).forEach(w=>{ if(w.length>2) freq[w]=(freq[w]||0)+1; });
+    const top = Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    el.innerHTML = `
+      <p class="small mut">${answers.length} câu trả lời</p>
+      ${top.length?`<div class="flex gap-8 mt-8" style="flex-wrap:wrap;">${top.map(([w,n])=>`<span class="chip">${esc(w)} × ${n}</span>`).join("")}</div>`:""}
+      <div class="mt-14" style="max-height:260px;overflow:auto;">
+        ${answers.length?answers.map(a=>`<div class="card" style="padding:10px 14px;margin-bottom:8px;">${esc(a)}</div>`).join(""):`<p class="mut">Chưa có câu trả lời nào.</p>`}
+      </div>`;
+  }
+
+  async function switchQuestion(idx){
+    if(idx<0 || idx>=questions.length) return;
+    curIndex = idx;
+    try{ await updateDoc(sessionRef, { activeQuestionId: questions[idx].id, activeQuestionStartedAt: serverTimestamp(), updatedAt: serverTimestamp() }); session.activeQuestionId = questions[idx].id; }
+    catch(e){ toast(mapError(e),"err"); }
+    renderShell();
+  }
+  async function openSession(){
+    try{
+      await updateDoc(sessionRef, { status:"open", startedAt: session.startedAt||serverTimestamp(), activeQuestionId: session.activeQuestionId||questions[0].id, activeQuestionStartedAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      session.status="open"; toast("Đã mở phiên. Học viên có thể tham gia ngay bây giờ.","ok"); renderShell();
+    }catch(e){ toast(mapError(e),"err"); }
+  }
+  async function closeSession(){
+    if(!confirm("Đóng bình chọn? Học viên sẽ không thể gửi câu trả lời mới.")) return;
+    try{ await updateDoc(sessionRef, { status:"closed", closedAt: serverTimestamp(), updatedAt: serverTimestamp() }); session.status="closed"; toast("Đã đóng phiên.","ok"); renderShell(); }
+    catch(e){ toast(mapError(e),"err"); }
+  }
+  async function reopenSession(){
+    try{ await updateDoc(sessionRef, { status:"open", closedAt:null, updatedAt: serverTimestamp() }); session.status="open"; toast("Đã mở lại phiên.","ok"); renderShell(); }
+    catch(e){ toast(mapError(e),"err"); }
+  }
+  async function archiveSession(){
+    if(!confirm("Kết thúc và lưu trữ phiên này?")) return;
+    try{ await updateDoc(sessionRef, { status:"archived", updatedAt: serverTimestamp() }); session.status="archived"; toast("Đã lưu trữ phiên.","ok"); window.location.hash=""; STATE.teacherNav="history"; teacherRoute(); }
+    catch(e){ toast(mapError(e),"err"); }
+  }
+  async function toggleResults(){
+    const next = session.showResults==="live" ? "hidden" : "live";
+    try{ await updateDoc(sessionRef, { showResults: next, updatedAt: serverTimestamp() }); session.showResults = next; renderShell(); }
+    catch(e){ toast(mapError(e),"err"); }
+  }
+}
+
+/* ============================================================
+   LỊCH SỬ PHIÊN / BÁO CÁO / EXPORT
+   ============================================================ */
+async function loadTeacherClassMap(){
+  const snap = await getDocs(query(collection(db,"classes"), where("ownerId","==",STATE.user.uid)));
+  const m = {}; snap.docs.forEach(d=>m[d.id]=d.data()); return m;
+}
+async function teacherHistory(c){
+  c.innerHTML = `<h2>Lịch sử phiên</h2>
+    <div class="card"><div class="flex-between mt-8"><input type="text" id="hSearch" placeholder="Tìm theo tên hoạt động…" style="max-width:280px;">
+    <select id="hFilter"><option value="">Tất cả trạng thái</option><option value="draft">Nháp</option><option value="ready">Sẵn sàng</option><option value="open">Đang mở</option><option value="closed">Đã đóng</option><option value="archived">Lưu trữ</option></select></div>
+    <div class="table-wrap mt-14" id="hTable"><div class="center-screen" style="min-height:120px;"><span class="spinner"></span></div></div></div>`;
+  try{
+    const classMap = await loadTeacherClassMap();
+    const snap = await getDocs(query(collection(db,"sessions"), where("ownerId","==",STATE.user.uid), orderBy("createdAt","desc"), limit(300)));
+    const all = snap.docs.map(d=>({id:d.id,...d.data()}));
+    const render = ()=>{
+      const kw = ($("#hSearch").value||"").toLowerCase().trim(); const fl = $("#hFilter").value;
+      const list = all.filter(s=> (!fl||s.status===fl) && (!kw||s.title.toLowerCase().includes(kw)) );
+      if(list.length===0){ $("#hTable").innerHTML = `<div class="empty-state"><div class="ic">🕓</div>Không có phiên phù hợp.</div>`; return; }
+      $("#hTable").innerHTML = `<table><thead><tr><th>Hoạt động</th><th>Lớp</th><th>Ngày</th><th>Số câu hỏi</th><th>Lượt trả lời</th><th>Trạng thái</th><th></th></tr></thead><tbody>
+        ${list.map(s=>`<tr><td>${esc(s.title)}</td><td>${esc(classMap[s.classId]?.name||"—")}</td><td>${fmtDateShort(s.createdAt)}</td><td>${s.questionCount||0}</td><td>${s.responseCount||0}</td><td>${sessionStatusBadge(s.status)}</td>
+        <td class="flex gap-8"><button class="btn btn-sm btn-outline" data-r="${s.id}">MỞ LẠI KẾT QUẢ</button>${s.status!=="archived"?`<button class="btn btn-sm btn-ghost" data-live="${s.id}">ĐIỀU KHIỂN</button>`:""}</td></tr>`).join("")}
+      </tbody></table>`;
+      $$("[data-r]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/report/"+encodeURIComponent(b.dataset.r); });
+      $$("[data-live]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/live/"+encodeURIComponent(b.dataset.live); });
+    };
+    $("#hSearch").addEventListener("input", debounce(render,200)); $("#hFilter").addEventListener("change", render);
+    render();
+  }catch(e){ $("#hTable").innerHTML = errorBlock(e, ()=>teacherHistory(c)); }
+}
+async function teacherReportsList(c){
+  c.innerHTML = `<h2>Báo cáo</h2><p class="mut">Chọn một phiên để xem báo cáo chi tiết, in, hoặc xuất dữ liệu.</p>
+    <div class="table-wrap card" id="repTable"><div class="center-screen" style="min-height:120px;"><span class="spinner"></span></div></div>`;
+  try{
+    const classMap = await loadTeacherClassMap();
+    const snap = await getDocs(query(collection(db,"sessions"), where("ownerId","==",STATE.user.uid), orderBy("createdAt","desc"), limit(300)));
+    if(snap.empty){ $("#repTable").innerHTML = `<div class="empty-state"><div class="ic">📄</div>Chưa có phiên nào để tạo báo cáo.</div>`; return; }
+    $("#repTable").innerHTML = `<table><thead><tr><th>Hoạt động</th><th>Lớp</th><th>Ngày</th><th>Trạng thái</th><th></th></tr></thead><tbody>
+      ${snap.docs.map(d=>{ const s=d.data(); return `<tr><td>${esc(s.title)}</td><td>${esc(classMap[s.classId]?.name||"—")}</td><td>${fmtDateShort(s.createdAt)}</td><td>${sessionStatusBadge(s.status)}</td>
+        <td><button class="btn btn-sm btn-outline" data-r="${d.id}">XEM BÁO CÁO</button></td></tr>`; }).join("")}
+    </tbody></table>`;
+    $$("[data-r]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/report/"+encodeURIComponent(b.dataset.r); });
+  }catch(e){ $("#repTable").innerHTML = errorBlock(e, ()=>teacherReportsList(c)); }
+}
+
+async function teacherReportView(c, sessionId){
+  c.innerHTML = `<div class="center-screen" style="min-height:200px;"><span class="spinner"></span></div>`;
+  try{
+    const sSnap = await getDoc(doc(db,"sessions",sessionId));
+    if(!sSnap.exists() || sSnap.data().ownerId!==STATE.user.uid){ c.innerHTML = `<div class="empty-state"><div class="ic">⛔</div>Không tìm thấy hoặc không có quyền xem báo cáo này.</div>`; return; }
+    const session = sSnap.data();
+    const classSnap = session.classId ? await getDoc(doc(db,"classes",session.classId)) : null;
+    const className = classSnap && classSnap.exists() ? classSnap.data().name : "—";
+    const qSnap = await getDocs(query(collection(db,"questions"), where("sessionId","==",sessionId), orderBy("order","asc")));
+    const questions = qSnap.docs.map(d=>({id:d.id,...d.data()}));
+    const respSnap = await getDocs(collection(db,"sessions",sessionId,"responses"));
+    const allResponses = respSnap.docs.map(d=>d.data());
+    const questionBlocks = await Promise.all(questions.map(async (q,i)=>{
+      let options = [];
+      if(QUESTION_TYPES[q.type].needsOptions){ const os = await getDocs(query(collection(db,"questions",q.id,"options"), orderBy("order","asc"))); options = os.docs.map(d=>({id:d.id,...d.data()})); }
+      const docs = allResponses.filter(r=>r.questionId===q.id);
+      return { q, options, docs, idx:i };
+    }));
+    const participantSet = new Set(allResponses.map(r=>r.participantId));
+    c.innerHTML = `
+    <div class="flex-between no-print"><button class="btn btn-ghost" id="btnBackRep">← Quay lại</button>
+      <div class="flex gap-8">
+        <button class="btn btn-outline" id="btnPrint">IN / LƯU PDF</button>
+        <button class="btn btn-outline" id="btnCsv">XUẤT CSV</button>
+        <button class="btn btn-outline" id="btnJson">XUẤT JSON</button>
+      </div>
+    </div>
+    <div class="card mt-14">
+      <h2 style="margin-bottom:0;">HCMA2 - TEACHING</h2>
+      <h3 class="mut" style="margin-top:0;">BÁO CÁO PHIÊN TƯƠNG TÁC</h3>
+      <p><b>Giảng viên:</b> ${esc(STATE.profile.displayName||STATE.profile.email)}</p>
+      <p><b>Lớp:</b> ${esc(className)}</p>
+      <p><b>Ngày:</b> ${fmtDate(session.createdAt)}</p>
+      <p><b>Hoạt động:</b> ${esc(session.title)}</p>
+      <p><b>Tỷ lệ tham gia:</b> ${participantSet.size} lượt tham gia duy nhất · ${allResponses.length} lượt trả lời</p>
+    </div>
+    ${questionBlocks.map(b=>`
+      <div class="card">
+        <h3>Câu ${b.idx+1}: ${esc(b.q.question)}</h3>
+        <p class="small mut">${b.docs.length} lượt trả lời · ${esc(QUESTION_TYPES[b.q.type].label)}</p>
+        ${b.q.chartType==="list" || b.q.type==="open" ?
+          `<div>${b.docs.length? b.docs.map(d=>`<div class="card" style="padding:8px 12px;margin-bottom:6px;">${esc(d.answer||"")}</div>`).join(""):"<p class='mut'>Chưa có câu trả lời.</p>"}</div>` :
+          `<canvas id="repChart${b.idx}" height="200"></canvas>`}
+      </div>`).join("")}
+    `;
+    $("#btnBackRep").onclick = ()=>{ window.history.length>1 ? window.location.hash="" : (window.location.hash=""); STATE.teacherNav="reports"; teacherRoute(); };
+    $("#btnPrint").onclick = ()=>window.print();
+    $("#btnCsv").onclick = ()=>exportSessionCSV(session, className, questionBlocks);
+    $("#btnJson").onclick = ()=>exportSessionJSON(session, className, questionBlocks);
+    questionBlocks.forEach(b=>{
+      if(b.q.chartType!=="list" && b.q.type!=="open"){
+        const canvas = document.getElementById("repChart"+b.idx);
+        if(canvas) renderChart(canvas, b.q, b.options, b.docs);
+      }
+    });
+  }catch(e){ c.innerHTML = errorBlock(e, ()=>teacherReportView(c,sessionId)); }
+}
+function downloadBlob(filename, content, mime){
+  const blob = new Blob([content], {type: mime});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = filename; a.click();
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+function csvEscape(v){ const s = String(v==null?"":v); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; }
+function exportSessionCSV(session, className, questionBlocks){
+  const rows = [["Cau hoi","Loai cau hoi","Ma nguoi tham gia","Cau tra loi","Thoi gian gui"]];
+  questionBlocks.forEach(b=>{
+    b.docs.forEach(d=>{
+      let ans = d.answer;
+      if(b.options && b.options.length && d.selectedOptions){
+        ans = d.selectedOptions.map(oid=>{ const o=b.options.find(x=>x.id===oid); return o?o.text:oid; }).join(" | ");
+      }
+      rows.push([b.q.question, b.q.type, (d.participantId||"").slice(0,8), ans, d.submittedAt&&d.submittedAt.toDate?d.submittedAt.toDate().toISOString():""]);
+    });
+  });
+  const csv = "﻿" + rows.map(r=>r.map(csvEscape).join(",")).join("\n");
+  downloadBlob(`bao-cao-${session.shortCode||"session"}.csv`, csv, "text/csv;charset=utf-8;");
+}
+function exportSessionJSON(session, className, questionBlocks){
+  const out = {
+    hoatDong: session.title, lop: className, ngayTao: session.createdAt&&session.createdAt.toDate?session.createdAt.toDate().toISOString():null,
+    cauHoi: questionBlocks.map(b=>({
+      cauHoi: b.q.question, loai: b.q.type,
+      phuongAn: b.options.map(o=>o.text),
+      cauTraLoi: b.docs.map(d=>({participantId:d.participantId, answer:d.answer, selectedOptions:d.selectedOptions, submittedAt: d.submittedAt&&d.submittedAt.toDate?d.submittedAt.toDate().toISOString():null}))
+    }))
+  };
+  downloadBlob(`bao-cao-${session.shortCode||"session"}.json`, JSON.stringify(out,null,2), "application/json");
+}
+
+function teacherAccount(c){
+  const p = STATE.profile;
+  c.innerHTML = `<h2>Tài khoản</h2>
+  <div class="card narrow">
+    <div class="field"><label>Họ và tên</label><input type="text" id="accName" value="${esc(p.displayName||"")}"></div>
+    <div class="field"><label>Email</label><input type="text" value="${esc(p.email)}" disabled></div>
+    <p><b>Trạng thái:</b> ${statusBadge(p.status)}</p>
+    <p><b>Ngày cấp phép:</b> ${fmtDate(p.approvedAt)}</p>
+    <button class="btn mt-8" id="btnSaveAcc">Lưu thay đổi</button>
+    <button class="btn btn-outline mt-8" id="btnResetPw">Gửi email đặt lại mật khẩu</button>
+    <button class="btn btn-ghost mt-8" id="btnLogoutAcc">Đăng xuất</button>
+  </div>`;
+  $("#btnSaveAcc").onclick = async ()=>{
+    try{ await updateDoc(doc(db,"users",STATE.user.uid), { displayName: $("#accName").value.trim(), updatedAt: serverTimestamp() }); STATE.profile.displayName = $("#accName").value.trim(); toast("Đã lưu thay đổi.","ok"); }
+    catch(e){ toast(mapError(e),"err"); }
+  };
+  $("#btnResetPw").onclick = ()=>sendResetLink(p.email);
+  $("#btnLogoutAcc").onclick = ()=>signOut(auth);
+}
+
+/* ============================================================
+   STUDENT VIEW (mobile-first, không cần đăng nhập)
+   ============================================================ */
+function ensureAnonAuth(){
+  // QUAN TRỌNG (FIX 7): dùng `publicAuth` (App Firebase thứ hai, độc lập) — KHÔNG BAO GIỜ
+  // dùng `auth` (app chính của Giảng viên/Admin) ở đây. Nếu dùng chung `auth`, khi Học viên/
+  // Trình chiếu mở trong cùng trình duyệt đang có Giảng viên đăng nhập, `auth.currentUser`
+  // có thể chính là giảng viên đó — participantId của học viên sẽ bị trùng với uid giảng viên
+  // (rất nguy hiểm). Dùng `publicAuth` tách biệt đảm bảo học viên luôn có một uid ẩn danh
+  // riêng, không đụng chạm đến phiên đăng nhập giảng viên ở bất kỳ tab nào.
+  return new Promise((resolve, reject)=>{
+    const unsub = onAuthStateChanged(publicAuth, (user)=>{
+      unsub();
+      if(user){ resolve(user); return; }
+      signInAnonymously(publicAuth).then(cred=>resolve(cred.user)).catch(reject);
+    }, reject);
+  });
+}
+function studentShellHtml(){
+  return `<div class="student-shell">
+    <div class="student-top"><div class="logo">HCMA2 - TEACHING</div></div>
+    <div class="student-card" id="studentBody"><div class="center-screen" style="min-height:200px;"><span class="spinner"></span></div></div>
+  </div>`;
+}
+function studentBodyError(msg, retry){
+  const el = $("#studentBody"); if(!el) return;
+  el.innerHTML = `<div class="empty-state"><div class="ic">⚠️</div><p>${esc(msg)}</p>${retry?`<button class="btn btn-outline" id="stRetry">THỬ LẠI</button>`:""}</div>`;
+  if(retry && $("#stRetry")) $("#stRetry").onclick = retry;
+}
+function renderStudentEntry(){
+  appRoot().innerHTML = studentShellHtml();
+  window.addEventListener("online", ()=>toast("Đã kết nối lại mạng.","ok"));
+  window.addEventListener("offline", ()=>toast("Mất kết nối mạng. Đang thử kết nối lại…","warn"));
+  studentMainFlow();
+}
+async function studentMainFlow(){
+  try{
+    await ensureAnonAuth();
+    const q = getQueryParams();
+    const sid = q.get("sid"), token = q.get("t"), joinParam = q.get("join");
+    // FIX 8: liên kết QR chuẩn dùng ?t=TOKEN (KHÔNG chứa sessionId trực tiếp) — phải tra cứu
+    // qua sessionTokens/{token} trước khi biết sessionId. Tham số ?sid= chỉ còn giữ để tương
+    // thích ngược (không còn được tạo ra bởi hệ thống nữa kể từ bản FIX này).
+    if(token) return resolveAccessToken(token);
+    if(sid) return enterStudentSession(sid);
+    if(joinParam) return resolveShortCode(joinParam.toUpperCase());
+    return showCodeEntryForm();
+  }catch(e){ studentBodyError(mapError(e), studentMainFlow); }
+}
+async function resolveAccessToken(token){
+  $("#studentBody").innerHTML = `<div class="center-screen" style="min-height:200px;"><span class="spinner"></span></div>`;
+  try{
+    const snap = await getDoc(doc(publicDb,"sessionTokens",token));
+    if(!snap.exists()){ studentBodyError("Liên kết tham gia không hợp lệ hoặc đã hết hạn. Vui lòng dùng mã tham gia.", showCodeEntryForm); return; }
+    return enterStudentSession(snap.data().sessionId);
+  }catch(e){ studentBodyError(mapError(e), ()=>resolveAccessToken(token)); }
+}
+function showCodeEntryForm(){
+  $("#studentBody").innerHTML = `
+    <h2 style="text-align:center;">Tham gia hoạt động</h2>
+    <p class="mut" style="text-align:center;">Nhập mã tham gia do giảng viên cung cấp</p>
+    <form id="codeForm">
+      <div class="field"><input type="text" id="joinCodeInput" placeholder="VD: ABC-729" autocomplete="off"
+        style="text-align:center;font-size:20px;letter-spacing:2px;font-weight:700;text-transform:uppercase;" maxlength="8"></div>
+      <div id="codeErr" class="error-text hidden" style="text-align:center;"></div>
+      <button type="submit" class="btn btn-block btn-lg">THAM GIA</button>
+    </form>`;
+  $("#codeForm").onsubmit = (e)=>{
+    e.preventDefault();
+    const v = $("#joinCodeInput").value.trim().toUpperCase();
+    if(!v){ $("#codeErr").textContent="Vui lòng nhập mã tham gia."; $("#codeErr").classList.remove("hidden"); return; }
+    resolveShortCode(v);
+  };
+}
+async function resolveShortCode(code){
+  $("#studentBody").innerHTML = `<div class="center-screen" style="min-height:200px;"><span class="spinner"></span></div>`;
+  try{
+    const snap = await getDoc(doc(publicDb,"joinCodes",code));
+    if(!snap.exists()){ studentBodyError("Không tìm thấy mã tham gia. Vui lòng kiểm tra lại.", showCodeEntryForm); return; }
+    return enterStudentSession(snap.data().sessionId);
+  }catch(e){ studentBodyError(mapError(e), ()=>resolveShortCode(code)); }
+}
+async function enterStudentSession(sessionId){
+  $("#studentBody").innerHTML = `<div class="center-screen" style="min-height:200px;"><span class="spinner"></span></div>`;
+  let snap;
+  try{ snap = await getDoc(doc(publicDb,"sessions",sessionId)); }
+  catch(e){
+    if((e.code||"")==="permission-denied"){ studentBodyError("Phiên chưa mở hoặc không tồn tại. Vui lòng thử lại sau.", showCodeEntryForm); }
+    else studentBodyError(mapError(e), ()=>enterStudentSession(sessionId));
+    return;
+  }
+  if(!snap.exists()){ studentBodyError("Không tìm thấy phiên tương tác.", showCodeEntryForm); return; }
+  STATE.student.sessionId = sessionId;
+  watchStudentSession(sessionId);
+}
+let __studentLastQid = null, __studentTimerHandle = null;
+function watchStudentSession(sessionId){
+  clearListeners();
+  __studentLastQid = null;
+  const sref = doc(publicDb,"sessions",sessionId);
+  track(onSnapshot(sref, (snap)=>{
+    if(!snap.exists()){ studentBodyError("Phiên tương tác đã bị xóa.", showCodeEntryForm); return; }
+    const session = snap.data();
+    STATE.student.session = session;
+    if(session.status==="closed" || session.status==="archived"){ renderStudentEnded(session); return; }
+    if(session.status!=="open"){ renderStudentWaiting("Phiên chưa được mở. Vui lòng chờ giảng viên bắt đầu."); return; }
+    if(!session.activeQuestionId){ renderStudentWaiting("Giảng viên chưa bắt đầu câu hỏi nào."); return; }
+    if(session.activeQuestionId !== __studentLastQid){
+      __studentLastQid = session.activeQuestionId;
+      loadStudentQuestion(sessionId, session);
+    } else {
+      updateStudentResultBadge(session);
+    }
+  }, (err)=>{ studentBodyError(mapError(err), ()=>watchStudentSession(sessionId)); }));
+}
+function renderStudentWaiting(msg){
+  if(__studentTimerHandle) clearInterval(__studentTimerHandle);
+  $("#studentBody").innerHTML = `<div class="center-screen" style="min-height:220px;">
+    <div style="font-size:40px;">⏳</div><h3>${esc(msg)}</h3>
+    <p class="mut small">Màn hình sẽ tự động cập nhật khi giảng viên bắt đầu.</p></div>`;
+}
+function renderStudentEnded(session){
+  if(__studentTimerHandle) clearInterval(__studentTimerHandle);
+  $("#studentBody").innerHTML = `<div class="center-screen" style="min-height:220px;">
+    <div style="font-size:40px;">🏁</div><h2>PHIÊN ĐÃ KẾT THÚC</h2>
+    <p class="mut">Cảm ơn bạn đã tham gia "${esc(session.title)}".</p></div>`;
+}
+async function loadStudentQuestion(sessionId, session){
+  if(__studentTimerHandle) clearInterval(__studentTimerHandle);
+  $("#studentBody").innerHTML = `<div class="center-screen" style="min-height:200px;"><span class="spinner"></span></div>`;
+  try{
+    const qSnap = await getDoc(doc(publicDb,"questions",session.activeQuestionId));
+    if(!qSnap.exists()){ studentBodyError("Không tìm thấy câu hỏi hiện tại."); return; }
+    const question = { id: qSnap.id, ...qSnap.data() };
+    let options = [];
+    if(QUESTION_TYPES[question.type].needsOptions){
+      const os = await getDocs(query(collection(publicDb,"questions",question.id,"options"), orderBy("order","asc")));
+      options = os.docs.map(d=>({id:d.id, ...d.data()}));
+    }
+    let existing = null;
+    try{ const rs = await getDoc(doc(publicDb,"sessions",sessionId,"responses", question.id+"_"+publicAuth.currentUser.uid)); if(rs.exists()) existing = rs.data(); }catch(e){}
+    STATE.student.question = question; STATE.student.options = options; STATE.student.myResponse = existing;
+    renderStudentQuestion(sessionId, session, question, options, existing);
+  }catch(e){ studentBodyError(mapError(e), ()=>loadStudentQuestion(sessionId, session)); }
+}
+function renderStudentQuestion(sessionId, session, question, options, existing){
+  const alreadyLocked = existing && !question.allowChangeAnswer;
+  const header = `
+    <div class="flex-between">
+      ${session.className?`<span class="chip">${esc(session.className)}</span>`:"<span></span>"}
+      <span id="timerPill"></span>
+    </div>
+    <h3 class="mt-8">${esc(question.question)}</h3>
+    ${question.description?`<p class="mut small">${esc(question.description)}</p>`:""}`;
+  if(alreadyLocked){
+    $("#studentBody").innerHTML = header + `
+      <div class="center-screen" style="min-height:140px;">
+        <div style="font-size:34px;">✓</div><h3>ĐÃ GHI NHẬN</h3>
+        <p class="mut">Bạn đã trả lời câu hỏi này.</p>
+        <div id="resultBadge"></div>
+      </div>`;
+    setupTimer(session, question, null);
+    updateStudentResultBadge(session);
+    return;
+  }
+  let bodyHtml = `<div id="answerArea"></div><div id="submitErr" class="error-text hidden mt-8"></div>
+    <button class="btn btn-block btn-lg mt-14" id="btnSubmitAns">GỬI CÂU TRẢ LỜI</button>`;
+  $("#studentBody").innerHTML = header + bodyHtml;
+  const answerState = { selected: existing?(existing.selectedOptions||[]):[], scaleVal: existing?existing.answer:null, openText: existing?existing.answer:"", rankOrder: existing&&existing.selectedOptions?existing.selectedOptions.slice():options.map(o=>o.id) };
+  renderAnswerInput(question, options, answerState);
+  setupTimer(session, question, ()=>{
+    // hết giờ
+    $("#answerArea").innerHTML = "";
+    $("#btnSubmitAns").classList.add("hidden");
+    $("#studentBody").insertAdjacentHTML("beforeend", `<div class="center-screen" style="min-height:100px;"><h3>ĐÃ HẾT THỜI GIAN</h3></div>`);
+  });
+  $("#btnSubmitAns").onclick = async ()=>{
+    const err = validateAnswer(question, answerState);
+    if(err){ $("#submitErr").textContent = err; $("#submitErr").classList.remove("hidden"); return; }
+    const btn = $("#btnSubmitAns"); btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px;"></span> Đang gửi…';
+    try{
+      const payload = buildAnswerPayload(question, answerState);
+      await setDoc(doc(publicDb,"sessions",sessionId,"responses", question.id+"_"+publicAuth.currentUser.uid), {
+        sessionId, questionId: question.id, participantId: publicAuth.currentUser.uid, submittedAt: serverTimestamp(), ...payload
+      });
+      $("#studentBody").innerHTML = header + `
+        <div class="center-screen" style="min-height:140px;">
+          <div style="font-size:34px;">✓</div><h3>ĐÃ GHI NHẬN</h3>
+          <p class="mut">Câu trả lời của bạn đã được ghi nhận.</p>
+          <div id="resultBadge"></div>
+        </div>`;
+      updateStudentResultBadge(session);
+    }catch(err){
+      let msg = mapError(err);
+      if((err.code||"")==="permission-denied") msg = "Bạn đã trả lời câu hỏi này hoặc phiên đã đóng.";
+      $("#submitErr").textContent = msg; $("#submitErr").classList.remove("hidden");
+      btn.disabled = false; btn.textContent = "GỬI CÂU TRẢ LỜI";
+    }
+  };
+}
+function setupTimer(session, question, onExpire){
+  const pill = ()=>$("#timerPill");
+  if(!question.timeLimit || !session.activeQuestionStartedAt){ if(pill()) pill().innerHTML=""; return; }
+  const deadline = session.activeQuestionStartedAt.toDate().getTime() + question.timeLimit*1000;
+  function tick(){
+    const remain = Math.max(0, Math.round((deadline - Date.now())/1000));
+    if(pill()) pill().innerHTML = `<span class="timer-pill">⏱ ${remain}s</span>`;
+    if(remain<=0){ clearInterval(__studentTimerHandle); if(onExpire) onExpire(); }
+  }
+  tick();
+  __studentTimerHandle = setInterval(tick, 1000);
+}
+function updateStudentResultBadge(session){
+  const el = $("#resultBadge"); if(!el) return;
+  const agg = session.liveAggregate;
+  if(!agg || agg.questionId !== STATE.student.question?.id){ el.innerHTML = ""; return; }
+  if(session.showResults === "live" && agg.agg){
+    el.innerHTML = `<canvas id="stResultChart" height="180" style="max-width:340px;"></canvas>`;
+    const canvas = $("#stResultChart");
+    if(canvas){
+      try{
+        const key = "stResultChart";
+        if(__chartInstances[key]){ __chartInstances[key].destroy(); delete __chartInstances[key]; }
+        const chartType = agg.chartType;
+        let type="bar", opts={plugins:{legend:{display:chartType==="pie"||chartType==="donut"||chartType==="stacked"}}};
+        if(chartType==="hbar"){ opts.indexAxis="y"; } else if(chartType==="pie"){ type="pie"; } else if(chartType==="donut"){ type="doughnut"; }
+        else if(chartType==="stacked"){ opts.indexAxis="y"; opts.scales={x:{stacked:true,max:100},y:{stacked:true}}; }
+        __chartInstances[key] = new Chart(canvas, { type, data: agg.agg, options: opts });
+      }catch(e){ console.warn("Không thể vẽ biểu đồ kết quả:", e); if(session.showResponderCount!==false){ el.insertAdjacentHTML("beforeend", `<p class="mut">${agg.respondedCount} người đã trả lời</p>`); } }
+    }
+  } else {
+    el.innerHTML = session.showResponderCount!==false ? `<p class="mut">${agg.respondedCount} người đã trả lời</p>` : "";
+  }
+}
+function renderAnswerInput(question, options, state){
+  const area = $("#answerArea"); if(!area) return;
+  const type = question.type;
+  if(type==="single" || type==="truefalse" || type==="likert"){
+    area.innerHTML = options.map(o=>`<button type="button" class="opt-btn ${state.selected[0]===o.id?'selected':''}" data-opt="${o.id}"><span class="mark">${state.selected[0]===o.id?'✓':''}</span>${esc(o.text)}</button>`).join("");
+    $$("#answerArea .opt-btn").forEach(b=>b.onclick=()=>{ state.selected=[b.dataset.opt]; renderAnswerInput(question, options, state); });
+  } else if(type==="multiple"){
+    area.innerHTML = options.map(o=>`<button type="button" class="opt-btn ${state.selected.includes(o.id)?'selected':''}" data-opt="${o.id}"><span class="mark">${state.selected.includes(o.id)?'✓':''}</span>${esc(o.text)}</button>`).join("");
+    $$("#answerArea .opt-btn").forEach(b=>b.onclick=()=>{
+      const id=b.dataset.opt; const i=state.selected.indexOf(id);
+      if(i>=0) state.selected.splice(i,1); else state.selected.push(id);
+      renderAnswerInput(question, options, state);
+    });
+  } else if(type==="scale"){
+    const vals = []; for(let v=question.scaleMin; v<=question.scaleMax; v++) vals.push(v);
+    area.innerHTML = `<div class="flex gap-8" style="flex-wrap:wrap;justify-content:center;">
+      ${vals.map(v=>`<button type="button" class="opt-btn" style="width:56px;justify-content:center;padding:12px 0;${state.scaleVal===v?'border-color:var(--brand);background:var(--brand-light);':''}" data-v="${v}">${v}</button>`).join("")}
+    </div>`;
+    $$("#answerArea [data-v]").forEach(b=>b.onclick=()=>{ state.scaleVal = Number(b.dataset.v); renderAnswerInput(question, options, state); });
+  } else if(type==="ranking"){
+    area.innerHTML = `<p class="hint">Dùng nút ▲▼ để sắp xếp thứ tự ưu tiên (từ cao xuống thấp).</p>` + state.rankOrder.map((id,idx)=>{
+      const o = options.find(x=>x.id===id);
+      return `<div class="opt-btn" style="cursor:default;"><span class="mark">${idx+1}</span><span style="flex:1;">${esc(o?o.text:"")}</span>
+        <button type="button" class="btn btn-sm btn-ghost" data-up="${idx}" ${idx===0?"disabled":""}>▲</button>
+        <button type="button" class="btn btn-sm btn-ghost" data-down="${idx}" ${idx===state.rankOrder.length-1?"disabled":""}>▼</button></div>`;
+    }).join("");
+    $$("#answerArea [data-up]").forEach(b=>b.onclick=()=>{ const i=Number(b.dataset.up); [state.rankOrder[i-1],state.rankOrder[i]]=[state.rankOrder[i],state.rankOrder[i-1]]; renderAnswerInput(question,options,state); });
+    $$("#answerArea [data-down]").forEach(b=>b.onclick=()=>{ const i=Number(b.dataset.down); [state.rankOrder[i+1],state.rankOrder[i]]=[state.rankOrder[i],state.rankOrder[i+1]]; renderAnswerInput(question,options,state); });
+  } else if(type==="open"){
+    area.innerHTML = `<textarea id="openAnswerInput" placeholder="Nhập câu trả lời của bạn…" style="min-height:120px;">${esc(state.openText||"")}</textarea>`;
+    $("#openAnswerInput").oninput = (e)=>{ state.openText = e.target.value; };
+  }
+}
+function validateAnswer(question, state){
+  const type = question.type;
+  if(type==="single"||type==="truefalse"||type==="likert"){ if(state.selected.length!==1) return "Vui lòng chọn một phương án."; }
+  else if(type==="multiple"){ if(state.selected.length<1) return "Vui lòng chọn ít nhất một phương án."; }
+  else if(type==="scale"){ if(state.scaleVal==null || state.scaleVal<question.scaleMin || state.scaleVal>question.scaleMax) return "Vui lòng chọn một giá trị trên thang điểm."; }
+  else if(type==="ranking"){ if(!state.rankOrder || state.rankOrder.length<2) return "Danh sách xếp hạng không hợp lệ."; }
+  else if(type==="open"){ if(!state.openText || !state.openText.trim()) return "Vui lòng nhập câu trả lời."; }
+  return null;
+}
+function buildAnswerPayload(question, state){
+  const type = question.type;
+  if(type==="single"||type==="truefalse"||type==="likert") return { selectedOptions: state.selected, answer: null };
+  if(type==="multiple") return { selectedOptions: state.selected, answer: null };
+  if(type==="scale") return { selectedOptions: [], answer: state.scaleVal };
+  if(type==="ranking") return { selectedOptions: state.rankOrder, answer: null };
+  if(type==="open") return { selectedOptions: [], answer: state.openText.trim() };
+  return { selectedOptions: [], answer: null };
+}
+
+/* ============================================================
+   PRESENTATION MODE (màn hình chiếu, 16:9, fullscreen)
+   ============================================================ */
+function renderPresentationEntry(){
+  appRoot().innerHTML = `<div class="pres-shell" id="presRoot"><span class="spinner"></span></div>`;
+  presMainFlow();
+}
+async function presMainFlow(){
+  try{ await ensureAnonAuth(); }catch(e){ $("#presRoot").innerHTML = `<div class="qtext">⚠️ ${esc(mapError(e))}</div>`; return; }
+  const q = getQueryParams(); const sid = q.get("sid");
+  if(!sid){ $("#presRoot").innerHTML = `<div class="qtext">⚠️ Thiếu mã phiên trình chiếu.</div>`; return; }
+  watchPresentation(sid);
+}
+function watchPresentation(sid){
+  clearListeners();
+  let lastQid = null, questionCache = null, optionsCache = [];
+  const sref = doc(publicDb,"sessions",sid);
+  track(onSnapshot(sref, async (snap)=>{
+    if(!snap.exists()){ $("#presRoot").innerHTML = `<div class="qtext">⚠️ Không tìm thấy phiên.</div>`; return; }
+    const session = snap.data();
+    if(session.status==="draft" || session.status==="ready"){ renderPresWaiting(session, sid); return; }
+    if(session.status==="closed" || session.status==="archived"){ renderPresEnded(session); return; }
+    if(!session.activeQuestionId){ renderPresWaiting(session, sid); return; }
+    if(session.activeQuestionId !== lastQid){
+      lastQid = session.activeQuestionId;
+      try{
+        const qSnap = await getDoc(doc(publicDb,"questions",session.activeQuestionId));
+        questionCache = qSnap.exists() ? { id:qSnap.id, ...qSnap.data() } : null;
+        optionsCache = [];
+        if(questionCache && QUESTION_TYPES[questionCache.type].needsOptions){
+          const os = await getDocs(query(collection(publicDb,"questions",questionCache.id,"options"), orderBy("order","asc")));
+          optionsCache = os.docs.map(d=>({id:d.id,...d.data()}));
+        }
+      }catch(e){ questionCache = null; }
+    }
+    renderPresQuestion(session, sid, questionCache, optionsCache);
+  }, (err)=>{
+    if((err.code||"")==="permission-denied"){
+      $("#presRoot").innerHTML = `<div class="qtext">Phiên trình chiếu chưa sẵn sàng.</div><div class="meta">Vui lòng mở phiên từ Bảng điều khiển giảng viên trước.</div>`;
+    } else { $("#presRoot").innerHTML = `<div class="qtext">⚠️ ${esc(mapError(err))}</div>`; }
+  }));
+}
+function presTopBar(){
+  return `<button class="btn btn-sm btn-outline no-print" id="btnPresFs" style="position:fixed;top:14px;right:14px;z-index:10;">⛶ Toàn màn hình</button>`;
+}
+function wirePresFs(){
+  const b = $("#btnPresFs"); if(!b) return;
+  b.onclick = ()=>{ if(!document.fullscreenElement){ document.documentElement.requestFullscreen?.(); } else { document.exitFullscreen?.(); } };
+}
+function renderPresWaiting(session, sid){
+  $("#presRoot").innerHTML = `${presTopBar()}
+    <div class="meta">${esc(session.className||"")} · ${esc(session.title)}</div>
+    <div class="qtext">Đang chờ giảng viên bắt đầu…</div>
+    <div class="pres-qr-wrap"><div id="presQr"></div><p style="font-weight:800;font-size:20px;margin-top:8px;">${esc(session.shortCode||"")}</p></div>`;
+  wirePresFs();
+  try{ new QRCode(document.getElementById("presQr"), { text: studentJoinUrl(session, sid), width:180, height:180 }); }catch(e){}
+}
+function renderPresEnded(session){
+  $("#presRoot").innerHTML = `${presTopBar()}<div class="qtext">PHIÊN ĐÃ KẾT THÚC</div><div class="meta">${esc(session.title)}</div>`;
+  wirePresFs();
+}
+function renderPresQuestion(session, sid, question, options){
+  if(!question){ $("#presRoot").innerHTML = `${presTopBar()}<div class="qtext">Đang tải câu hỏi…</div>`; wirePresFs(); return; }
+  const agg = session.liveAggregate && session.liveAggregate.questionId===question.id ? session.liveAggregate : null;
+  const count = agg ? agg.respondedCount : 0;
+  const showChart = session.showResults==="live" && agg && agg.agg && question.chartType!=="list";
+  $("#presRoot").innerHTML = `${presTopBar()}
+    <div class="meta">${esc(session.className||"")} · ${esc(session.title)}</div>
+    <div class="qtext">${esc(question.question)}</div>
+    ${session.showResponderCount!==false?`<div class="mut" style="color:#fff;opacity:.85;margin-bottom:16px;">${count} người đã trả lời</div>`:`<div style="margin-bottom:16px;"></div>`}
+    <div class="pres-grid">
+      ${showChart?`<div class="pres-chart-wrap"><canvas id="presChart" height="260"></canvas></div>`:""}
+      <div class="pres-qr-wrap"><div id="presQr"></div><p style="font-weight:800;font-size:20px;margin-top:8px;">${esc(session.shortCode||"")}</p></div>
+    </div>`;
+  wirePresFs();
+  try{ new QRCode(document.getElementById("presQr"), { text: studentJoinUrl(session, sid), width:160, height:160 }); }catch(e){}
+  if(showChart){
+    const canvas = $("#presChart");
+    if(canvas){
+      try{
+        const key="presChart";
+        if(__chartInstances[key]){ __chartInstances[key].destroy(); delete __chartInstances[key]; }
+        const chartType = agg.chartType;
+        let type="bar", opts={ plugins:{ legend:{ display:chartType==="pie"||chartType==="donut"||chartType==="stacked", labels:{color:"#0b2530"} } } };
+        if(chartType==="hbar"){ opts.indexAxis="y"; } else if(chartType==="pie"){ type="pie"; } else if(chartType==="donut"){ type="doughnut"; }
+        else if(chartType==="stacked"){ opts.indexAxis="y"; opts.scales={x:{stacked:true,max:100},y:{stacked:true}}; }
+        __chartInstances[key] = new Chart(canvas, { type, data: agg.agg, options: opts });
+      }catch(e){ console.warn("Không thể vẽ biểu đồ trình chiếu:", e); }
+    }
+  }
+}
+
+/* ============================================================
+   KHỞI CHẠY ỨNG DỤNG
+   ============================================================ */
+boot();
+
+
+
+
+
+
+
+
+</script>
+</body>
+</html>

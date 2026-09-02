@@ -1,0 +1,355 @@
+rules_version = '2';
+
+// ============================================================
+// HCMA2 - TEACHING — Firestore Security Rules
+// ============================================================
+// Nguyên tắc:
+// - Không có rule mở toàn bộ database.
+// - Giảng viên CHỈ truy cập dữ liệu do chính mình sở hữu (ownerId == uid),
+//   VÀ CHỈ KHI tài khoản đang ở trạng thái role=='teacher' && status=='active'
+//   (FIX 2 — một giảng viên bị suspended bị chặn NGAY tại tầng Rules, không chỉ ẩn ở UI).
+// - Học viên (anonymous) không đăng nhập bằng email/password, chỉ được:
+//     + đọc session đã OPEN/CLOSED/ARCHIVED (không đọc DRAFT/READY),
+//     + đọc câu hỏi + phương án đang active của session OPEN,
+//     + gửi (create) response CHỈ cho ĐÚNG câu hỏi đang active của session OPEN,
+//       trong ĐÚNG thời hạn timeLimit (nếu có) — kiểm tra bằng request.time (FIX 3 + FIX 4),
+//     + response được giới hạn field bằng allowlist, submittedAt bắt buộc = request.time (FIX 9),
+//     + KHÔNG được đọc responses của người khác, KHÔNG được liệt kê (list) responses,
+//     + KHÔNG được tự đổi role/status/ownerId của bất kỳ ai.
+// - Admin (role=='admin' && status=='active') được quản lý toàn hệ thống,
+//   nhưng KHÔNG ai được tự nâng quyền chính mình lên admin từ client.
+// - sessionTokens/{token} và joinCodes/{code}: chỉ cho GET-theo-ID, KHÔNG cho LIST,
+//   để học viên tra được sessionId từ QR/mã tham gia mà không thể liệt kê toàn bộ hệ thống.
+// ============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------- Helper functions ----------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAnon() {
+      return isSignedIn() &&
+        request.auth.token.firebase.sign_in_provider == 'anonymous';
+    }
+
+    function userData(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && !isAnon() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        userData(request.auth.uid).role == 'admin' &&
+        userData(request.auth.uid).status == 'active';
+    }
+
+    function isActiveTeacher() {
+      return isSignedIn() && !isAnon() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        userData(request.auth.uid).role == 'teacher' &&
+        userData(request.auth.uid).status == 'active';
+    }
+
+    // FIX 2: chủ sở hữu CHỈ có quyền nếu chính là uid == ownerId VÀ hiện đang là
+    // giảng viên active (role=='teacher' && status=='active'). Một giảng viên bị
+    // suspended sẽ KHÔNG còn thỏa điều kiện này nữa cho DÙ ownerId có khớp uid,
+    // nên mọi rule dùng isOwnerOrAdmin() đều tự động chặn giảng viên bị khóa.
+    function isOwnerActiveTeacher(ownerId) {
+      return isSignedIn() && !isAnon() &&
+        request.auth.uid == ownerId && isActiveTeacher();
+    }
+
+    function isOwnerOrAdmin(ownerId) {
+      return isOwnerActiveTeacher(ownerId) || isAdmin();
+    }
+
+    function sessionData(sessionId) {
+      return get(/databases/$(database)/documents/sessions/$(sessionId)).data;
+    }
+
+    function questionData(questionId) {
+      return get(/databases/$(database)/documents/questions/$(questionId)).data;
+    }
+
+    // FIX A (atomic batch): get()/exists() only see the database's CURRENT COMMITTED
+    // state — they do NOT see sibling writes that are part of the SAME transaction or
+    // batched write that hasn't committed yet. getAfter()/existsAfter() instead resolve
+    // to what a document WILL look like once every write in the current transaction/batch
+    // has been applied. finalizeWizard() writes session + joinCode + sessionToken +
+    // questions + options together in ONE atomic writeBatch(), so when Rules validate a
+    // `questions create` (or an `options create`) they must be able to see the sibling
+    // session (or question) document that is being created in that very same batch —
+    // otherwise get() would see it as not-yet-existing and every such create would be
+    // wrongly denied. getAfter() is used ONLY at these two specific "will this sibling
+    // document exist after the atomic write" checks below — every other get()/exists()
+    // call in this file reads a resource that genuinely already exists independently of
+    // the write being validated (a user account, a session being read by a student, a
+    // session being referenced by a response, etc.), so those correctly stay as get().
+    function sessionDataAfter(sessionId) {
+      return getAfter(/databases/$(database)/documents/sessions/$(sessionId)).data;
+    }
+
+    function questionDataAfter(questionId) {
+      return getAfter(/databases/$(database)/documents/questions/$(questionId)).data;
+    }
+
+    // FIX 4: kiểm tra câu hỏi vẫn còn trong thời hạn trả lời (nếu có đặt timeLimit>0),
+    // dựa trên session.activeQuestionStartedAt (Timestamp server ghi khi giảng viên
+    // kích hoạt câu hỏi) cộng với question.timeLimit (giây), so với request.time
+    // (thời điểm server nhận request — không thể giả mạo từ client).
+    function withinTimeLimit(sessionId, questionId) {
+      let q = questionData(questionId);
+      let s = sessionData(sessionId);
+      return q.timeLimit == 0 ||
+        (s.activeQuestionStartedAt != null &&
+         request.time <= s.activeQuestionStartedAt + duration.value(q.timeLimit, 's'));
+    }
+
+    // FIX 3: câu hỏi đang gửi/sửa response PHẢI là câu hỏi đang active của session.
+    function isActiveQuestion(sessionId, questionId) {
+      return sessionData(sessionId).activeQuestionId == questionId;
+    }
+
+    // ---------------- USERS ----------------
+    // users/{uid}
+    match /users/{uid} {
+      // Đọc hồ sơ chính mình LUÔN được phép (kể cả khi status==suspended) — cần thiết để
+      // FIX 10 (theo dõi trạng thái realtime) và màn hình "tài khoản bị khóa" hoạt động.
+      allow read: if isSignedIn() && !isAnon() &&
+        (request.auth.uid == uid || isAdmin());
+
+      // Tự đăng ký: chỉ được tạo hồ sơ của chính mình,
+      // luôn bắt đầu role=teacher, status=pending (không tự phong admin).
+      allow create: if isSignedIn() && !isAnon() &&
+        request.auth.uid == uid &&
+        request.resource.data.uid == uid &&
+        request.resource.data.role == 'teacher' &&
+        request.resource.data.status == 'pending';
+
+      // Cập nhật:
+      //  - Chính chủ: chỉ được sửa thông tin cá nhân (displayName, updatedAt...),
+      //    KHÔNG được đổi role/status/approvedBy/approvedAt/uid/email — kể cả khi
+      //    đang bị suspended (không tự nâng trạng thái chính mình lên active).
+      //  - Admin: được đổi role/status/approvedBy/approvedAt cho người khác,
+      //    nhưng KHÔNG được đổi uid/email của tài khoản đó.
+      allow update: if isSignedIn() && !isAnon() && (
+        (
+          request.auth.uid == uid &&
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.status == resource.data.status &&
+          request.resource.data.approvedBy == resource.data.approvedBy &&
+          request.resource.data.approvedAt == resource.data.approvedAt &&
+          request.resource.data.uid == resource.data.uid &&
+          request.resource.data.email == resource.data.email
+        ) ||
+        (
+          isAdmin() &&
+          request.resource.data.uid == resource.data.uid &&
+          request.resource.data.email == resource.data.email
+        )
+      );
+
+      allow delete: if false;
+    }
+
+    // ---------------- CLASSES ----------------
+    match /classes/{classId} {
+      allow read: if isOwnerOrAdmin(resource.data.ownerId);
+
+      allow create: if isActiveTeacher() &&
+        request.resource.data.ownerId == request.auth.uid;
+
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        request.resource.data.ownerId == resource.data.ownerId;
+
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+    }
+
+    // ---------------- LIBRARY (thư viện câu hỏi cá nhân của giảng viên) ----------------
+    match /library/{itemId} {
+      allow read: if isOwnerOrAdmin(resource.data.ownerId);
+      allow create: if isActiveTeacher() && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+    }
+
+    // ---------------- JOIN CODES ----------------
+    // joinCodes/{shortCode} -> { sessionId, ownerId }
+    // Ánh xạ mã tham gia ngắn (VD: ABC-729) sang sessionId, cho phép học viên
+    // tra cứu bằng GET theo ID (không phải LIST) để tránh liệt kê toàn bộ session.
+    match /joinCodes/{code} {
+      allow get: if isSignedIn();
+      allow list: if false;
+      allow create: if isActiveTeacher() && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+    }
+
+    // ---------------- SESSION TOKENS (FIX 8) ----------------
+    // sessionTokens/{accessToken} -> { sessionId, ownerId }
+    // Ánh xạ accessToken (chuỗi ngẫu nhiên mật mã học, 28 ký tự) sang sessionId, để
+    // liên kết/QR học viên KHÔNG cần nhúng sessionId trực tiếp. Cùng khuôn mẫu chống
+    // liệt kê như joinCodes: chỉ GET-theo-ID, không LIST.
+    match /sessionTokens/{token} {
+      allow get: if isSignedIn();
+      allow list: if false;
+      allow create: if isActiveTeacher() && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+    }
+
+    // ---------------- SESSIONS ----------------
+    match /sessions/{sessionId} {
+      // GET (đọc 1 session theo ID đã biết trước, ví dụ đã tra được từ sessionTokens/joinCodes):
+      //  - Giảng viên/Admin: đọc session của chính mình (hoặc mọi session nếu là Admin);
+      //    giảng viên bị suspended KHÔNG còn thỏa isOwnerOrAdmin (FIX 2).
+      //  - Học viên (anonymous, kể cả chưa biết trước): chỉ đọc khi session đã
+      //    OPEN/CLOSED/ARCHIVED (không đọc được DRAFT/READY để tránh lộ nội dung trước giờ).
+      //  GIỚI HẠN ĐÃ BIẾT (xem README): Rules không thể xác minh accessToken cho một
+      //  GET đơn lẻ (Rules không nhìn thấy query string của URL) — sự bảo vệ ở đây đến
+      //  từ việc sessionId là ID ngẫu nhiên không thể đoán được do Firestore tự sinh,
+      //  và không ai (kể cả học viên) được LIST để dò ra sessionId hợp lệ.
+      allow get: if isOwnerOrAdmin(resource.data.ownerId) || (
+        isSignedIn() &&
+        (resource.data.status == 'open' || resource.data.status == 'closed' || resource.data.status == 'archived')
+      );
+      // LIST (truy vấn nhiều session cùng lúc): CHỈ giảng viên chủ sở hữu ĐANG ACTIVE hoặc Admin.
+      // Học viên/anonymous KHÔNG được liệt kê session (chống liệt kê toàn bộ hệ thống).
+      allow list: if isOwnerOrAdmin(resource.data.ownerId);
+
+      allow create: if isActiveTeacher() &&
+        request.resource.data.ownerId == request.auth.uid;
+
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        request.resource.data.ownerId == resource.data.ownerId;
+
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+
+      // ---------------- RESPONSES (subcollection) ----------------
+      match /responses/{responseId} {
+        // GET: chủ session (đang active)/admin đọc mọi response; học viên CHỈ được đọc ĐÚNG
+        // response của chính mình (theo participantId == uid đang đăng nhập) để
+        // hỗ trợ kiểm tra "đã trả lời chưa" / cho phép sửa câu trả lời — không có
+        // cách nào để học viên đọc response của người khác vì phải biết chính xác
+        // document ID (dạng questionId_participantId) và participantId phải khớp uid.
+        // FIX B: nhánh "tự đọc response của mình" CHỈ áp dụng cho participant ẩn danh
+        // (isAnon()) — đúng với quy định V1 "học viên luôn dùng Anonymous Auth". Một tài
+        // khoản email/password bình thường (không phải giảng viên/admin sở hữu session)
+        // không có lý do hợp lệ nào để tự đóng vai học viên và đọc response qua nhánh này.
+        allow get: if isOwnerOrAdmin(sessionData(sessionId).ownerId) ||
+          (isAnon() && resource.data.participantId == request.auth.uid);
+
+        // LIST: học viên KHÔNG BAO GIỜ được liệt kê responses (chống xem trộm kết quả người khác).
+        allow list: if isOwnerOrAdmin(sessionData(sessionId).ownerId);
+
+        // Gửi câu trả lời — TẤT CẢ điều kiện dưới đây đều bắt buộc (FIX 3 + FIX 4 + FIX 9):
+        //  - bắt buộc đăng nhập (kể cả anonymous), participantId PHẢI đúng bằng uid đang
+        //    đăng nhập (chống giả mạo trả lời thay người khác);
+        //  - sessionId trong dữ liệu gửi lên PHẢI khớp path, và question.sessionId PHẢI
+        //    khớp sessionId (câu hỏi phải thuộc đúng session này);
+        //  - session PHẢI đang OPEN;
+        //  - questionId gửi lên PHẢI là câu hỏi ĐANG ACTIVE của session (không cho gửi
+        //    "trả lời trễ" cho câu hỏi cũ đã bị giảng viên chuyển qua câu khác);
+        //  - PHẢI còn trong thời hạn timeLimit (nếu câu hỏi có đặt giới hạn thời gian);
+        //  - responseId PHẢI theo định dạng questionId_participantId để đảm bảo mỗi học
+        //    viên chỉ có 1 response / câu hỏi (chống bỏ phiếu trùng);
+        //  - dữ liệu gửi lên CHỈ được chứa đúng 6 field cho phép (chống chèn field lạ như
+        //    ownerId/role để leo quyền), và submittedAt PHẢI đúng bằng request.time
+        //    (server timestamp thật — không cho phép client tự đặt thời gian giả);
+        //  - (FIX B) người gửi PHẢI đang đăng nhập ẩn danh (isAnon()) — đúng quy định V1
+        //    "học viên luôn dùng Firebase Anonymous Authentication". Một tài khoản
+        //    email/password bình thường (kể cả giảng viên/admin) không được phép tự đóng
+        //    vai học viên để ghi response qua Firestore client.
+        allow create: if isAnon() &&
+          request.auth.uid == request.resource.data.participantId &&
+          request.resource.data.sessionId == sessionId &&
+          questionData(request.resource.data.questionId).sessionId == sessionId &&
+          sessionData(sessionId).status == 'open' &&
+          isActiveQuestion(sessionId, request.resource.data.questionId) &&
+          withinTimeLimit(sessionId, request.resource.data.questionId) &&
+          responseId == (request.resource.data.questionId + '_' + request.resource.data.participantId) &&
+          request.resource.data.keys().hasOnly(['sessionId','questionId','participantId','answer','selectedOptions','submittedAt']) &&
+          request.resource.data.keys().hasAll(['sessionId','questionId','participantId','answer','selectedOptions','submittedAt']) &&
+          request.resource.data.submittedAt == request.time;
+
+        // Sửa câu trả lời đã gửi: chỉ khi câu hỏi cho phép allowChangeAnswer=true,
+        // câu hỏi đó VẪN đang là câu hỏi active của session (FIX 3), vẫn còn trong thời
+        // hạn timeLimit nếu có (FIX 4), session vẫn đang OPEN, không đổi
+        // participantId/questionId/sessionId, chỉ được sửa answer/selectedOptions,
+        // và submittedAt (thời điểm sửa) vẫn phải là server timestamp thật (FIX 9).
+        // (FIX B) người sửa cũng PHẢI đang đăng nhập ẩn danh, cùng lý do như create ở trên.
+        allow update: if isAnon() &&
+          request.auth.uid == resource.data.participantId &&
+          request.resource.data.participantId == resource.data.participantId &&
+          request.resource.data.questionId == resource.data.questionId &&
+          request.resource.data.sessionId == resource.data.sessionId &&
+          sessionData(sessionId).status == 'open' &&
+          isActiveQuestion(sessionId, resource.data.questionId) &&
+          withinTimeLimit(sessionId, resource.data.questionId) &&
+          questionData(resource.data.questionId).allowChangeAnswer == true &&
+          request.resource.data.keys().hasOnly(['sessionId','questionId','participantId','answer','selectedOptions','submittedAt']) &&
+          request.resource.data.keys().hasAll(['sessionId','questionId','participantId','answer','selectedOptions','submittedAt']) &&
+          request.resource.data.submittedAt == request.time;
+
+        allow delete: if isAdmin();
+      }
+    }
+
+    // ---------------- QUESTIONS ----------------
+    match /questions/{questionId} {
+      allow read: if isOwnerOrAdmin(resource.data.ownerId) || (
+        isSignedIn() &&
+        sessionData(resource.data.sessionId).status == 'open' &&
+        sessionData(resource.data.sessionId).activeQuestionId == questionId
+      );
+
+      // CREATE: giảng viên chỉ tạo được câu hỏi cho session của CHÍNH MÌNH. Session đó
+      // thường được tạo trong CÙNG một writeBatch() atomic với câu hỏi này (finalizeWizard())
+      // nên phải dùng sessionDataAfter() (FIX A) — nếu dùng get() thông thường, session mới
+      // sẽ chưa "tồn tại" theo góc nhìn của get() tại thời điểm đánh giá rule, khiến việc
+      // đọc field .ownerId của nó lỗi và toàn bộ batch bị từ chối oan.
+      allow create: if isActiveTeacher() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        sessionDataAfter(request.resource.data.sessionId).ownerId == request.auth.uid;
+
+      // UPDATE/DELETE: câu hỏi đã tồn tại từ trước (không nằm trong batch tạo mới), nên
+      // chỉ cần dựa vào resource.data (dữ liệu hiện có của chính document) — không cần
+      // đọc chéo sang session nữa.
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.sessionId == resource.data.sessionId;
+
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+
+      // ---------------- OPTIONS (subcollection) ----------------
+      match /options/{optionId} {
+        // READ: option đã tồn tại từ trước (được đọc lại, không phải đang được tạo) —
+        // question/session liên quan chắc chắn đã tồn tại độc lập với thao tác đọc này,
+        // nên vẫn dùng get() bình thường (đọc resource đã tồn tại).
+        allow read: if isOwnerOrAdmin(questionData(questionId).ownerId) || (
+          isSignedIn() &&
+          sessionData(questionData(questionId).sessionId).status == 'open' &&
+          sessionData(questionData(questionId).sessionId).activeQuestionId == questionId
+        );
+
+        // CREATE: option luôn được tạo trong CÙNG batch atomic với chính câu hỏi cha của
+        // nó (finalizeWizard()) — giống hệt lý do ở "questions create" — nên phải dùng
+        // questionDataAfter() (FIX A) để thấy được câu hỏi cha ngay sau khi batch áp dụng.
+        allow create: if isOwnerOrAdmin(questionDataAfter(questionId).ownerId);
+
+        // UPDATE/DELETE: nếu có sửa/xóa một option đã tồn tại độc lập (ngoài batch tạo
+        // mới), câu hỏi cha chắc chắn đã tồn tại từ trước — dùng get() như cũ.
+        allow update, delete: if isOwnerOrAdmin(questionData(questionId).ownerId);
+      }
+    }
+
+    // ---------------- Mặc định: chặn tất cả ----------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

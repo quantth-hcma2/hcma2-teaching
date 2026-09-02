@@ -166,6 +166,17 @@ tr:hover td{background:#fafbfc;}
 .type-card.active{border-color:var(--brand); background:var(--brand-light);}
 .type-card .ic{font-size:26px; margin-bottom:6px;}
 .type-card .nm{font-weight:700; font-size:13px;}
+.library-source-actions{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
+.library-picker-toolbar{display:grid;grid-template-columns:1fr 180px 190px;gap:10px;margin:12px 0;}
+.library-picker-list{display:grid;gap:10px;max-height:52vh;overflow:auto;padding-right:4px;}
+.library-picker-item{display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:start;border:1.5px solid var(--border);border-radius:12px;padding:12px;background:#fff;}
+.library-picker-item:hover{border-color:#94a3b8;}
+.library-picker-item input{width:20px;height:20px;margin-top:3px;}
+.library-picker-meta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:5px;}
+.library-picker-question{font-weight:700;line-height:1.4;}
+.library-save-row{border:1px dashed #cbd5e1;border-radius:10px;padding:10px 12px;background:#f8fafc;}
+@media(max-width:700px){.library-picker-toolbar{grid-template-columns:1fr;}}
+
 
 /* Live control */
 .live-grid{display:grid; grid-template-columns:1.3fr 1fr; gap:16px;}
@@ -1193,12 +1204,25 @@ async function teacherLibrary(c){
       <div class="card">
         <span class="chip">${esc(x.category)}</span> <span class="chip">${esc(QUESTION_TYPES[x.type]?.label||x.type)}</span>
         <p class="mt-8" style="font-weight:600;">${esc(x.question)}</p>
-        <div class="flex gap-8 mt-8">
+        <div class="flex gap-8 mt-8" style="flex-wrap:wrap;">
+          <button class="btn btn-sm" data-use="${x.id}">DÙNG TRONG TƯƠNG TÁC</button>
           <button class="btn btn-sm btn-outline" data-e="${x.id}">SỬA</button>
           <button class="btn btn-sm btn-ghost" data-cp="${x.id}">SAO CHÉP</button>
           <button class="btn btn-sm btn-danger" data-d="${x.id}">XÓA</button>
         </div>
       </div>`).join("");
+    $$("[data-use]").forEach(b=>b.onclick=()=>{
+      const item=cache.find(x=>x.id===b.dataset.use);
+      if(!item) return;
+      initWizard();
+      STATE.wizard.questions=[wizardQuestionFromLibrary(item)];
+      STATE.wizard.qIndex=0;
+      STATE.wizard.step=1;
+      STATE.teacherNav="wizard";
+      window.location.hash="#/wizard";
+      teacherRoute();
+      toast("Đã đưa câu hỏi vào Tạo tương tác. Hãy đặt tên hoạt động và chọn lớp.","ok");
+    });
     $$("[data-e]").forEach(b=>b.onclick=()=>openLibraryForm(cache.find(x=>x.id===b.dataset.e)));
     $$("[data-cp]").forEach(b=>b.onclick=async ()=>{
       const item = cache.find(x=>x.id===b.dataset.cp);
@@ -1207,8 +1231,13 @@ async function teacherLibrary(c){
       catch(e){ toast(mapError(e),"err"); }
     });
     $$("[data-d]").forEach(b=>b.onclick=async ()=>{
-      if(!confirm("Xóa câu hỏi này khỏi thư viện?")) return;
-      try{ await deleteDoc(doc(db,"library",b.dataset.d)); toast("Đã xóa.","ok"); }catch(e){ toast(mapError(e),"err"); }
+      const item = cache.find(x=>x.id===b.dataset.d);
+      const label = item?.question ? `\n\n“${item.question}”` : "";
+      if(!confirm("Xóa câu hỏi này khỏi Thư viện?"+label+"\n\nThao tác này không ảnh hưởng đến các phiên đã tạo trước đó.")) return;
+      try{
+        await deleteDoc(doc(db,"library",b.dataset.d));
+        toast("Đã xóa câu hỏi khỏi Thư viện.","ok");
+      }catch(e){ toast(mapError(e),"err"); }
     });
   }
 }
@@ -1220,6 +1249,7 @@ function openLibraryForm(existing){
       <div class="field"><label>Phân loại</label><select id="libCat">${LIBRARY_CATEGORIES.map(cat=>`<option ${existing&&existing.category===cat?"selected":""}>${esc(cat)}</option>`).join("")}</select></div>
       <div class="field"><label>Loại câu hỏi</label><select id="libType">${Object.entries(QUESTION_TYPES).map(([k,v])=>`<option value="${k}" ${type===k?"selected":""}>${v.icon} ${esc(v.label)}</option>`).join("")}</select></div>
       <div class="field"><label>Nội dung câu hỏi *</label><textarea id="libQ" required>${existing?esc(existing.question):""}</textarea></div>
+      <div class="field"><label>Mô tả / gợi ý (không bắt buộc)</label><input type="text" id="libDesc" value="${existing?esc(existing.description||""):""}"></div>
       <div class="field" id="libOptWrap"></div>
       <div id="libErr" class="error-text hidden"></div>
       <div class="flex-between mt-14">
@@ -1233,6 +1263,15 @@ function openLibraryForm(existing){
     if(t==="truefalse"){
       // Đúng/Sai luôn cố định — không cho sửa, nhưng VẪN được ghi vào Firestore khi lưu.
       $("#libOptWrap").innerHTML = `<label>Phương án</label><p class="hint">Câu hỏi Đúng/Sai luôn có sẵn 2 phương án cố định: <strong>Đúng</strong> và <strong>Sai</strong> (không cần nhập tay).</p>`;
+      return;
+    }
+    if(t==="scale"){
+      const mn = Number(existing?.scaleMin ?? 1);
+      const mx = Number(existing?.scaleMax ?? 5);
+      $("#libOptWrap").innerHTML = `<div class="grid grid-2">
+        <div class="field"><label>Giá trị nhỏ nhất</label><input type="number" id="libScaleMin" value="${mn}"></div>
+        <div class="field"><label>Giá trị lớn nhất</label><input type="number" id="libScaleMax" value="${mx}"></div>
+      </div>`;
       return;
     }
     if(!QUESTION_TYPES[t].needsOptions){ $("#libOptWrap").innerHTML = `<p class="hint">Loại câu hỏi này không cần phương án cố định.</p>`; return; }
@@ -1257,7 +1296,21 @@ function openLibraryForm(existing){
       options = $$("#libOptions .optText").map(i=>i.value.trim()).filter(v=>v);
       if(options.length<2){ $("#libErr").textContent="Cần ít nhất 2 phương án."; $("#libErr").classList.remove("hidden"); return; }
     }
-    const data = { category: $("#libCat").value, type:t, question:qtext, options, updatedAt: serverTimestamp() };
+    let scaleMin = null, scaleMax = null;
+    if(t==="scale"){
+      scaleMin = Number($("#libScaleMin").value);
+      scaleMax = Number($("#libScaleMax").value);
+      if(!Number.isFinite(scaleMin) || !Number.isFinite(scaleMax) || scaleMin>=scaleMax){
+        $("#libErr").textContent="Thang điểm không hợp lệ (giá trị nhỏ nhất phải nhỏ hơn giá trị lớn nhất).";
+        $("#libErr").classList.remove("hidden");
+        return;
+      }
+    }
+    const data = {
+      category: $("#libCat").value, type:t, question:qtext,
+      description: $("#libDesc").value.trim(),
+      options, scaleMin, scaleMax, updatedAt: serverTimestamp()
+    };
     try{
       if(existing){ await updateDoc(doc(db,"library",existing.id), data); toast("Đã lưu thay đổi.","ok"); }
       else{ data.ownerId = STATE.user.uid; data.createdAt = serverTimestamp(); await addDoc(collection(db,"library"), data); toast("Đã lưu vào thư viện.","ok"); }
@@ -1273,7 +1326,11 @@ function optionRowHtml(val, idx){
    WIZARD TẠO PHIÊN TƯƠNG TÁC (9 bước)
    ============================================================ */
 const WIZARD_STEP_LABELS = ["Tên hoạt động","Chọn lớp","Câu hỏi","Loại câu hỏi","Phương án","Biểu đồ","Thiết lập","Xem trước","Bắt đầu"];
-function blankQuestion(){ return { question:"", description:"", type:"single", options:["",""], required:true, chartType:null, scaleMin:1, scaleMax:5, timeLimit:0, allowChangeAnswer:false }; }
+function blankQuestion(){ return {
+  question:"", description:"", type:"single", options:["",""], required:true,
+  chartType:null, scaleMin:1, scaleMax:5, timeLimit:0, allowChangeAnswer:false,
+  saveToLibrary:false, libraryCategory:LIBRARY_CATEGORIES[0], sourceLibraryId:null
+}; }
 function initWizard(){
   STATE.wizard = {
     step:1, title:"", classId:"", classesCache:[], questions:[blankQuestion()], qIndex:0,
@@ -1371,19 +1428,180 @@ function wizQuestionListBar(){
 function wireQuestionListBar(rerender){
   $$("[data-goq]").forEach(b=>b.onclick=()=>{ STATE.wizard.qIndex = Number(b.dataset.goq); STATE.wizard.step=3; rerender(); });
 }
+
+function wizardQuestionFromLibrary(item){
+  const meta = QUESTION_TYPES[item.type] || QUESTION_TYPES.single;
+  let opts = Array.isArray(item.options) ? item.options.map(x=>String(x)) : [];
+  if(item.type==="truefalse") opts = QUESTION_TYPES.truefalse.fixedOptions.slice();
+  if(meta.needsOptions && opts.length<2){
+    if(item.type==="likert") opts=["Hoàn toàn không đồng ý","Không đồng ý","Phân vân","Đồng ý","Hoàn toàn đồng ý"];
+    else opts=["",""];
+  }
+  return {
+    question:String(item.question||""),
+    description:String(item.description||""),
+    type:item.type && QUESTION_TYPES[item.type] ? item.type : "single",
+    options:opts,
+    required:true,
+    chartType:(item.chartType && meta.allowedCharts.includes(item.chartType)) ? item.chartType : meta.defaultChart,
+    scaleMin:Number.isFinite(Number(item.scaleMin)) ? Number(item.scaleMin) : 1,
+    scaleMax:Number.isFinite(Number(item.scaleMax)) ? Number(item.scaleMax) : 5,
+    timeLimit:STATE.wizard?.settings?.timeLimit||0,
+    allowChangeAnswer:!!STATE.wizard?.settings?.allowChangeAnswer,
+    saveToLibrary:false,
+    libraryCategory:item.category||LIBRARY_CATEGORIES[0],
+    sourceLibraryId:item.id||null
+  };
+}
+function isWizardBlankQuestion(q){
+  return !String(q?.question||"").trim()
+    && q?.type==="single"
+    && (!Array.isArray(q?.options) || q.options.every(x=>!String(x||"").trim()));
+}
+async function openWizardLibraryPicker(){
+  const w = STATE.wizard;
+  openModal(`
+    <div class="flex-between">
+      <div>
+        <h3>📚 Chọn câu hỏi từ Thư viện</h3>
+        <p class="hint">Có thể chọn nhiều câu cùng lúc. Câu được thêm vào tương tác là <b>bản sao độc lập</b>, sửa trong phiên sẽ không làm đổi câu gốc trong Thư viện.</p>
+      </div>
+      <button type="button" class="btn btn-sm btn-ghost" id="libPickClose">✕</button>
+    </div>
+    <div class="library-picker-toolbar">
+      <input type="text" id="libPickSearch" placeholder="🔎 Tìm nội dung câu hỏi…">
+      <select id="libPickType"><option value="">Tất cả loại</option>${Object.entries(QUESTION_TYPES).map(([k,v])=>`<option value="${k}">${esc(v.label)}</option>`).join("")}</select>
+      <select id="libPickCat"><option value="">Tất cả phân loại</option>${LIBRARY_CATEGORIES.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join("")}</select>
+    </div>
+    <div class="flex-between">
+      <label class="flex gap-8" style="margin:0;font-weight:600;"><input type="checkbox" id="libPickAll" style="width:auto;min-height:auto;"> Chọn tất cả đang hiển thị</label>
+      <span class="small mut" id="libPickCount">0 câu được chọn</span>
+    </div>
+    <div id="libPickList" class="library-picker-list mt-14"><div class="mut">Đang tải thư viện…</div></div>
+    <div id="libPickErr" class="error-text hidden mt-8"></div>
+    <div class="flex-between mt-14">
+      <button type="button" class="btn btn-ghost" id="libPickCancel">Hủy</button>
+      <button type="button" class="btn" id="libPickAdd" disabled>THÊM CÂU ĐÃ CHỌN</button>
+    </div>
+  `, true);
+
+  $("#libPickClose").onclick = closeModal;
+  $("#libPickCancel").onclick = closeModal;
+
+  let cache = [];
+  const selected = new Set();
+  try{
+    const snap = await getDocs(query(collection(db,"library"), where("ownerId","==",STATE.user.uid), orderBy("createdAt","desc")));
+    cache = snap.docs.map(d=>({id:d.id,...d.data()}));
+  }catch(e){
+    $("#libPickList").innerHTML = `<div class="empty-state"><div class="ic">⚠️</div>${esc(mapError(e))}</div>`;
+    return;
+  }
+
+  const filtered = ()=>{
+    const kw=($("#libPickSearch").value||"").toLowerCase().trim();
+    const t=$("#libPickType").value;
+    const cat=$("#libPickCat").value;
+    return cache.filter(x=>{
+      if(t && x.type!==t) return false;
+      if(cat && x.category!==cat) return false;
+      if(kw && !(`${x.question||""} ${x.description||""}`.toLowerCase().includes(kw))) return false;
+      return true;
+    });
+  };
+  function updatePickCount(){
+    $("#libPickCount").textContent = `${selected.size} câu được chọn`;
+    $("#libPickAdd").disabled = selected.size===0;
+  }
+  function render(){
+    const list=filtered();
+    if(!list.length){
+      $("#libPickList").innerHTML=`<div class="empty-state"><div class="ic">📚</div>Không có câu hỏi phù hợp.</div>`;
+      $("#libPickAll").checked=false; updatePickCount(); return;
+    }
+    $("#libPickList").innerHTML=list.map(x=>`
+      <label class="library-picker-item">
+        <input type="checkbox" data-libpick="${x.id}" ${selected.has(x.id)?"checked":""}>
+        <span>
+          <span class="library-picker-meta">
+            <span class="chip">${esc(x.category||"Chưa phân loại")}</span>
+            <span class="chip">${esc(QUESTION_TYPES[x.type]?.label||x.type||"—")}</span>
+          </span>
+          <span class="library-picker-question">${esc(x.question||"")}</span>
+          ${x.description?`<span class="small mut" style="display:block;margin-top:4px;">${esc(x.description)}</span>`:""}
+        </span>
+      </label>`).join("");
+    $$("[data-libpick]").forEach(cb=>cb.onchange=()=>{
+      if(cb.checked) selected.add(cb.dataset.libpick); else selected.delete(cb.dataset.libpick);
+      updatePickCount();
+      const ids=list.map(x=>x.id);
+      $("#libPickAll").checked=ids.length>0 && ids.every(id=>selected.has(id));
+    });
+    const ids=list.map(x=>x.id);
+    $("#libPickAll").checked=ids.length>0 && ids.every(id=>selected.has(id));
+    updatePickCount();
+  }
+  ["libPickSearch","libPickType","libPickCat"].forEach(id=>{
+    const el=$("#"+id); el.addEventListener(id==="libPickSearch"?"input":"change", render);
+  });
+  $("#libPickAll").onchange=()=>{
+    filtered().forEach(x=>$("#libPickAll").checked?selected.add(x.id):selected.delete(x.id));
+    render();
+  };
+  $("#libPickAdd").onclick=()=>{
+    const picked=cache.filter(x=>selected.has(x.id)).map(wizardQuestionFromLibrary);
+    if(!picked.length) return;
+    let firstIndex;
+    const current=w.questions[w.qIndex];
+    if(w.questions.length===1 && isWizardBlankQuestion(current)){
+      w.questions.splice(0,1,...picked);
+      firstIndex=0;
+    }else{
+      firstIndex=w.questions.length;
+      w.questions.push(...picked);
+    }
+    w.qIndex=firstIndex;
+    w.step=3;
+    closeModal();
+    toast(`Đã thêm ${picked.length} câu hỏi từ Thư viện.`,"ok");
+    renderWizard($("#mainContent"));
+  };
+  render();
+}
+
 function wizStep3(c){
   const w = STATE.wizard; const q = w.questions[w.qIndex];
   c.innerHTML = wizardShellHtml(`
     ${w.questions.length>1?wizQuestionListBar():""}
-    <div class="field mt-14"><label>Nội dung câu hỏi *</label><textarea id="wQ" placeholder="Nhập nội dung câu hỏi…">${esc(q.question)}</textarea></div>
+    <div class="library-source-actions mt-14">
+      <button type="button" class="btn btn-outline" id="wizFromLibrary">📚 CHỌN TỪ THƯ VIỆN</button>
+      <span class="hint" style="align-self:center;">Chọn một hoặc nhiều câu đã lưu để đưa thẳng vào tương tác.</span>
+    </div>
+    <div class="field"><label>Nội dung câu hỏi *</label><textarea id="wQ" placeholder="Nhập nội dung câu hỏi…">${esc(q.question)}</textarea></div>
     <div class="field"><label>Mô tả / gợi ý (không bắt buộc)</label><input type="text" id="wQDesc" value="${esc(q.description||"")}"></div>
+    <div class="library-save-row">
+      <label class="flex gap-8" style="margin:0;"><input type="checkbox" id="wSaveLib" ${q.saveToLibrary?"checked":""} style="width:auto;min-height:auto;"> Lưu câu hỏi này vào Thư viện khi tạo phiên</label>
+      <div class="field ${q.saveToLibrary?"":"hidden"} mt-8" id="wSaveLibCatWrap" style="margin-bottom:0;">
+        <label>Phân loại trong Thư viện</label>
+        <select id="wSaveLibCat">${LIBRARY_CATEGORIES.map(cat=>`<option ${q.libraryCategory===cat?"selected":""}>${esc(cat)}</option>`).join("")}</select>
+      </div>
+      ${q.sourceLibraryId?`<p class="hint" style="margin:6px 0 0;">Câu này được sao chép từ Thư viện. Mọi chỉnh sửa chỉ áp dụng cho tương tác hiện tại.</p>`:""}
+    </div>
     <div id="wErr" class="error-text hidden"></div>
     ${wizNavHtml(true)}`);
   wireQuestionListBar(()=>renderWizard(c));
+  $("#wizFromLibrary").onclick = openWizardLibraryPicker;
+  $("#wSaveLib").onchange = ()=>{
+    $("#wSaveLibCatWrap").classList.toggle("hidden", !$("#wSaveLib").checked);
+  };
   wireWizNav(()=>{ w.step=2; renderWizard(c); }, ()=>{
     const v = $("#wQ").value.trim();
     if(!v){ $("#wErr").textContent="Vui lòng nhập nội dung câu hỏi."; $("#wErr").classList.remove("hidden"); return; }
-    q.question=v; q.description=$("#wQDesc").value.trim(); w.step=4; renderWizard($("#mainContent"));
+    q.question=v;
+    q.description=$("#wQDesc").value.trim();
+    q.saveToLibrary=$("#wSaveLib").checked;
+    q.libraryCategory=$("#wSaveLibCat").value;
+    w.step=4; renderWizard($("#mainContent"));
   });
 }
 function wizStep4(c){
@@ -1401,7 +1619,9 @@ function wizStep4(c){
     if(q.type==="truefalse") q.options=["Đúng","Sai"];
     if(q.type==="likert" && (!q.options || q.options.length!==5 || q.options[0]==="")) q.options=["Hoàn toàn không đồng ý","Không đồng ý","Phân vân","Đồng ý","Hoàn toàn đồng ý"];
     if((q.type==="single"||q.type==="multiple"||q.type==="ranking") && (!q.options || q.options.some(o=>false))){ if(!q.options || q.options.length<2) q.options=["",""]; }
-    q.chartType = QUESTION_TYPES[q.type].defaultChart;
+    if(!QUESTION_TYPES[q.type].allowedCharts.includes(q.chartType)){
+      q.chartType = QUESTION_TYPES[q.type].defaultChart;
+    }
     w.step=5; renderWizard($("#mainContent"));
   });
 }
@@ -1567,6 +1787,22 @@ async function finalizeWizard(){
           value: q.type==="likert" ? (oi+1) : (q.type==="ranking" ? null : null),
           isCorrect: null, createdAt: serverTimestamp()
         });
+      });
+    }
+    if(q.saveToLibrary){
+      const libRef = doc(collection(db,"library"));
+      batch.set(libRef,{
+        ownerId:STATE.user.uid,
+        category:q.libraryCategory||LIBRARY_CATEGORIES[0],
+        type:q.type,
+        question:q.question,
+        description:q.description||"",
+        options:meta.needsOptions?q.options:null,
+        scaleMin:q.type==="scale"?q.scaleMin:null,
+        scaleMax:q.type==="scale"?q.scaleMax:null,
+        chartType:q.chartType||meta.defaultChart,
+        createdAt:serverTimestamp(),
+        updatedAt:serverTimestamp()
       });
     }
   });
@@ -2214,8 +2450,76 @@ async function loadTeacherClassMap(){
   const snap = await getDocs(query(collection(db,"classes"), where("ownerId","==",STATE.user.uid)));
   const m = {}; snap.docs.forEach(d=>m[d.id]=d.data()); return m;
 }
+
+async function deleteRefsInChunks(refs, chunkSize=400){
+  for(let i=0;i<refs.length;i+=chunkSize){
+    const batch = writeBatch(db);
+    refs.slice(i,i+chunkSize).forEach(ref=>batch.delete(ref));
+    await batch.commit();
+  }
+}
+async function deleteSessionDeep(sessionId){
+  const sRef = doc(db,"sessions",sessionId);
+  const sSnap = await getDoc(sRef);
+  if(!sSnap.exists()) throw {code:"not-found"};
+  const s = sSnap.data();
+  if(s.ownerId!==STATE.user.uid) throw {code:"permission-denied"};
+
+  // Tránh xóa nhầm một phiên vẫn đang nhận câu trả lời.
+  if(s.status==="open"){
+    throw {code:"session-open-delete-blocked"};
+  }
+
+  // 1) Responses của phiên.
+  const respSnap = await getDocs(collection(db,"sessions",sessionId,"responses"));
+  await deleteRefsInChunks(respSnap.docs.map(d=>d.ref));
+
+  // 2) Questions + options của từng question.
+  const qSnap = await getDocs(query(
+    collection(db,"questions"),
+    where("ownerId","==",STATE.user.uid),
+    where("sessionId","==",sessionId)
+  ));
+  for(const qDoc of qSnap.docs){
+    const optSnap = await getDocs(collection(db,"questions",qDoc.id,"options"));
+    await deleteRefsInChunks(optSnap.docs.map(d=>d.ref));
+  }
+  await deleteRefsInChunks(qSnap.docs.map(d=>d.ref));
+
+  // 3) Các bản ánh xạ QR / mã tham gia.
+  const mappingRefs = [];
+  if(s.shortCode) mappingRefs.push(doc(db,"joinCodes",s.shortCode));
+  if(s.accessToken) mappingRefs.push(doc(db,"sessionTokens",s.accessToken));
+  if(mappingRefs.length) await deleteRefsInChunks(mappingRefs);
+
+  // 4) Cuối cùng mới xóa session.
+  await deleteDoc(sRef);
+}
+async function confirmAndDeleteSession(sessionId, title, afterDelete){
+  const name = title ? `\\n\\n“${title}”` : "";
+  if(!confirm(
+    "XÓA VĨNH VIỄN PHIÊN NÀY?"+name+
+    "\\n\\nHệ thống sẽ xóa phiên, câu hỏi, phương án, câu trả lời và mã QR/mã tham gia liên quan."+
+    "\\n\\nDữ liệu báo cáo của phiên này sẽ không thể khôi phục."
+  )) return;
+
+  try{
+    await deleteSessionDeep(sessionId);
+    toast("Đã xóa vĩnh viễn phiên và dữ liệu liên quan.","ok");
+    afterDelete && afterDelete();
+  }catch(e){
+    if((e.code||"")==="session-open-delete-blocked"){
+      toast("Phiên đang mở. Vui lòng ĐÓNG PHIÊN trước khi xóa.","warn");
+      return;
+    }
+    toast(mapError(e),"err");
+    console.error("deleteSessionDeep", e);
+  }
+}
+
 async function teacherHistory(c){
   c.innerHTML = `<h2>Lịch sử phiên</h2>
+    <p class="mut">Có thể mở lại kết quả, điều khiển phiên hoặc xóa vĩnh viễn các phiên không còn cần thiết. Phiên đang mở phải được đóng trước khi xóa.</p>
     <div class="card"><div class="flex-between mt-8"><input type="text" id="hSearch" placeholder="Tìm theo tên hoạt động…" style="max-width:280px;">
     <select id="hFilter"><option value="">Tất cả trạng thái</option><option value="draft">Nháp</option><option value="ready">Sẵn sàng</option><option value="open">Đang mở</option><option value="closed">Đã đóng</option><option value="archived">Lưu trữ</option></select></div>
     <div class="table-wrap mt-14" id="hTable"><div class="center-screen" style="min-height:120px;"><span class="spinner"></span></div></div></div>`;
@@ -2229,10 +2533,19 @@ async function teacherHistory(c){
       if(list.length===0){ $("#hTable").innerHTML = `<div class="empty-state"><div class="ic">🕓</div>Không có phiên phù hợp.</div>`; return; }
       $("#hTable").innerHTML = `<table><thead><tr><th>Hoạt động</th><th>Lớp</th><th>Ngày</th><th>Số câu hỏi</th><th>Lượt trả lời</th><th>Trạng thái</th><th></th></tr></thead><tbody>
         ${list.map(s=>`<tr><td>${esc(s.title)}</td><td>${esc(classMap[s.classId]?.name||"—")}</td><td>${fmtDateShort(s.createdAt)}</td><td>${s.questionCount||0}</td><td>${s.responseCount||0}</td><td>${sessionStatusBadge(s.status)}</td>
-        <td class="flex gap-8"><button class="btn btn-sm btn-outline" data-r="${s.id}">MỞ LẠI KẾT QUẢ</button>${s.status!=="archived"?`<button class="btn btn-sm btn-ghost" data-live="${s.id}">ĐIỀU KHIỂN</button>`:""}</td></tr>`).join("")}
+        <td class="flex gap-8" style="flex-wrap:wrap;">
+          <button class="btn btn-sm btn-outline" data-r="${s.id}">MỞ LẠI KẾT QUẢ</button>
+          ${s.status!=="archived"?`<button class="btn btn-sm btn-ghost" data-live="${s.id}">ĐIỀU KHIỂN</button>`:""}
+          <button class="btn btn-sm btn-danger" data-del-session="${s.id}" data-title="${esc(s.title)}" ${s.status==="open"?"disabled title=\"Hãy đóng phiên trước khi xóa\"":""}>XÓA PHIÊN</button>
+        </td></tr>`).join("")}
       </tbody></table>`;
       $$("[data-r]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/report/"+encodeURIComponent(b.dataset.r); });
       $$("[data-live]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/live/"+encodeURIComponent(b.dataset.live); });
+      $$("[data-del-session]").forEach(b=>b.onclick=()=>confirmAndDeleteSession(
+        b.dataset.delSession,
+        b.dataset.title,
+        ()=>teacherHistory(c)
+      ));
     };
     $("#hSearch").addEventListener("input", debounce(render,200)); $("#hFilter").addEventListener("change", render);
     render();

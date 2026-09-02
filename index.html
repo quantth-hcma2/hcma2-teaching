@@ -198,6 +198,36 @@ tr:hover td{background:#fafbfc;}
 .pres-grid{display:flex; gap:40px; align-items:center; flex-wrap:wrap; justify-content:center;}
 .pres-chart-wrap{width:min(760px,90vw); background:#fff; border-radius:16px; padding:20px;}
 .pres-qr-wrap{background:#fff; border-radius:16px; padding:18px; text-align:center;}
+.pres-qr-wrap.clickable{cursor:pointer; transition:transform .15s ease, box-shadow .15s ease;}
+.pres-qr-wrap.clickable:hover{transform:translateY(-2px); box-shadow:0 10px 28px rgba(0,0,0,.2);}
+.pres-qr-wrap.clickable:focus-visible{outline:3px solid #93c5fd; outline-offset:4px;}
+.pres-qr-hint{font-size:12px; color:#64748b; margin-top:8px; font-weight:700;}
+.pres-qr-popup{
+  position:fixed; inset:0; z-index:9999; background:rgba(2,12,18,.88);
+  display:flex; align-items:center; justify-content:center; padding:24px;
+}
+.pres-qr-popup-card{
+  width:min(92vw,760px); background:#fff; border-radius:24px; padding:28px;
+  text-align:center; box-shadow:0 24px 70px rgba(0,0,0,.45); position:relative;
+}
+.pres-qr-popup-close{
+  position:absolute; top:14px; right:14px; width:48px; height:48px; border-radius:50%;
+  border:none; background:#0f172a; color:#fff; font-size:26px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+}
+.pres-qr-popup-close:focus-visible{outline:3px solid #93c5fd; outline-offset:3px;}
+.pres-qr-popup-title{font-size:clamp(22px,3vw,34px); font-weight:800; color:#0f172a; margin:4px 54px 10px;}
+.pres-qr-popup-sub{font-size:16px; color:#475569; margin-bottom:18px;}
+#presQrBig{display:flex; justify-content:center; align-items:center;}
+#presQrBig img,#presQrBig canvas{width:min(68vw,560px)!important; height:min(68vw,560px)!important; max-width:560px; max-height:560px;}
+.pres-qr-popup-code{font-size:clamp(24px,4vw,40px); font-weight:900; color:#0f172a; letter-spacing:2px; margin-top:14px;}
+@media(max-width:600px){
+  .pres-qr-popup{padding:12px;}
+  .pres-qr-popup-card{padding:22px 14px 18px;}
+  .pres-qr-popup-close{top:8px;right:8px;width:44px;height:44px;}
+  #presQrBig img,#presQrBig canvas{width:min(82vw,440px)!important;height:min(82vw,440px)!important;}
+}
+
 
 /* Misc */
 .flex{display:flex; align-items:center;}
@@ -1463,7 +1493,7 @@ function wizStep8(c){
       </div>
     </div>`);
   $("#wizCancel").onclick = ()=>{ if(confirm("Hủy bỏ tạo phiên? Dữ liệu đang nhập sẽ mất.")){ STATE.wizard=null; STATE.teacherNav="overview"; window.location.hash=""; teacherRoute(); } };
-  $("#wizBack").onclick = ()=>{ w.step=6; w.qIndex=w.questions.length-1; renderWizard(c); };
+  $("#wizBack").onclick = ()=>{ w.step=7; renderWizard(c); };
   $("#wizFinish").onclick = async ()=>{
     const btn = $("#wizFinish"); btn.disabled=true; btn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px;"></span> Đang tạo phiên…';
     try{ await finalizeWizard(); }
@@ -1858,6 +1888,7 @@ async function teacherLiveControl(c, sessionId){
       ${session.status==="closed" ? `<button class="btn btn-warn" id="btnReopenSession">MỞ LẠI PHIÊN</button><button class="btn btn-ghost" id="btnArchiveSession">KẾT THÚC PHIÊN</button>`:""}
       <button class="btn btn-outline" id="btnShowQr" ${session.status==="draft"?"disabled":""}>HIỂN THỊ QR</button>
       <button class="btn btn-outline" id="btnPresent" ${session.status==="draft"?"disabled":""}>HIỂN THỊ TRÌNH CHIẾU</button>
+      ${session.status!=="archived" ? `<button class="btn btn-outline" id="btnEditTime">⏱ ĐỔI THỜI GIAN</button>` : ""}
       <button class="btn ${session.showResults==='live'?'btn-warn':'btn-outline'}" id="btnToggleResults">${session.showResults==='live'?"ẨN KẾT QUẢ":"HIỂN THỊ KẾT QUẢ"}</button>
       <button class="btn btn-ghost" id="btnBackDash">← Về tổng quan</button>
     </div>
@@ -1888,6 +1919,7 @@ async function teacherLiveControl(c, sessionId){
     if($("#btnArchiveSession")) $("#btnArchiveSession").onclick = archiveSession;
     if($("#btnShowQr")) $("#btnShowQr").onclick = ()=>showQrModal(session, sessionId);
     if($("#btnPresent")) $("#btnPresent").onclick = ()=>window.open(`${APP_BASE_URL}?mode=presentation&sid=${encodeURIComponent(sessionId)}`, "_blank");
+    if($("#btnEditTime")) $("#btnEditTime").onclick = editSessionTime;
     if($("#btnToggleResults")) $("#btnToggleResults").onclick = toggleResults;
     renderCurrentQuestion();
   }
@@ -1948,6 +1980,90 @@ async function teacherLiveControl(c, sessionId){
       </div>`;
   }
 
+  function editSessionTime(){
+    const currentSeconds = Number(questions[curIndex]?.timeLimit || 0);
+    const isPreset = TIMER_PRESETS.some(t=>t.value===currentSeconds);
+    openModal(`
+      <div class="flex-between">
+        <h3>⏱ Thay đổi thời gian trả lời</h3>
+        <button type="button" class="btn btn-sm btn-ghost" id="editTimeClose">✕</button>
+      </div>
+      <p class="hint">Thời gian áp dụng cho <b>tất cả câu hỏi</b> trong phiên này.</p>
+      <div class="field mt-14">
+        <label>Thời gian trả lời mỗi câu</label>
+        <select id="editTimePreset">
+          ${TIMER_PRESETS.map(t=>`<option value="${t.value}" ${currentSeconds===t.value?"selected":""}>${esc(t.label)}</option>`).join("")}
+          <option value="custom" ${!isPreset?"selected":""}>Tùy chỉnh…</option>
+        </select>
+      </div>
+      <div class="field ${isPreset?"hidden":""}" id="editTimeCustomWrap">
+        <label>Số phút tùy chỉnh</label>
+        <input type="number" id="editTimeCustom" min="1" step="1" value="${currentSeconds ? Math.max(1, Math.round(currentSeconds/60)) : 10}">
+        <p class="hint">Nhập số phút. Hệ thống tự chuyển sang giây để xử lý.</p>
+      </div>
+      <div class="card" style="padding:12px 14px;background:#f8fafc;box-shadow:none;">
+        <p class="small" style="margin:0;"><b>Lưu ý:</b> nếu phiên đang mở, khi bấm Lưu hệ thống sẽ <b>khởi động lại bộ đếm của câu hiện tại từ đầu</b> theo thời gian mới. Học viên không cần quét lại QR.</p>
+      </div>
+      <div id="editTimeErr" class="error-text hidden mt-8"></div>
+      <div class="flex-between mt-14">
+        <button type="button" class="btn btn-ghost" id="editTimeCancel">Hủy</button>
+        <button type="button" class="btn btn-ok" id="editTimeSave">LƯU THỜI GIAN</button>
+      </div>
+    `);
+    const preset = $("#editTimePreset");
+    const customWrap = $("#editTimeCustomWrap");
+    preset.onchange = ()=>customWrap.classList.toggle("hidden", preset.value!=="custom");
+    $("#editTimeClose").onclick = closeModal;
+    $("#editTimeCancel").onclick = closeModal;
+    $("#editTimeSave").onclick = async ()=>{
+      const btn = $("#editTimeSave");
+      const tv = preset.value;
+      let seconds;
+      if(tv==="custom"){
+        const mins = Number($("#editTimeCustom").value);
+        if(!Number.isFinite(mins) || mins < 1){
+          $("#editTimeErr").textContent = "Vui lòng nhập số phút từ 1 trở lên.";
+          $("#editTimeErr").classList.remove("hidden");
+          return;
+        }
+        seconds = Math.round(mins * 60);
+      }else{
+        seconds = Number(tv);
+      }
+      btn.disabled = true;
+      btn.textContent = "Đang lưu…";
+      try{
+        const batch = writeBatch(db);
+        questions.forEach(q=>{
+          batch.update(doc(db,"questions",q.id), {
+            timeLimit: seconds,
+            updatedAt: serverTimestamp()
+          });
+        });
+        // Nếu phiên đang mở, reset mốc bắt đầu câu hiện tại để thời gian mới có hiệu lực ngay,
+        // tránh tình trạng thời gian cũ đã hết khiến học viên vẫn thấy "Hết thời gian".
+        if(session.status==="open"){
+          batch.update(sessionRef, {
+            activeQuestionStartedAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          });
+        }else{
+          batch.update(sessionRef, { updatedAt: serverTimestamp() });
+        }
+        await batch.commit();
+        questions.forEach(q=>q.timeLimit = seconds);
+        closeModal();
+        toast(`Đã cập nhật thời gian: ${fmtDuration(seconds)} mỗi câu.${session.status==="open" ? " Bộ đếm câu hiện tại đã bắt đầu lại." : ""}`,"ok");
+        renderShell();
+      }catch(e){
+        btn.disabled = false;
+        btn.textContent = "LƯU THỜI GIAN";
+        $("#editTimeErr").textContent = mapError(e);
+        $("#editTimeErr").classList.remove("hidden");
+      }
+    };
+  }
+
   async function switchQuestion(idx){
     if(idx<0 || idx>=questions.length) return;
     curIndex = idx;
@@ -1967,8 +2083,17 @@ async function teacherLiveControl(c, sessionId){
     catch(e){ toast(mapError(e),"err"); }
   }
   async function reopenSession(){
-    try{ await updateDoc(sessionRef, { status:"open", closedAt:null, updatedAt: serverTimestamp() }); session.status="open"; toast("Đã mở lại phiên.","ok"); renderShell(); }
-    catch(e){ toast(mapError(e),"err"); }
+    try{
+      await updateDoc(sessionRef, {
+        status:"open",
+        closedAt:null,
+        activeQuestionStartedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      session.status="open";
+      toast("Đã mở lại phiên. Bộ đếm câu hiện tại đã bắt đầu lại.","ok");
+      renderShell();
+    }catch(e){ toast(mapError(e),"err"); }
   }
   async function archiveSession(){
     if(!confirm("Kết thúc và lưu trữ phiên này?")) return;
@@ -2472,13 +2597,72 @@ function wirePresFs(){
   const b = $("#btnPresFs"); if(!b) return;
   b.onclick = ()=>{ if(!document.fullscreenElement){ document.documentElement.requestFullscreen?.(); } else { document.exitFullscreen?.(); } };
 }
+
+function openPresentationQrPopup(session, sid){
+  const existing = document.getElementById("presQrPopup");
+  if(existing) existing.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "presQrPopup";
+  overlay.className = "pres-qr-popup";
+  overlay.setAttribute("role","dialog");
+  overlay.setAttribute("aria-modal","true");
+  overlay.setAttribute("aria-label","Mã QR tham gia phiên");
+  overlay.innerHTML = `
+    <div class="pres-qr-popup-card">
+      <button type="button" class="pres-qr-popup-close" id="btnClosePresQr" aria-label="Đóng mã QR">✕</button>
+      <div class="pres-qr-popup-title">QUÉT MÃ QR ĐỂ THAM GIA</div>
+      <div class="pres-qr-popup-sub">Dành cho học viên ở xa màn hình trình chiếu</div>
+      <div id="presQrBig"></div>
+      ${session.shortCode ? `<div class="pres-qr-popup-code">${esc(session.shortCode)}</div>` : ""}
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const holder = document.getElementById("presQrBig");
+  try{
+    new QRCode(holder, {
+      text: studentJoinUrl(session, sid),
+      width:560,
+      height:560,
+      colorDark:"#000000",
+      colorLight:"#ffffff",
+      correctLevel: QRCode.CorrectLevel ? QRCode.CorrectLevel.H : undefined
+    });
+  }catch(e){
+    holder.innerHTML = `<p style="color:#991b1b;">Không thể tạo mã QR. Vui lòng đóng và thử lại.</p>`;
+  }
+
+  const closePopup = ()=>{ const el=document.getElementById("presQrPopup"); if(el) el.remove(); };
+  $("#btnClosePresQr").onclick = closePopup;
+  overlay.addEventListener("click", e=>{ if(e.target===overlay) closePopup(); });
+  overlay.addEventListener("keydown", e=>{ if(e.key==="Escape") closePopup(); });
+  overlay.tabIndex = -1;
+  overlay.focus();
+}
+function wirePresentationQrPopup(session, sid){
+  const wrap = $("#presQrWrap");
+  if(!wrap) return;
+  wrap.onclick = ()=>openPresentationQrPopup(session, sid);
+  wrap.onkeydown = e=>{
+    if(e.key==="Enter" || e.key===" "){
+      e.preventDefault();
+      openPresentationQrPopup(session, sid);
+    }
+  };
+}
+
 function renderPresWaiting(session, sid){
   $("#presRoot").innerHTML = `${presTopBar()}
     <div class="meta">${esc(session.className||"")} · ${esc(session.title)}</div>
     <div class="qtext">Đang chờ giảng viên bắt đầu…</div>
-    <div class="pres-qr-wrap"><div id="presQr"></div><p style="font-weight:800;font-size:20px;margin-top:8px;">${esc(session.shortCode||"")}</p></div>`;
+    <div class="pres-qr-wrap clickable" id="presQrWrap" role="button" tabindex="0" aria-label="Phóng to mã QR">
+      <div id="presQr"></div>
+      <p style="font-weight:800;font-size:20px;margin-top:8px;">${esc(session.shortCode||"")}</p>
+      <div class="pres-qr-hint">🔍 Nhấp để phóng to mã QR</div>
+    </div>`;
   wirePresFs();
   try{ new QRCode(document.getElementById("presQr"), { text: studentJoinUrl(session, sid), width:180, height:180 }); }catch(e){}
+  wirePresentationQrPopup(session, sid);
 }
 function renderPresEnded(session){
   $("#presRoot").innerHTML = `${presTopBar()}<div class="qtext">PHIÊN ĐÃ KẾT THÚC</div><div class="meta">${esc(session.title)}</div>`;
@@ -2495,10 +2679,15 @@ function renderPresQuestion(session, sid, question, options){
     ${session.showResponderCount!==false?`<div class="mut" style="color:#fff;opacity:.85;margin-bottom:16px;">${count} người đã trả lời</div>`:`<div style="margin-bottom:16px;"></div>`}
     <div class="pres-grid">
       ${showChart?`<div class="pres-chart-wrap"><div class="chart-box chart-box-lg"><canvas id="presChart"></canvas></div></div>`:""}
-      <div class="pres-qr-wrap"><div id="presQr"></div><p style="font-weight:800;font-size:20px;margin-top:8px;">${esc(session.shortCode||"")}</p></div>
+      <div class="pres-qr-wrap clickable" id="presQrWrap" role="button" tabindex="0" aria-label="Phóng to mã QR">
+        <div id="presQr"></div>
+        <p style="font-weight:800;font-size:20px;margin-top:8px;">${esc(session.shortCode||"")}</p>
+        <div class="pres-qr-hint">🔍 Nhấp để phóng to mã QR</div>
+      </div>
     </div>`;
   wirePresFs();
   try{ new QRCode(document.getElementById("presQr"), { text: studentJoinUrl(session, sid), width:160, height:160 }); }catch(e){}
+  wirePresentationQrPopup(session, sid);
   if(showChart){
     const canvas = $("#presChart");
     if(canvas){

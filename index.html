@@ -998,7 +998,8 @@ async function teacherClasses(c){
     const rows = await Promise.all(snap.docs.map(async d=>{
       const x = d.data();
       let sessCnt = "—";
-      // FIX 11: query phải kèm ownerId để khớp Firestore Rules (teacher chỉ LIST dữ liệu của chính mình)\n      try{ const cnt = await getCountFromServer(query(collection(db,"sessions"), where("ownerId","==",uid), where("classId","==",d.id))); sessCnt = cnt.data().count; }catch(e){}
+      // FIX 11: query phải kèm ownerId để khớp Firestore Rules (teacher chỉ LIST dữ liệu của chính mình)
+      try{ const cnt = await getCountFromServer(query(collection(db,"sessions"), where("ownerId","==",uid), where("classId","==",d.id))); sessCnt = cnt.data().count; }catch(e){}
       return `<tr><td>${esc(x.name)}</td><td>${esc(x.code||"—")}</td><td>${x.studentCount??"—"}</td><td>${sessCnt}</td><td>${fmtDateShort(x.createdAt)}</td>
         <td class="flex gap-8"><button class="btn btn-sm btn-outline" data-edit="${d.id}">SỬA</button><button class="btn btn-sm btn-danger" data-del="${d.id}">XÓA</button></td></tr>`;
     }));
@@ -1569,7 +1570,8 @@ async function teacherLiveControl(c, sessionId){
 
   let questions = [];
   try{
-    // FIX 11: kèm ownerId để truy vấn LIST questions phù hợp Security Rules\n    const qs = await getDocs(query(collection(db,"questions"), where("ownerId","==",STATE.user.uid), where("sessionId","==",sessionId), orderBy("order","asc")));
+    // FIX 11: kèm ownerId để truy vấn LIST questions phù hợp Security Rules
+    const qs = await getDocs(query(collection(db,"questions"), where("ownerId","==",STATE.user.uid), where("sessionId","==",sessionId), orderBy("order","asc")));
     questions = qs.docs.map(d=>({id:d.id, ...d.data()}));
   }catch(e){ c.innerHTML = errorBlock(e, ()=>teacherLiveControl(c,sessionId)); return; }
   if(questions.length===0){ c.innerHTML = `<div class="empty-state"><div class="ic">❓</div>Phiên này chưa có câu hỏi nào.</div>`; return; }
@@ -1773,7 +1775,8 @@ async function teacherReportView(c, sessionId){
     const session = sSnap.data();
     const classSnap = session.classId ? await getDoc(doc(db,"classes",session.classId)) : null;
     const className = classSnap && classSnap.exists() ? classSnap.data().name : "—";
-    // FIX 11: báo cáo giảng viên cũng phải lọc ownerId để khớp Security Rules\n    const qSnap = await getDocs(query(collection(db,"questions"), where("ownerId","==",STATE.user.uid), where("sessionId","==",sessionId), orderBy("order","asc")));
+    // FIX 11: báo cáo giảng viên cũng phải lọc ownerId để khớp Security Rules
+    const qSnap = await getDocs(query(collection(db,"questions"), where("ownerId","==",STATE.user.uid), where("sessionId","==",sessionId), orderBy("order","asc")));
     const questions = qSnap.docs.map(d=>({id:d.id,...d.data()}));
     const respSnap = await getDocs(collection(db,"sessions",sessionId,"responses"));
     const allResponses = respSnap.docs.map(d=>d.data());

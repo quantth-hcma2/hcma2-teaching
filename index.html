@@ -2759,8 +2759,52 @@ const percentLabelsPlugin = {
   }
 };
 
+
+function chartLabelText(value){
+  if(Array.isArray(value)) return value.join(" ");
+  return value==null?"":String(value);
+}
+function chartShortText(value,maxChars){
+  const text=chartLabelText(value).replace(/\s+/g," ").trim();
+  if(text.length<=maxChars) return text;
+  return text.slice(0,Math.max(1,maxChars-1)).trimEnd()+"…";
+}
+function chartWrapText(value,maxChars,maxLines){
+  const text=chartLabelText(value).replace(/\s+/g," ").trim();
+  if(!text) return "";
+  const words=text.split(" "), lines=[]; let line="";
+  for(const word of words){
+    const next=(line+" "+word).trim();
+    if(next.length<=maxChars){ line=next; continue; }
+    if(line) lines.push(line);
+    line=word.length>maxChars?chartShortText(word,maxChars):word;
+    if(lines.length===maxLines-1) break;
+  }
+  if(line && lines.length<maxLines) lines.push(line);
+  const shown=lines.join(" ");
+  if(shown.length<text.length && lines.length){
+    const last=lines[lines.length-1].replace(/…$/,"");
+    lines[lines.length-1]=(last.length>=maxChars?last.slice(0,maxChars-1).trimEnd():last)+"…";
+  }
+  return lines;
+}
+function chartFullLabel(ctx){
+  const item=Array.isArray(ctx)?ctx[0]:ctx;
+  if(!item) return "";
+  const labels=item.chart?.data?.labels||[];
+  return chartLabelText(labels[item.dataIndex]??item.label);
+}
+function chartLegendLabels(chart,maxChars){
+  const items=Chart.defaults.plugins.legend.labels.generateLabels(chart);
+  return items.map(item=>({...item,text:chartShortText(item.text,maxChars)}));
+}
+
 function chartOptions(question, chartType, agg, mode){
   const isReport=mode==="report", isPresentation=mode==="presentation";
+  const labelCount=Math.max(0,(agg?.labels||[]).length);
+  const verticalChars=isPresentation?24:(isReport?20:18);
+  const horizontalChars=isPresentation?34:(isReport?29:26);
+  const legendChars=isPresentation?38:(isReport?32:28);
   const base={
     responsive:true,
     maintainAspectRatio:false,
@@ -2770,9 +2814,12 @@ function chartOptions(question, chartType, agg, mode){
       legend:{
         display:chartType==="stacked"||chartType==="pie"||chartType==="donut",
         position:"bottom",
-        labels:{boxWidth:14,padding:14,font:{size:isPresentation?14:12}}
+        labels:{
+          boxWidth:14,padding:isReport?10:14,font:{size:isPresentation?14:(isReport?11:12)},
+          generateLabels:chart=>chartLegendLabels(chart,legendChars)
+        }
       },
-      tooltip:{enabled:true},
+      tooltip:{enabled:true,callbacks:{title:items=>chartFullLabel(items)}},
       percentLabels:{
         display:chartType==="pie"||chartType==="donut"||chartType==="stacked",
         mode:chartType==="stacked"?"stacked":"pie",
@@ -2784,6 +2831,7 @@ function chartOptions(question, chartType, agg, mode){
 
   if(chartType==="pie"||chartType==="donut"){
     base.plugins.tooltip.callbacks={
+      title:items=>chartFullLabel(items),
       label:(ctx)=>{
         const data=ctx.dataset.data||[];
         const total=data.reduce((a,b)=>a+(Number(b)||0),0);
@@ -2800,9 +2848,9 @@ function chartOptions(question, chartType, agg, mode){
     base.indexAxis="y";
     base.scales={
       x:{stacked:true,beginAtZero:true,min:0,max:100,title:{display:true,text:"Tỷ lệ (%)"},ticks:{callback:v=>v+"%"}},
-      y:{stacked:true,grid:{display:false}}
+      y:{stacked:true,grid:{display:false},ticks:{callback:function(value){return chartWrapText(this.getLabelForValue(value),horizontalChars,3);}}}
     };
-    base.plugins.tooltip.callbacks={label:ctx=>`${ctx.dataset.label}: ${ctx.raw}%`};
+    base.plugins.tooltip.callbacks={title:items=>chartFullLabel(items),label:ctx=>`${chartLabelText(ctx.dataset.label)}: ${ctx.raw}%`};
     return base;
   }
 
@@ -2811,8 +2859,9 @@ function chartOptions(question, chartType, agg, mode){
     base.plugins.legend.display=false;
     base.scales={
       x:{beginAtZero:true,title:{display:true,text:question.type==="ranking"?"Điểm xếp hạng":"Số lượt"},ticks:{precision:0}},
-      y:{grid:{display:false},ticks:{autoSkip:false}}
+      y:{grid:{display:false},ticks:{autoSkip:false,font:{size:isPresentation?13:(isReport?10:11)},callback:function(value){return chartWrapText(this.getLabelForValue(value),horizontalChars,isReport?2:3);}}}
     };
+    base.plugins.tooltip.callbacks={title:items=>chartFullLabel(items),label:ctx=>`${ctx.raw} ${question.type==="ranking"?"điểm":"lượt"}`};
     return base;
   }
 
@@ -2823,7 +2872,7 @@ function chartOptions(question, chartType, agg, mode){
       x:{title:{display:true,text:"Điểm"},grid:{display:false},ticks:{autoSkip:false}},
       y:{beginAtZero:true,suggestedMax:Math.max(2,maxCount),title:{display:true,text:"Số học viên"},ticks:{precision:0,stepSize:1}}
     };
-    base.plugins.tooltip.callbacks={label:ctx=>`${ctx.raw} học viên chọn điểm ${ctx.label}`};
+    base.plugins.tooltip.callbacks={title:items=>chartFullLabel(items),label:ctx=>`${ctx.raw} học viên chọn điểm ${chartFullLabel(ctx)}`};
     return base;
   }
 
@@ -2831,20 +2880,19 @@ function chartOptions(question, chartType, agg, mode){
   base.plugins.legend.display=false;
   base.scales={
     x:{grid:{display:false},ticks:{
-      autoSkip:false,maxRotation:isPresentation?0:35,minRotation:0,
-      font:{size:isPresentation?13:11},
+      autoSkip:labelCount>(isPresentation?10:8),maxTicksLimit:isPresentation?10:8,maxRotation:0,minRotation:0,
+      font:{size:isPresentation?13:(isReport?10:11)},
       callback:function(value){
         const label=this.getLabelForValue(value);
-        if(!isPresentation || typeof label!=="string" || label.length<=22) return label;
-        const words=label.split(/\s+/); const lines=[]; let line="";
-        words.forEach(w=>{ const next=(line+" "+w).trim(); if(next.length>22 && line){lines.push(line);line=w;}else line=next; });
-        if(line) lines.push(line); return lines.slice(0,3);
+        return chartWrapText(label,verticalChars,isReport?2:3);
       }
     }},
     y:{beginAtZero:true,title:{display:true,text:question.type==="multiple"?"Lượt chọn":"Số học viên"},ticks:{precision:0,stepSize:1}}
   };
+  base.plugins.tooltip.callbacks={title:items=>chartFullLabel(items),label:ctx=>`${ctx.raw} ${question.type==="multiple"?"lượt chọn":"học viên"}`};
   return base;
 }
+
 function chartSummaryHtml(question, options, responseDocs){
   const type=question.type;
   if(type==="scale"){

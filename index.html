@@ -2526,7 +2526,10 @@ function wizStep8(c){
   const w = STATE.wizard; const s = w.settings;
   const cls = w.classesCache.find(x=>x.id===w.classId);
   c.innerHTML = wizardShellHtml(`
-    <h3>${esc(w.title)}</h3>
+    <div class="flex-between">
+      <h3 style="margin:0">${esc(w.title)}</h3>
+      <button type="button" class="btn btn-outline" id="wizStudentPreview">📱 XEM NHƯ HỌC VIÊN</button>
+    </div>
     <p class="mut">Lớp: <b>${esc(cls?cls.name:"—")}</b> · ${w.questions.length} câu hỏi · Thời gian: ${fmtDuration(s.timeLimit)} · Kết quả: ${s.showResults==="live"?"Trực tiếp":"Ẩn"}</p>
     ${w.questions.map((q,i)=>`
       <div class="card">
@@ -2543,6 +2546,7 @@ function wizStep8(c){
         <button type="button" class="btn btn-lg btn-ok" id="wizFinish">BẮT ĐẦU — Tạo phiên</button>
       </div>
     </div>`);
+  $("#wizStudentPreview").onclick = ()=>{ w.qIndex=0; openWizardStudentPreview(); };
   $("#wizCancel").onclick = ()=>{ if(confirm("Hủy bỏ tạo phiên? Dữ liệu đang nhập sẽ mất.")){ STATE.wizard=null; STATE.teacherNav="overview"; window.location.hash=""; teacherRoute(); } };
   $("#wizBack").onclick = ()=>{ w.step=7; renderWizard(c); };
   $("#wizFinish").onclick = async ()=>{

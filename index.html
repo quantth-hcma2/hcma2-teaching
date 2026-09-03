@@ -403,6 +403,11 @@ tr:hover td{background:#fafbfc;}
 }
 
 
+
+/* V1 FINAL — Connection health */
+.net-banner{position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:12000;padding:9px 16px;border-radius:999px;background:#991b1b;color:#fff;font-weight:800;box-shadow:0 6px 24px #0003;max-width:92vw;text-align:center}.net-banner.online{background:#166534}.health-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.health-item{border:1px solid var(--border);border-radius:12px;padding:10px;background:#fff}.health-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#16a34a;margin-right:6px}.health-dot.bad{background:#dc2626}.health-dot.warn{background:#ca8a04}@media(max-width:800px){.health-grid{grid-template-columns:1fr 1fr}}
+/* Question Sets */
+.qset-card .qset-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.qset-list{max-height:54vh;overflow:auto}.qset-row{border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px}
 </style>
 </head>
 <body>
@@ -448,6 +453,9 @@ import {
   query, where, orderBy, limit, onSnapshot, serverTimestamp, Timestamp, writeBatch, increment,
   getCountFromServer, collectionGroup
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+import {
+  getStorage, ref as storageRef, uploadBytes, getDownloadURL, deleteObject
+} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
 /* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
 const firebaseConfig = {
@@ -463,6 +471,7 @@ const firebaseConfig = {
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
 const db = getFirestore(fbApp);
+const storage = getStorage(fbApp);
 setPersistence(auth, browserLocalPersistence).catch(()=>{});
 
 // ---------------- App Firebase THỨ HAI — dành riêng cho Học viên & Trình chiếu ----------------
@@ -477,6 +486,7 @@ setPersistence(auth, browserLocalPersistence).catch(()=>{});
 const publicApp = initializeApp(firebaseConfig, "public");
 const publicAuth = getAuth(publicApp);
 const publicDb = getFirestore(publicApp);
+const publicStorage = getStorage(publicApp);
 setPersistence(publicAuth, browserLocalPersistence).catch(()=>{});
 
 // Analytics: chỉ dùng để thống kê sử dụng, KHÔNG dùng để lưu dữ liệu bỏ phiếu.
@@ -486,7 +496,24 @@ analyticsIsSupported().then((ok) => { if (ok) { try { analytics = getAnalytics(f
 function logEvent_(name, params){ try{ if(analytics){ import("https://www.gstatic.com/firebasejs/10.12.5/firebase-analytics.js").then(m=>m.logEvent(analytics,name,params||{})); } }catch(e){} }
 
 /* ---------------- Base URL (tự xác định, tương thích subdirectory GitHub Pages) ---------------- */
+
 const APP_BASE_URL = window.location.origin + window.location.pathname;
+
+let netBannerTimer=null;
+function updateNetworkBanner(){
+  let b=document.getElementById("hcmaNetBanner");
+  if(!navigator.onLine){
+    if(!b){b=document.createElement("div");b.id="hcmaNetBanner";b.className="net-banner";document.body.appendChild(b);}
+    b.className="net-banner";b.textContent="🔴 Mất kết nối Internet — HCMA2 đang chờ kết nối lại…";
+  }else if(b){
+    b.className="net-banner online";b.textContent="🟢 Đã kết nối Internet trở lại.";
+    clearTimeout(netBannerTimer);netBannerTimer=setTimeout(()=>b?.remove(),2200);
+  }
+}
+window.addEventListener("offline",updateNetworkBanner);
+window.addEventListener("online",updateNetworkBanner);
+setTimeout(updateNetworkBanner,0);
+
 
 /* ---------------- Hằng số nghiệp vụ ---------------- */
 const QUESTION_TYPES = {
@@ -1434,12 +1461,12 @@ async function groupLive(c,id,isAdminView){
       return `<div class="group-panel" data-group-panel="${i}"><h4>Nhóm ${i}</h4>
         ${topics[String(i)]?.topic?`<div class="group-topic">📌 ${esc(topics[String(i)].topic)}</div>`:""}
         <div>${ns.length?ns.map(n=>`<div class="group-note">${esc(n.text||"")}</div>`).join(""):`<div class="mut small">Đang chờ ý kiến…</div>`}</div>
-        ${ps.length?`<div class="group-media">${ps.map(p=>`<img src="${p.dataUrl}" data-gphoto="${p.id}" alt="Ảnh nhóm ${i}">`).join("")}</div>`:""}
-        ${fs.length?`<div>${fs.map(f=>f.link?`<a class="group-file" href="${esc(f.link)}" target="_blank" rel="noopener">🔗 ${esc(f.name||"Liên kết")}</a>`:`<a class="group-file" href="${f.dataUrl}" download="${esc(f.name||"tep")}">📄 ${esc(f.name||"Tệp")}</a>`).join("")}</div>`:""}
+        ${ps.length?`<div class="group-media">${ps.map(p=>`<img src="${p.url||p.dataUrl}" data-gphoto="${p.id}" alt="Ảnh nhóm ${i}">`).join("")}</div>`:""}
+        ${fs.length?`<div>${fs.map(f=>f.link?`<a class="group-file" href="${esc(f.link)}" target="_blank" rel="noopener">🔗 ${esc(f.name||"Liên kết")}</a>`:`<a class="group-file" href="${f.url||f.dataUrl}" download="${esc(f.name||"tep")}">📄 ${esc(f.name||"Tệp")}</a>`).join("")}</div>`:""}
       </div>`;
     }).join("");
     $("#gRespCount").textContent=`${total} nội dung đã gửi`;
-    $$("[data-gphoto]").forEach(img=>img.onclick=e=>{e.stopPropagation();const p=photos.find(x=>x.id===img.dataset.gphoto);if(p)openImageViewerSimple(p.dataUrl);});
+    $$("[data-gphoto]").forEach(img=>img.onclick=e=>{e.stopPropagation();const p=photos.find(x=>x.id===img.dataset.gphoto);if(p)openImageViewerSimple(p.url||p.dataUrl);});
     $$("[data-group-panel]").forEach(panel=>panel.onclick=()=>{
       const i=Number(panel.dataset.groupPanel);
       const ns=notes.filter(x=>Number(x.group)===i).sort((x,y)=>qrDateValue(x.createdAt)-qrDateValue(y.createdAt));
@@ -1451,9 +1478,9 @@ async function groupLive(c,id,isAdminView){
         <div class="small mut" style="margin-bottom:12px">${ns.length} ý kiến · ${ps.length} ảnh · ${fs.length} tệp/link</div>
         ${ns.length?ns.map(n=>`<div class="group-note">${esc(n.text||"")}</div>`).join(""):`<div class="mut">Đang chờ ý kiến…</div>`}
         ${ps.length?`<div class="group-media mt-14">${ps.map(p=>`<img src="${p.dataUrl}" data-popup-photo="${p.id}" alt="Ảnh nhóm ${i}">`).join("")}</div>`:""}
-        ${fs.length?`<div class="mt-14">${fs.map(f=>f.link?`<a class="group-file" href="${esc(f.link)}" target="_blank" rel="noopener">🔗 ${esc(f.name||"Liên kết")}</a>`:`<a class="group-file" href="${f.dataUrl}" download="${esc(f.name||"tep")}">📄 ${esc(f.name||"Tệp")}</a>`).join("")}</div>`:""}`;
+        ${fs.length?`<div class="mt-14">${fs.map(f=>f.link?`<a class="group-file" href="${esc(f.link)}" target="_blank" rel="noopener">🔗 ${esc(f.name||"Liên kết")}</a>`:`<a class="group-file" href="${f.url||f.dataUrl}" download="${esc(f.name||"tep")}">📄 ${esc(f.name||"Tệp")}</a>`).join("")}</div>`:""}`;
       $("#groupPanelPopup").classList.remove("hidden");
-      $$("[data-popup-photo]").forEach(img=>img.onclick=e=>{e.stopPropagation();const p=photos.find(x=>x.id===img.dataset.popupPhoto);if(p)openImageViewerSimple(p.dataUrl);});
+      $$("[data-popup-photo]").forEach(img=>img.onclick=e=>{e.stopPropagation();const p=photos.find(x=>x.id===img.dataset.popupPhoto);if(p)openImageViewerSimple(p.url||p.dataUrl);});
     });
   }
   let groupWarnedAt10=false;
@@ -1565,12 +1592,26 @@ async function renderGroupStudentEntry(){
       try{await addDoc(collection(publicDb,GROUP_COLLECTION,id,"notes"),{group:selected,text,participantId:publicAuth.currentUser.uid,createdAt:serverTimestamp()});$("#gsText").value="";$("#gsChar").textContent="0/1500";msg.textContent="Đã gửi ✓";}catch(e){msg.textContent=mapError(e);}
     };
     if($("#gsSendPhoto")) $("#gsSendPhoto").onclick=async()=>{
-      const f=$("#gsPhoto").files[0],msg=$("#gsPhotoMsg"); if(!f){msg.textContent="Vui lòng chọn ảnh.";return;} if(f.size>650*1024){msg.textContent="Ảnh quá lớn. Vui lòng chọn ảnh dưới khoảng 650KB.";return;}
-      try{const dataUrl=await groupFileToDataUrl(f);await addDoc(collection(publicDb,GROUP_COLLECTION,id,"photos"),{group:selected,name:f.name,dataUrl,participantId:publicAuth.currentUser.uid,createdAt:serverTimestamp()});$("#gsPhoto").value="";msg.textContent="Đã gửi ảnh ✓";}catch(e){msg.textContent=mapError(e);}
+      const f=$("#gsPhoto").files[0],msg=$("#gsPhotoMsg"); if(!f){msg.textContent="Vui lòng chọn ảnh.";return;} if(f.size>5*1024*1024){msg.textContent="Ảnh quá lớn. Giới hạn 5MB.";return;} if(!f.type.startsWith("image/")){msg.textContent="Tệp đã chọn không phải ảnh.";return;}
+      try{
+        msg.textContent="Đang tải ảnh…";
+        const uid=publicAuth.currentUser.uid, safe=f.name.replace(/[^a-zA-Z0-9._-]/g,"_");
+        const path=`groupActivities/${id}/photos/${uid}/${Date.now()}_${safe}`;
+        const sr=storageRef(publicStorage,path); await uploadBytes(sr,f,{contentType:f.type}); const url=await getDownloadURL(sr);
+        await addDoc(collection(publicDb,GROUP_COLLECTION,id,"photos"),{group:selected,name:f.name,url,storagePath:path,size:f.size,contentType:f.type,participantId:uid,createdAt:serverTimestamp()});
+        $("#gsPhoto").value="";msg.textContent="Đã gửi ảnh ✓";
+      }catch(e){msg.textContent=mapError(e);}
     };
     if($("#gsSendFile")) $("#gsSendFile").onclick=async()=>{
-      const f=$("#gsFile").files[0],msg=$("#gsFileMsg"); if(!f){msg.textContent="Vui lòng chọn file.";return;} if(f.size>650*1024){msg.textContent="File quá lớn. Hãy tải lên Drive/OneDrive và gửi link.";return;}
-      try{const dataUrl=await groupFileToDataUrl(f);await addDoc(collection(publicDb,GROUP_COLLECTION,id,"files"),{group:selected,name:f.name,dataUrl,link:null,participantId:publicAuth.currentUser.uid,createdAt:serverTimestamp()});$("#gsFile").value="";msg.textContent="Đã gửi file ✓";}catch(e){msg.textContent=mapError(e);}
+      const f=$("#gsFile").files[0],msg=$("#gsFileMsg"); if(!f){msg.textContent="Vui lòng chọn file.";return;} if(f.size>10*1024*1024){msg.textContent="File quá lớn. Giới hạn 10MB; file lớn hơn hãy gửi link Drive/OneDrive.";return;}
+      try{
+        msg.textContent="Đang tải file…";
+        const uid=publicAuth.currentUser.uid,safe=f.name.replace(/[^a-zA-Z0-9._-]/g,"_");
+        const path=`groupActivities/${id}/files/${uid}/${Date.now()}_${safe}`;
+        const sr=storageRef(publicStorage,path);await uploadBytes(sr,f,{contentType:f.type||"application/octet-stream"});const url=await getDownloadURL(sr);
+        await addDoc(collection(publicDb,GROUP_COLLECTION,id,"files"),{group:selected,name:f.name,url,storagePath:path,size:f.size,contentType:f.type||"",link:null,participantId:uid,createdAt:serverTimestamp()});
+        $("#gsFile").value="";msg.textContent="Đã gửi file ✓";
+      }catch(e){msg.textContent=mapError(e);}
     };
     if($("#gsSendLink")) $("#gsSendLink").onclick=async()=>{
       const raw=$("#gsLink").value.trim(),msg=$("#gsFileMsg"),url=qrNormalizeUrl(raw);if(!url){msg.textContent="Liên kết không hợp lệ.";return;}
@@ -1578,7 +1619,7 @@ async function renderGroupStudentEntry(){
     };
     const timer=setInterval(()=>{
       const el=$("#gsTimer"); if(!el)return;
-      if(!a.startedAt){el.textContent=fmtDuration(a.durationSec||0);return;}
+      if(!a.startedAt){el.textContent=fmtDuration(a.pausedRemainingSec!=null?a.pausedRemainingSec:(a.durationSec||0));return;}
       const start=a.startedAt.toMillis?a.startedAt.toMillis():new Date(a.startedAt).getTime();
       const remain=Math.max(0,Math.round((start+(a.durationSec||0)*1000-Date.now())/1000));
       el.textContent=fmtDuration(remain);el.classList.toggle("done",remain<=0);
@@ -1733,6 +1774,7 @@ const TEACHER_MENU = [
   {key:"classes", label:"Lớp học", icon:"🏫"},
   {key:"create", label:"Tạo tương tác", icon:"➕"},
   {key:"library", label:"Thư viện câu hỏi", icon:"📚"},
+  {key:"questionSets", label:"Bộ câu hỏi mẫu", icon:"🗂️"},
   {key:"qrlinks", label:"QR vĩnh viễn", icon:"🔗"},
   {key:"groups", label:"Thảo luận nhóm", icon:"👥"},
   {key:"history", label:"Lịch sử phiên", icon:"🕓"},
@@ -1759,6 +1801,7 @@ function teacherRoute(){
   if(key==="classes") return teacherClasses(c);
   if(key==="create"){ window.location.hash="#/wizard"; return teacherWizard(c,null); }
   if(key==="library") return teacherLibrary(c);
+  if(key==="questionSets") return teacherQuestionSets(c);
   if(key==="qrlinks") return qrManager(c, false);
   if(key==="groups") return groupModule(c, false);
   if(key==="history") return teacherHistory(c);
@@ -1778,6 +1821,7 @@ async function teacherOverview(c){
         <button class="btn btn-lg btn-outline" id="btnQuickGroup">👥 THẢO LUẬN NHÓM</button>
         <button class="btn btn-lg btn-outline" id="btnQuickQr">🔗 QR VĨNH VIỄN</button>
         <button class="btn btn-lg btn-outline" id="btnQuickLib">📚 THƯ VIỆN CÂU HỎI</button>
+        <button class="btn btn-lg btn-outline" id="btnQuickSets">🗂️ BỘ CÂU HỎI MẪU</button>
       </div>
     </div>
     <div class="card mt-20"><h3>Phiên gần đây</h3><div class="table-wrap" id="tOvRecent"><div class="mut">Đang tải…</div></div></div>`;
@@ -1785,6 +1829,7 @@ async function teacherOverview(c){
   $("#btnQuickGroup").onclick=()=>{STATE.teacherNav="groups";teacherRoute();};
   $("#btnQuickQr").onclick=()=>{STATE.teacherNav="qrlinks";teacherRoute();};
   $("#btnQuickLib").onclick=()=>{STATE.teacherNav="library";teacherRoute();};
+  $("#btnQuickSets").onclick=()=>{STATE.teacherNav="questionSets";teacherRoute();};
   try{
     const classesQ = query(collection(db,"classes"), where("ownerId","==",uid));
     const sessionsQ = query(collection(db,"sessions"), where("ownerId","==",uid));
@@ -2021,6 +2066,51 @@ function openLibraryForm(existing){
 }
 function optionRowHtml(val, idx){
   return `<div class="option-row"><input type="text" class="optText" value="${esc(val)}" placeholder="Phương án ${idx+1}"><button type="button" class="btn btn-sm btn-ghost optRemove">✕</button></div>`;
+}
+
+
+/* ---------- BỘ CÂU HỎI MẪU / QUESTION SETS ---------- */
+async function teacherQuestionSets(c){
+  c.innerHTML=`<div class="section-title"><div><h2>🗂️ Bộ câu hỏi mẫu</h2><p class="mut">Lưu cả một bộ câu hỏi để dùng lại nhanh cho nhiều lớp/khóa học.</p></div>
+    <button class="btn" id="newQSet">+ TẠO BỘ TỪ THƯ VIỆN</button></div>
+    <div class="grid grid-3 mt-14" id="qsetGrid"><div class="mut">Đang tải…</div></div>`;
+  $("#newQSet").onclick=()=>openQuestionSetBuilder();
+  const q=query(collection(db,"questionSets"),where("ownerId","==",STATE.user.uid),orderBy("createdAt","desc"));
+  track(onSnapshot(q,snap=>{
+    const sets=snap.docs.map(d=>({id:d.id,...d.data()}));
+    $("#qsetGrid").innerHTML=sets.length?sets.map(s=>`<div class="card qset-card"><span class="chip">${esc(s.category||"Bộ câu hỏi")}</span>
+      <h3>${esc(s.name||"Chưa đặt tên")}</h3><div class="small mut">${(s.questions||[]).length} câu hỏi</div>
+      ${s.description?`<p class="small">${esc(s.description)}</p>`:""}
+      <div class="qset-actions"><button class="btn btn-sm" data-use-set="${s.id}">DÙNG TẠO TƯƠNG TÁC</button>
+      <button class="btn btn-sm btn-ghost" data-copy-set="${s.id}">SAO CHÉP</button><button class="btn btn-sm btn-danger" data-del-set="${s.id}">XÓA</button></div></div>`).join(""):`<div class="empty-state" style="grid-column:1/-1"><div class="ic">🗂️</div>Chưa có bộ câu hỏi mẫu.</div>`;
+    $$("[data-use-set]").forEach(b=>b.onclick=()=>{
+      const s=sets.find(x=>x.id===b.dataset.useSet);if(!s)return;initWizard();
+      STATE.wizard.questions=(s.questions||[]).map(x=>({...blankQuestion(),...x,options:Array.isArray(x.options)?x.options.slice():[]}));
+      if(!STATE.wizard.questions.length)STATE.wizard.questions=[blankQuestion()];
+      STATE.wizard.title=s.name||"";STATE.wizard.step=1;STATE.wizard.qIndex=0;window.location.hash="#/wizard";
+      toast("Đã nạp bộ câu hỏi. Hãy chọn lớp và kiểm tra trước khi tạo phiên.","ok");
+    });
+    $$("[data-copy-set]").forEach(b=>b.onclick=async()=>{const s=sets.find(x=>x.id===b.dataset.copySet);if(!s)return;const {id,createdAt,updatedAt,...rest}=s;await addDoc(collection(db,"questionSets"),{...rest,name:(rest.name||"Bộ câu hỏi")+" (bản sao)",createdAt:serverTimestamp(),updatedAt:serverTimestamp()});toast("Đã sao chép bộ câu hỏi.","ok");});
+    $$("[data-del-set]").forEach(b=>b.onclick=async()=>{const s=sets.find(x=>x.id===b.dataset.delSet);if(!confirm(`Xóa bộ “${s?.name||""}”? Câu hỏi gốc trong Thư viện không bị xóa.`))return;await deleteDoc(doc(db,"questionSets",b.dataset.delSet));toast("Đã xóa bộ câu hỏi.","ok");});
+  },e=>$("#qsetGrid").innerHTML=errorBlock(e,()=>teacherQuestionSets(c))));
+}
+async function openQuestionSetBuilder(){
+  const snap=await getDocs(query(collection(db,"library"),where("ownerId","==",STATE.user.uid),orderBy("createdAt","desc")));
+  const items=snap.docs.map(d=>({id:d.id,...d.data()}));
+  if(!items.length){toast("Thư viện câu hỏi đang trống. Hãy lưu câu hỏi trước.","warn");return;}
+  openModal(`<h3>Tạo bộ câu hỏi mẫu</h3><div class="field"><label>Tên bộ *</label><input id="qsetName" placeholder="Ví dụ: Đánh giá cuối buổi"></div>
+    <div class="field"><label>Mô tả</label><input id="qsetDesc" placeholder="Mục đích sử dụng…"></div>
+    <div class="field"><label>Phân loại</label><select id="qsetCat">${LIBRARY_CATEGORIES.map(x=>`<option>${esc(x)}</option>`).join("")}</select></div>
+    <div class="qset-list">${items.map(x=>`<label class="qset-row" style="display:block"><input type="checkbox" data-qset-item="${x.id}"> <b>${esc(x.question)}</b><div class="small mut">${esc(QUESTION_TYPES[x.type]?.label||x.type)} · ${esc(x.category||"")}</div></label>`).join("")}</div>
+    <div class="flex-between mt-14"><button class="btn btn-ghost" id="qsetCancel">HỦY</button><button class="btn" id="qsetSave">LƯU BỘ CÂU HỎI</button></div>`,true);
+  $("#qsetCancel").onclick=closeModal;
+  $("#qsetSave").onclick=async()=>{
+    const name=$("#qsetName").value.trim();const ids=$$("[data-qset-item]:checked").map(x=>x.dataset.qsetItem);
+    if(!name){toast("Vui lòng nhập tên bộ câu hỏi.","warn");return;}if(!ids.length){toast("Chọn ít nhất 1 câu hỏi.","warn");return;}
+    const qs=ids.map(id=>items.find(x=>x.id===id)).filter(Boolean).map(x=>{const q=wizardQuestionFromLibrary(x);return {type:q.type,question:q.question,description:q.description||"",options:q.options||[],chartType:q.chartType,scaleMin:q.scaleMin,scaleMax:q.scaleMax,required:q.required!==false,timeLimit:q.timeLimit||0,allowChangeAnswer:!!q.allowChangeAnswer};});
+    await addDoc(collection(db,"questionSets"),{ownerId:STATE.user.uid,name,description:$("#qsetDesc").value.trim(),category:$("#qsetCat").value,questions:qs,questionCount:qs.length,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+    closeModal();toast("Đã lưu bộ câu hỏi mẫu.","ok");
+  };
 }
 
 /* ============================================================
@@ -2915,6 +3005,22 @@ async function teacherLiveControl(c, sessionId){
   if(curIndex<0) curIndex = 0;
 
   renderShell();
+  let healthLastRealtime=Date.now();
+  function updateHealthUI(){
+    const online=navigator.onLine;
+    const nd=$("#healthNetDot"),rd=$("#healthRtDot");
+    if(nd)nd.classList.toggle("bad",!online);
+    if($("#healthNet"))$("#healthNet").textContent=online?"Đã kết nối":"Mất kết nối";
+    const fresh=online && (Date.now()-healthLastRealtime<15000);
+    if(rd){rd.classList.toggle("bad",!online);rd.classList.toggle("warn",online&&!fresh);}
+    if($("#healthRt"))$("#healthRt").textContent=!online?"Chờ Internet":fresh?"Hoạt động":"Đang chờ cập nhật…";
+    if($("#healthLast"))$("#healthLast").textContent=new Date(healthLastRealtime).toLocaleTimeString("vi-VN");
+    const clsSize=Number(session.classSize||session.studentCount||0);
+    if($("#healthLargeWarn"))$("#healthLargeWarn").classList.toggle("hidden",clsSize<=300);
+  }
+  const healthTimer=setInterval(updateHealthUI,2000);track(()=>clearInterval(healthTimer));
+  window.addEventListener("online",updateHealthUI);window.addEventListener("offline",updateHealthUI);
+  track(()=>{window.removeEventListener("online",updateHealthUI);window.removeEventListener("offline",updateHealthUI);});
 
   function renderShell(){
     c.innerHTML = `
@@ -2932,6 +3038,12 @@ async function teacherLiveControl(c, sessionId){
       <button class="btn ${session.showResults==='live'?'btn-warn':'btn-outline'}" id="btnToggleResults">${session.showResults==='live'?"ẨN KẾT QUẢ":"HIỂN THỊ KẾT QUẢ"}</button>
       <button class="btn btn-ghost" id="btnBackDash">← Về tổng quan</button>
     </div>
+    <div class="card mt-14 no-print"><div class="health-grid">
+      <div class="health-item"><div><span class="health-dot" id="healthNetDot"></span><b>Internet</b></div><div class="small mut" id="healthNet">Đang kiểm tra…</div></div>
+      <div class="health-item"><div><span class="health-dot" id="healthRtDot"></span><b>Firebase Realtime</b></div><div class="small mut" id="healthRt">Đang kết nối…</div></div>
+      <div class="health-item"><div><b>👥 Câu hiện tại</b></div><div class="small mut" id="healthParticipants">0 phản hồi</div></div>
+      <div class="health-item"><div><b>📡 Cập nhật cuối</b></div><div class="small mut" id="healthLast">—</div></div>
+    </div><div class="small mt-8 hidden" id="healthLargeWarn" style="color:#b45309;font-weight:700">⚠️ Lớp trên 300 học viên: nên dùng kết nối Internet ổn định và hạn chế mở nhiều màn hình Live Control cùng lúc.</div></div>
     <div class="live-grid mt-14">
       <div>
         <div class="card">
@@ -2984,6 +3096,8 @@ async function teacherLiveControl(c, sessionId){
     track(onSnapshot(respQ, (snap)=>{
       const docs = snap.docs.map(d=>d.data());
       liveCounts[q.id] = docs.length;
+      healthLastRealtime=Date.now();updateHealthUI();
+      $("#healthParticipants") && ($("#healthParticipants").textContent=`${docs.length} phản hồi`);
       $("#respCount") && ($("#respCount").textContent = docs.length);
       const totalAll = Object.values(liveCounts).reduce((a,b)=>a+b,0);
       // Ghi lại dữ liệu tổng hợp AN TOÀN (không chứa câu trả lời cá nhân) vào session
@@ -3000,13 +3114,11 @@ async function teacherLiveControl(c, sessionId){
             .slice(0,24)
             .map(x=>x.text.slice(0,500))
         : null;
-      updateDoc(sessionRef, {
-        responseCount: totalAll, updatedAt: serverTimestamp(),
-        liveAggregate: {
-          questionId: q.id, chartType: q.chartType, agg, respondedCount: docs.length,
-          openAnswers, updatedAt: Timestamp.now()
-        }
-      }).catch(()=>{});
+      // Aggregate chuyên dụng: một giảng viên là writer duy nhất, tránh hotspot do hàng trăm học viên cùng increment.
+      // Presentation/Student có thể đọc 1 document aggregate thay vì đọc toàn bộ responses.
+      const aggregatePayload={questionId:q.id,sessionId,ownerId:STATE.user.uid,chartType:q.chartType,agg,respondedCount:docs.length,openAnswers,updatedAt:serverTimestamp()};
+      setDoc(doc(db,"sessions",sessionId,"liveAggregates",q.id),aggregatePayload,{merge:true}).catch(()=>{});
+      updateDoc(sessionRef,{responseCount:totalAll,updatedAt:serverTimestamp(),liveAggregate:{questionId:q.id,chartType:q.chartType,agg,respondedCount:docs.length,openAnswers,updatedAt:Timestamp.now()}}).catch(()=>{});
       if(q.type==="open"){
         renderOpenList(docs);
       } else {

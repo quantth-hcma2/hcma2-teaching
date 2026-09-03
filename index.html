@@ -327,6 +327,29 @@ tr:hover td{background:#fafbfc;}
   .report-contact-print a{color:#155e75;text-decoration:none;font-weight:700;}
 }
 
+
+/* ---------------- QR VĨNH VIỄN MODULE ---------------- */
+.qr-manager-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.qr-create-grid{display:grid;grid-template-columns:1fr 220px;gap:12px}
+.qr-list{display:grid;gap:12px;margin-top:14px}
+.qr-item{display:grid;grid-template-columns:92px 1fr;gap:16px;align-items:start;border:1px solid var(--border);border-radius:14px;padding:14px;background:#fff}
+.qr-thumb{background:#fff;border:1px solid var(--border);border-radius:10px;padding:6px;cursor:pointer;width:86px;height:86px}
+.qr-thumb img{width:72px;height:72px;display:block}
+.qr-code{font-weight:800;color:var(--brand);letter-spacing:.03em}
+.qr-meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px}
+.qr-target{word-break:break-all;font-size:13px;background:#f8fafc;border:1px solid var(--border);padding:8px 10px;border-radius:8px}
+.qr-edit-row{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:8px}
+.qr-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.qr-owner{font-size:12px;color:var(--muted)}
+.qr-result{display:grid;grid-template-columns:170px 1fr;gap:18px;align-items:center}
+.qr-result img{width:160px;height:160px;background:#fff;border-radius:10px;padding:8px;border:1px solid var(--border);cursor:pointer}
+#qrBigOverlay{position:fixed;inset:0;background:rgba(2,6,23,.92);z-index:9999;display:none;align-items:center;justify-content:center;padding:24px}
+#qrBigOverlay.show{display:flex}
+#qrBigOverlay .qr-big-box{text-align:center;color:#fff;max-width:760px}
+#qrBigOverlay img{width:min(72vw,620px);height:min(72vw,620px);background:#fff;padding:18px;border-radius:18px}
+#qrBigOverlay .qr-big-link{margin-top:12px;word-break:break-all;font-size:13px;color:#e2e8f0}
+@media(max-width:700px){.qr-create-grid{grid-template-columns:1fr}.qr-item{grid-template-columns:1fr}.qr-thumb{width:86px}.qr-result{grid-template-columns:1fr}.qr-edit-row{grid-template-columns:1fr}}
+
 </style>
 </head>
 <body>
@@ -554,6 +577,7 @@ function stopProfileWatch(){ if(__profileUnsub){ try{ __profileUnsub(); }catch(e
 function getQueryParams(){ return new URLSearchParams(window.location.search); }
 function getMode(){
   const q = getQueryParams();
+  if(q.has("r")) return "qrRedirect";
   if(q.has("join")) return "student";
   return q.get("mode");
 }
@@ -578,6 +602,11 @@ function closeModal(){ const h = document.getElementById("globalModal"); if(h) h
 /* ---------------- Khởi động ---------------- */
 function boot(){
   const mode = getMode();
+  if(mode === "qrRedirect"){
+    clearListeners();
+    renderQrRedirect();
+    return;
+  }
   if(mode === "student"){
     clearListeners();
     renderStudentEntry();
@@ -763,6 +792,7 @@ const ADMIN_MENU = [
   {key:"teachers", label:"Quản lý giảng viên", icon:"👩‍🏫"},
   {key:"classes", label:"Lớp học", icon:"🏫"},
   {key:"sessions", label:"Phiên tương tác", icon:"🗳️"},
+  {key:"qrlinks", label:"QR vĩnh viễn", icon:"🔗"},
   {key:"stats", label:"Thống kê hệ thống", icon:"📈"},
   {key:"settings", label:"Cài đặt", icon:"⚙️"},
 ];
@@ -1042,6 +1072,114 @@ function adminSettings(c){
   $("#btnResetSelf").onclick = ()=>sendResetLink(p.email);
 }
 
+
+/* ============================================================
+   QR VĨNH VIỄN MODULE — dùng chung tài khoản HCMA2
+   - Teacher: chỉ thấy / sửa / xóa QR do chính mình tạo.
+   - Admin: thấy và quản lý toàn bộ QR.
+   - Người quét QR: công khai, không cần đăng nhập.
+   ============================================================ */
+const QR_COLLECTION = "qrlinks";
+const QR_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+function qrRandCode(len=6){ let s=""; for(let i=0;i<len;i++) s+=QR_CODE_CHARS[Math.floor(Math.random()*QR_CODE_CHARS.length)]; return s; }
+function qrSanitizeCode(s){ return String(s||"").trim().replace(/[^A-Za-z0-9_-]/g,"").slice(0,40); }
+function qrNormalizeUrl(raw){
+  let s=String(raw||"").trim(); if(!s) return null;
+  if(!/^https?:\/\//i.test(s)) s="https://"+s;
+  try{ const u=new URL(s); if(!/^https?:$/.test(u.protocol)) return null; return u.toString(); }catch(e){ return null; }
+}
+function qrShortLink(code){ return APP_BASE_URL + "?r=" + encodeURIComponent(code); }
+function qrImageFor(link, size=300){ return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(link)}`; }
+function qrDateValue(ts){ try{return ts?.toMillis?ts.toMillis():(ts?new Date(ts).getTime():0);}catch(e){return 0;} }
+function qrFmtDate(ts){ try{return ts?.toDate?ts.toDate().toLocaleString("vi-VN"):(ts?new Date(ts).toLocaleString("vi-VN"):"");}catch(e){return "";} }
+function ensureQrOverlay(){
+  let el=document.getElementById("qrBigOverlay"); if(el) return el;
+  el=document.createElement("div"); el.id="qrBigOverlay";
+  el.innerHTML=`<div class="qr-big-box"><img id="qrBigImg" alt="QR lớn"><div class="qr-big-link" id="qrBigLink"></div><button class="btn btn-outline mt-14" id="qrBigClose" style="background:#fff">Đóng ✕</button></div>`;
+  document.body.appendChild(el);
+  el.addEventListener("click",e=>{if(e.target===el) el.classList.remove("show")});
+  el.querySelector("#qrBigClose").onclick=()=>el.classList.remove("show");
+  document.addEventListener("keydown",e=>{if(e.key==="Escape") el.classList.remove("show")});
+  return el;
+}
+function openQrBig(src,link){ const el=ensureQrOverlay(); el.querySelector("#qrBigImg").src=src; el.querySelector("#qrBigLink").textContent=link||""; el.classList.add("show"); }
+async function downloadQrImage(src,name){
+  try{ const res=await fetch(src,{mode:"cors"}); const blob=await res.blob(); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`qr-${name||"link"}.png`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }
+  catch(e){ window.open(src,"_blank"); }
+}
+async function copyQrText(text,btn){
+  try{ await navigator.clipboard.writeText(text); const old=btn?.textContent; if(btn){btn.textContent="Đã sao chép ✓";setTimeout(()=>btn.textContent=old,1400);} }
+  catch(e){ window.prompt("Sao chép liên kết:",text); }
+}
+async function renderQrRedirect(){
+  const code=qrSanitizeCode(getQueryParams().get("r"));
+  appRoot().innerHTML=`<div class="center-screen"><span class="spinner"></span><h2>Đang mở liên kết…</h2><p class="mut">Vui lòng chờ trong giây lát.</p></div>`;
+  if(!code){ appRoot().innerHTML=`<div class="center-screen"><h2>Không tìm thấy liên kết</h2><p class="mut">Mã QR không hợp lệ.</p></div>`; return; }
+  try{
+    const ref=doc(publicDb,QR_COLLECTION,code); const snap=await getDoc(ref);
+    if(!snap.exists() || !snap.data().target){ appRoot().innerHTML=`<div class="center-screen"><h2>Không tìm thấy liên kết</h2><p class="mut">Mã QR này không tồn tại hoặc đã bị xóa.</p></div>`; return; }
+    updateDoc(ref,{clicks:increment(1),lastScanAt:serverTimestamp()}).catch(()=>{});
+    window.location.replace(snap.data().target);
+  }catch(e){ appRoot().innerHTML=`<div class="center-screen"><h2>Không mở được liên kết</h2><p class="mut">Vui lòng kiểm tra kết nối Internet rồi quét lại.</p></div>`; }
+}
+async function qrManager(c,isAdminView){
+  clearListeners();
+  c.innerHTML=`
+    <div class="qr-manager-head"><div><h2>🔗 QR vĩnh viễn</h2><p class="mut">QR không đổi. Sau này chỉ cần sửa liên kết đích, không phải in lại QR.</p></div>${isAdminView?'<span class="chip">Quản trị: xem toàn hệ thống</span>':'<span class="chip">Chỉ hiển thị QR của tài khoản này</span>'}</div>
+    <div class="card mt-14">
+      <h3>Tạo QR mới</h3>
+      <div class="field"><label>Tên / ghi chú QR (không bắt buộc)</label><input id="qrTitle" type="text" placeholder="Ví dụ: Tài liệu bài 3, Link nhóm Zalo…"></div>
+      <div class="field"><label>Liên kết cần mở khi quét *</label><input id="qrTarget" type="url" placeholder="https://..."><div class="hint">Có thể dùng link Google Drive, Zalo, website, biểu mẫu, tài liệu…</div></div>
+      <div class="field"><label>Mã ngắn (không bắt buộc)</label><input id="qrCustom" type="text" maxlength="40" placeholder="Để trống để hệ thống tự tạo"><div class="hint">Chỉ dùng chữ, số, gạch ngang và gạch dưới.</div></div>
+      <button class="btn" id="qrCreateBtn">TẠO QR VĨNH VIỄN</button><div id="qrCreateStatus" class="small mt-8"></div>
+    </div>
+    <div class="card hidden" id="qrResultCard"></div>
+    <div class="flex-between mt-20"><h3 style="margin:0">Các QR đã tạo</h3><span class="mut small" id="qrCount"></span></div>
+    <div class="qr-list" id="qrList"><div class="mut">Đang tải…</div></div>`;
+
+  $("#qrCreateBtn").onclick=async()=>{
+    const target=qrNormalizeUrl($("#qrTarget").value); const title=$("#qrTitle").value.trim();
+    const st=$("#qrCreateStatus"); let code=qrSanitizeCode($("#qrCustom").value); st.textContent="";
+    if(!target){st.className="error-text mt-8";st.textContent="Liên kết không hợp lệ.";return;}
+    const btn=$("#qrCreateBtn"); btn.disabled=true; st.className="small mt-8 mut"; st.textContent="Đang tạo…";
+    try{
+      if(code){ const ex=await getDoc(doc(db,QR_COLLECTION,code)); if(ex.exists()) throw {code:"qr-code-exists"}; }
+      else{ let tries=0,exists=true; while(exists && tries<8){code=qrRandCode(6);exists=(await getDoc(doc(db,QR_COLLECTION,code))).exists();tries++;} if(exists) throw {code:"qr-code-exists"}; }
+      await setDoc(doc(db,QR_COLLECTION,code),{ownerId:STATE.user.uid,ownerEmail:STATE.profile.email||STATE.user.email||"",ownerName:STATE.profile.displayName||"",title,target,clicks:0,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+      const link=qrShortLink(code), img=qrImageFor(link);
+      $("#qrResultCard").classList.remove("hidden");
+      $("#qrResultCard").innerHTML=`<h3>Đã tạo thành công</h3><div class="qr-result"><img id="qrResultImg" src="${img}" alt="QR ${esc(code)}"><div><div class="qr-code">${esc(code)}</div><div class="qr-target mt-8">${esc(link)}</div><div class="qr-actions"><button class="btn btn-sm btn-outline" id="qrCopyNew">Sao chép liên kết</button><button class="btn btn-sm btn-outline" id="qrDownloadNew">Tải ảnh QR</button></div></div></div>`;
+      $("#qrResultImg").onclick=()=>openQrBig(img,link); $("#qrCopyNew").onclick=e=>copyQrText(link,e.currentTarget); $("#qrDownloadNew").onclick=()=>downloadQrImage(img,code);
+      $("#qrTarget").value=""; $("#qrCustom").value=""; $("#qrTitle").value=""; st.className="success-text mt-8"; st.textContent="Đã tạo QR vĩnh viễn thành công.";
+    }catch(e){st.className="error-text mt-8";st.textContent=(e.code==="qr-code-exists")?"Mã này đã được dùng. Vui lòng chọn mã khác.":mapError(e);}finally{btn.disabled=false;}
+  };
+
+  const q = isAdminView ? query(collection(db,QR_COLLECTION)) : query(collection(db,QR_COLLECTION),where("ownerId","==",STATE.user.uid));
+  const unsub=onSnapshot(q,snap=>{
+    const docs=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>qrDateValue(b.createdAt)-qrDateValue(a.createdAt));
+    $("#qrCount").textContent=`${docs.length} mã`;
+    if(!docs.length){$("#qrList").innerHTML=`<div class="empty-state"><div class="ic">🔗</div>Chưa có QR nào.</div>`;return;}
+    $("#qrList").innerHTML=docs.map(d=>{const link=qrShortLink(d.id),img=qrImageFor(link);return `
+      <div class="qr-item" data-qr="${esc(d.id)}">
+        <div class="qr-thumb" data-qr-open="${esc(d.id)}"><img src="${img}" alt="QR ${esc(d.id)}"></div>
+        <div><div class="qr-meta"><span class="qr-code">${esc(d.id)}</span><span class="chip">${Number(d.clicks||0)} lượt quét</span>${d.title?`<span class="chip">${esc(d.title)}</span>`:""}</div>
+        ${isAdminView?`<div class="qr-owner">Chủ sở hữu: <b>${esc(d.ownerName||d.ownerEmail||d.ownerId||"—")}</b></div>`:""}
+        <div class="small mut">Tạo: ${esc(qrFmtDate(d.createdAt)||"—")}</div>
+        <div class="qr-edit-row"><input type="text" value="${esc(d.target||"")}" data-qr-target><button class="btn btn-sm btn-outline" data-qr-save="${esc(d.id)}">LƯU LINK MỚI</button></div>
+        <div class="small mt-8 hidden" data-qr-hint></div>
+        <div class="qr-actions"><button class="btn btn-sm btn-ghost" data-qr-copy="${esc(d.id)}">Sao chép liên kết</button><button class="btn btn-sm btn-ghost" data-qr-download="${esc(d.id)}">Tải ảnh QR</button><button class="btn btn-sm btn-danger" data-qr-delete="${esc(d.id)}">XÓA</button></div></div>
+      </div>`}).join("");
+    docs.forEach(d=>{const card=document.querySelector(`[data-qr="${CSS.escape(d.id)}"]`); if(!card)return; const link=qrShortLink(d.id),img=qrImageFor(link);
+      card.querySelector("[data-qr-open]").onclick=()=>openQrBig(img,link);
+      card.querySelector("[data-qr-copy]").onclick=e=>copyQrText(link,e.currentTarget);
+      card.querySelector("[data-qr-download]").onclick=()=>downloadQrImage(img,d.id);
+      card.querySelector("[data-qr-save]").onclick=async e=>{const input=card.querySelector("[data-qr-target]"),hint=card.querySelector("[data-qr-hint]"),url=qrNormalizeUrl(input.value);if(!url){hint.className="error-text mt-8";hint.textContent="Liên kết không hợp lệ.";return;} e.currentTarget.disabled=true;try{await updateDoc(doc(db,QR_COLLECTION,d.id),{target:url,updatedAt:serverTimestamp()});hint.className="success-text mt-8";hint.textContent="Đã lưu. QR giữ nguyên, chỉ đổi điểm đến.";}catch(err){hint.className="error-text mt-8";hint.textContent=mapError(err);}finally{e.currentTarget.disabled=false;}};
+      card.querySelector("[data-qr-delete]").onclick=async()=>{if(!confirm(`Xóa QR “${d.id}”? Sau khi xóa, mã QR này sẽ không còn mở được liên kết.`))return;try{await deleteDoc(doc(db,QR_COLLECTION,d.id));toast("Đã xóa QR.","ok");}catch(err){toast(mapError(err),"err");}};
+    });
+  },e=>{$("#qrList").innerHTML=errorBlock(e,()=>qrManager(c,isAdminView));});
+  track(unsub);
+}
+
 /* ============================================================
    TEACHER MODULE
    ============================================================ */
@@ -1050,6 +1188,7 @@ const TEACHER_MENU = [
   {key:"classes", label:"Lớp học", icon:"🏫"},
   {key:"create", label:"Tạo tương tác", icon:"➕"},
   {key:"library", label:"Thư viện câu hỏi", icon:"📚"},
+  {key:"qrlinks", label:"QR vĩnh viễn", icon:"🔗"},
   {key:"history", label:"Lịch sử phiên", icon:"🕓"},
   {key:"reports", label:"Báo cáo", icon:"📄"},
   {key:"account", label:"Tài khoản", icon:"👤"},
@@ -1072,6 +1211,7 @@ function teacherRoute(){
   if(key==="classes") return teacherClasses(c);
   if(key==="create"){ window.location.hash="#/wizard"; return teacherWizard(c,null); }
   if(key==="library") return teacherLibrary(c);
+  if(key==="qrlinks") return qrManager(c, false);
   if(key==="history") return teacherHistory(c);
   if(key==="reports") return teacherReportsList(c);
   if(key==="account") return teacherAccount(c);

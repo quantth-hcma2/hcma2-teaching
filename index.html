@@ -389,8 +389,8 @@ tr:hover td{background:#fafbfc;}
 .group-timer-float.done .clock{color:#fecaca}
 .group-timer-popup{position:fixed;inset:0;background:#081526;z-index:10030;display:flex;align-items:center;justify-content:center;flex-direction:column;color:#fff}
 .group-timer-popup.hidden{display:none!important}
-.group-timer-popup .big-clock{font-size:min(28vw,230px);font-weight:900;letter-spacing:5px;line-height:1}
-.group-timer-popup .big-label{font-size:min(6vw,46px);font-weight:800;margin-top:15px;color:#fbbf24}
+.group-timer-popup .big-clock{font-size:clamp(64px,16vw,160px);font-weight:900;letter-spacing:3px;line-height:1}
+.group-timer-popup .big-label{font-size:clamp(20px,3vw,34px);font-weight:800;margin-top:14px;color:#fbbf24;text-align:center;padding:0 20px}
 .group-timer-popup.done .big-clock,.group-timer-popup.done .big-label{color:#ef4444}
 .group-timer-popup .close-timer{position:absolute;bottom:28px;right:28px}
 @media(max-width:700px){
@@ -1347,6 +1347,7 @@ async function groupLive(c,id,isAdminView){
       <button class="btn btn-ok" id="gOpen">${a.status==="open"?"ĐANG MỞ":"MỞ HOẠT ĐỘNG"}</button>
       <button class="btn btn-outline" id="gClose">ĐÓNG HOẠT ĐỘNG</button>
       <button class="btn btn-outline" id="gTimerStart">⏱ BẮT ĐẦU LẠI ĐỒNG HỒ</button>
+      <button class="btn btn-danger" id="gTimerStop">⏹ DỪNG ĐỒNG HỒ</button>
     </div>
   </div>
   ${a.instructions?`<div class="card mt-14"><b>Nhiệm vụ chung:</b><div class="mt-8">${esc(a.instructions)}</div></div>`:""}
@@ -1369,7 +1370,10 @@ async function groupLive(c,id,isAdminView){
   <div id="groupTimerPopup" class="group-timer-popup hidden">
     <div class="big-clock" id="groupTimerBigClock">--:--</div>
     <div class="big-label" id="groupTimerBigLabel">THỜI GIAN THẢO LUẬN</div>
-    <button class="btn btn-outline close-timer" id="groupTimerPopupClose">ĐÓNG ✕</button>
+    <div class="close-timer flex gap-8">
+      <button class="btn btn-danger" id="groupTimerPopupStop">⏹ DỪNG ĐỒNG HỒ</button>
+      <button class="btn btn-outline" id="groupTimerPopupClose">ĐÓNG ✕</button>
+    </div>
   </div>
   <div id="groupPanelPopup" class="group-panel-popup hidden">
     <div class="group-panel-popup-inner" id="groupPanelPopupInner"></div>
@@ -1391,9 +1395,22 @@ async function groupLive(c,id,isAdminView){
   $("#groupPanelPopupClose").onclick=()=>$("#groupPanelPopup").classList.add("hidden");
   $("#groupPanelPopup").onclick=e=>{if(e.target.id==="groupPanelPopup") $("#groupPanelPopup").classList.add("hidden");};
 
-  $("#gOpen").onclick=()=>{try{$("#groupCountdownSound")?.load();}catch(e){} updateDoc(doc(db,GROUP_COLLECTION,id),{status:"open",startedAt:serverTimestamp(),updatedAt:serverTimestamp()}).catch(e=>toast(mapError(e),"err"));};
+  $("#gOpen").onclick=()=>{try{$("#groupCountdownSound")?.load();}catch(e){} updateDoc(doc(db,GROUP_COLLECTION,id),{status:"open",startedAt:serverTimestamp(),pausedRemainingSec:null,updatedAt:serverTimestamp()}).catch(e=>toast(mapError(e),"err"));};
   $("#gClose").onclick=()=>updateDoc(doc(db,GROUP_COLLECTION,id),{status:"closed",updatedAt:serverTimestamp()}).catch(e=>toast(mapError(e),"err"));
-  $("#gTimerStart").onclick=()=>{try{$("#groupCountdownSound")?.load();}catch(e){} groupWarnedAt10=false; updateDoc(doc(db,GROUP_COLLECTION,id),{startedAt:serverTimestamp(),updatedAt:serverTimestamp()}).catch(e=>toast(mapError(e),"err"));};
+  $("#gTimerStart").onclick=()=>{try{$("#groupCountdownSound")?.load();}catch(e){} groupWarnedAt10=false; updateDoc(doc(db,GROUP_COLLECTION,id),{startedAt:serverTimestamp(),pausedRemainingSec:null,updatedAt:serverTimestamp()}).catch(e=>toast(mapError(e),"err"));};
+  const stopGroupTimer=async()=>{
+    try{
+      let remain=current.durationSec||0;
+      if(current.startedAt){
+        const start=current.startedAt.toMillis?current.startedAt.toMillis():new Date(current.startedAt).getTime();
+        remain=Math.max(0,Math.round((start+(current.durationSec||0)*1000-Date.now())/1000));
+      }
+      await updateDoc(doc(db,GROUP_COLLECTION,id),{startedAt:null,pausedRemainingSec:remain,updatedAt:serverTimestamp()});
+      toast(`Đã dừng đồng hồ tại ${fmtDuration(remain)}.`,"ok");
+    }catch(e){toast(mapError(e),"err");}
+  };
+  $("#gTimerStop").onclick=stopGroupTimer;
+  $("#groupTimerPopupStop").onclick=stopGroupTimer;
 
   let current=a, notes=[],photos=[],files=[],topics={};
   function renderTopics(){
@@ -1445,7 +1462,7 @@ async function groupLive(c,id,isAdminView){
     if(!el)return;
     let remain;
     if(!current.startedAt){
-      remain=current.durationSec||0;
+      remain=(current.pausedRemainingSec!=null ? current.pausedRemainingSec : (current.durationSec||0));
       groupWarnedAt10=false;
     }else{
       const start=current.startedAt.toMillis?current.startedAt.toMillis():new Date(current.startedAt).getTime();

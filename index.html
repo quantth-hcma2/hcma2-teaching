@@ -840,6 +840,7 @@ function adminRoute(key){
   if(key==="teachers") return adminTeachers(c);
   if(key==="classes") return adminClassesView(c);
   if(key==="sessions") return adminSessionsView(c);
+  if(key==="qrlinks") return qrManager(c, true);
   if(key==="stats") return adminStats(c);
   if(key==="settings") return adminSettings(c);
 }
@@ -1134,7 +1135,13 @@ async function qrManager(c,isAdminView){
       <button class="btn" id="qrCreateBtn">TẠO QR VĨNH VIỄN</button><div id="qrCreateStatus" class="small mt-8"></div>
     </div>
     <div class="card hidden" id="qrResultCard"></div>
-    <div class="flex-between mt-20"><h3 style="margin:0">Các QR đã tạo</h3><span class="mut small" id="qrCount"></span></div>
+    <div class="flex-between mt-20"><h3 style="margin:0">${isAdminView?"Lịch sử QR toàn hệ thống":"Các QR đã tạo"}</h3><span class="mut small" id="qrCount"></span></div>
+    ${isAdminView?`<div class="card mt-12" style="padding:12px">
+      <div class="grid grid-2">
+        <div class="field" style="margin:0"><label>Tìm theo giảng viên / mã / tên QR</label><input id="qrAdminSearch" type="text" placeholder="Nhập tên, email, mã QR hoặc ghi chú…"></div>
+        <div class="field" style="margin:0"><label>Sắp xếp</label><select id="qrAdminSort"><option value="newest">Mới nhất trước</option><option value="oldest">Cũ nhất trước</option><option value="scans">Lượt quét nhiều nhất</option></select></div>
+      </div>
+    </div>`:""}
     <div class="qr-list" id="qrList"><div class="mut">Đang tải…</div></div>`;
 
   $("#qrCreateBtn").onclick=async()=>{
@@ -1155,10 +1162,23 @@ async function qrManager(c,isAdminView){
   };
 
   const q = isAdminView ? query(collection(db,QR_COLLECTION)) : query(collection(db,QR_COLLECTION),where("ownerId","==",STATE.user.uid));
-  const unsub=onSnapshot(q,snap=>{
-    const docs=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>qrDateValue(b.createdAt)-qrDateValue(a.createdAt));
-    $("#qrCount").textContent=`${docs.length} mã`;
-    if(!docs.length){$("#qrList").innerHTML=`<div class="empty-state"><div class="ic">🔗</div>Chưa có QR nào.</div>`;return;}
+  let qrCache = [];
+  const renderQrDocs = ()=>{
+    let docs = qrCache.slice();
+    if(isAdminView){
+      const kw = ($("#qrAdminSearch")?.value||"").trim().toLowerCase();
+      const sort = $("#qrAdminSort")?.value||"newest";
+      if(kw){
+        docs = docs.filter(d => `${d.id} ${d.title||""} ${d.ownerName||""} ${d.ownerEmail||""} ${d.ownerId||""} ${d.target||""}`.toLowerCase().includes(kw));
+      }
+      if(sort==="oldest") docs.sort((a,b)=>qrDateValue(a.createdAt)-qrDateValue(b.createdAt));
+      else if(sort==="scans") docs.sort((a,b)=>Number(b.clicks||0)-Number(a.clicks||0));
+      else docs.sort((a,b)=>qrDateValue(b.createdAt)-qrDateValue(a.createdAt));
+    }else{
+      docs.sort((a,b)=>qrDateValue(b.createdAt)-qrDateValue(a.createdAt));
+    }
+    $("#qrCount").textContent = isAdminView ? `${docs.length}/${qrCache.length} mã` : `${docs.length} mã`;
+    if(!docs.length){$("#qrList").innerHTML=`<div class="empty-state"><div class="ic">🔗</div>${isAdminView&&qrCache.length?"Không có QR phù hợp bộ lọc.":"Chưa có QR nào."}</div>`;return;}
     $("#qrList").innerHTML=docs.map(d=>{const link=qrShortLink(d.id),img=qrImageFor(link);return `
       <div class="qr-item" data-qr="${esc(d.id)}">
         <div class="qr-thumb" data-qr-open="${esc(d.id)}"><img src="${img}" alt="QR ${esc(d.id)}"></div>
@@ -1176,6 +1196,14 @@ async function qrManager(c,isAdminView){
       card.querySelector("[data-qr-save]").onclick=async e=>{const input=card.querySelector("[data-qr-target]"),hint=card.querySelector("[data-qr-hint]"),url=qrNormalizeUrl(input.value);if(!url){hint.className="error-text mt-8";hint.textContent="Liên kết không hợp lệ.";return;} e.currentTarget.disabled=true;try{await updateDoc(doc(db,QR_COLLECTION,d.id),{target:url,updatedAt:serverTimestamp()});hint.className="success-text mt-8";hint.textContent="Đã lưu. QR giữ nguyên, chỉ đổi điểm đến.";}catch(err){hint.className="error-text mt-8";hint.textContent=mapError(err);}finally{e.currentTarget.disabled=false;}};
       card.querySelector("[data-qr-delete]").onclick=async()=>{if(!confirm(`Xóa QR “${d.id}”? Sau khi xóa, mã QR này sẽ không còn mở được liên kết.`))return;try{await deleteDoc(doc(db,QR_COLLECTION,d.id));toast("Đã xóa QR.","ok");}catch(err){toast(mapError(err),"err");}};
     });
+  };
+  if(isAdminView){
+    $("#qrAdminSearch")?.addEventListener("input",renderQrDocs);
+    $("#qrAdminSort")?.addEventListener("change",renderQrDocs);
+  }
+  const unsub=onSnapshot(q,snap=>{
+    qrCache=snap.docs.map(d=>({id:d.id,...d.data()}));
+    renderQrDocs();
   },e=>{$("#qrList").innerHTML=errorBlock(e,()=>qrManager(c,isAdminView));});
   track(unsub);
 }

@@ -853,6 +853,8 @@ const ADMIN_MENU = [
   {key:"sessions", label:"Phiên tương tác", icon:"🗳️"},
   {key:"qrlinks", label:"QR vĩnh viễn", icon:"🔗"},
   {key:"groups", label:"Thảo luận nhóm", icon:"👥"},
+  {key:"library", label:"Thư viện câu hỏi", icon:"📚"},
+  {key:"audit", label:"Nhật ký hoạt động", icon:"🧾"},
   {key:"stats", label:"Thống kê hệ thống", icon:"📈"},
   {key:"settings", label:"Cài đặt", icon:"⚙️"},
 ];
@@ -904,8 +906,49 @@ function adminRoute(key){
   if(key==="sessions") return adminSessionsView(c);
   if(key==="qrlinks") return qrManager(c, true);
   if(key==="groups") return groupModule(c, true);
+  if(key==="library") return adminLibrary(c);
+  if(key==="audit") return adminAuditLog(c);
   if(key==="stats") return adminStats(c);
   if(key==="settings") return adminSettings(c);
+}
+
+
+async function adminLibrary(c){
+  c.innerHTML=`<div class="section-title"><div><h2>📚 Thư viện câu hỏi toàn hệ thống</h2>
+    <p class="mut">Admin xem dữ liệu câu hỏi của tất cả giảng viên để quản trị và làm nguồn dữ liệu cho các chức năng AI ở phiên bản sau. Màn hình này chỉ đọc, không sửa câu hỏi của giảng viên.</p></div></div>
+    <div class="card"><div class="grid grid-3"><input id="alSearch" placeholder="Tìm nội dung câu hỏi, giảng viên, email…">
+      <select id="alOwner"><option value="">Tất cả giảng viên</option></select>
+      <select id="alType"><option value="">Tất cả loại câu hỏi</option>${Object.entries(QUESTION_TYPES).map(([k,v])=>`<option value="${k}">${esc(v.label)}</option>`).join("")}</select></div>
+      <div class="small mut mt-8" id="alCount"></div></div>
+    <div class="grid grid-3 mt-14" id="alGrid"><div class="mut">Đang tải…</div></div>`;
+  try{
+    const [ls,us]=await Promise.all([getDocs(collection(db,"library")),getDocs(collection(db,"users"))]);
+    const owners={};us.forEach(d=>{const u=d.data();owners[d.id]={name:u.displayName||"",email:u.email||""};});
+    const all=ls.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>qrDateValue(b.createdAt)-qrDateValue(a.createdAt));
+    const ids=[...new Set(all.map(x=>x.ownerId).filter(Boolean))];
+    $("#alOwner").innerHTML+=ids.map(id=>`<option value="${id}">${esc(owners[id]?.name||owners[id]?.email||id)}</option>`).join("");
+    const render=()=>{
+      const kw=$("#alSearch").value.trim().toLowerCase(),owner=$("#alOwner").value,type=$("#alType").value;
+      const list=all.filter(x=>(!owner||x.ownerId===owner)&&(!type||x.type===type)&&(!kw||`${x.question||""} ${x.category||""} ${owners[x.ownerId]?.name||""} ${owners[x.ownerId]?.email||""}`.toLowerCase().includes(kw)));
+      $("#alCount").textContent=`${list.length} / ${all.length} câu hỏi`;
+      $("#alGrid").innerHTML=list.length?list.map(x=>`<div class="card"><div class="small mut">${esc(owners[x.ownerId]?.name||"—")} · ${esc(owners[x.ownerId]?.email||"")}</div>
+        <div class="mt-8"><span class="chip">${esc(x.category||"—")}</span> <span class="chip">${esc(QUESTION_TYPES[x.type]?.label||x.type||"—")}</span></div>
+        <p style="font-weight:650">${esc(x.question||"")}</p>${x.description?`<div class="small mut">${esc(x.description)}</div>`:""}</div>`).join(""):`<div class="empty-state" style="grid-column:1/-1">Không có câu hỏi phù hợp.</div>`;
+    };
+    ["alSearch","alOwner","alType"].forEach(id=>$("#"+id).addEventListener(id==="alSearch"?"input":"change",render));render();
+  }catch(e){$("#alGrid").innerHTML=errorBlock(e,()=>adminLibrary(c));}
+}
+async function adminAuditLog(c){
+  c.innerHTML=`<div class="section-title"><div><h2>🧾 Nhật ký hoạt động</h2><p class="mut">Theo dõi các thao tác quan trọng phục vụ quản trị và xử lý sự cố.</p></div></div>
+    <div class="card"><input id="auditSearch" placeholder="Tìm người thao tác, hành động, đối tượng…" style="max-width:420px"><div id="auditTable" class="table-wrap mt-12"><div class="mut">Đang tải…</div></div></div>`;
+  try{
+    const snap=await getDocs(query(collection(db,"auditLogs"),orderBy("createdAt","desc"),limit(500)));
+    const all=snap.docs.map(d=>({id:d.id,...d.data()}));
+    const render=()=>{
+      const kw=$("#auditSearch").value.trim().toLowerCase(),list=all.filter(x=>!kw||`${x.actorName||""} ${x.actorEmail||""} ${x.action||""} ${x.entityType||""} ${x.entityId||""}`.toLowerCase().includes(kw));
+      $("#auditTable").innerHTML=list.length?`<table><thead><tr><th>Thời gian</th><th>Người thao tác</th><th>Hành động</th><th>Đối tượng</th></tr></thead><tbody>${list.map(x=>`<tr><td>${fmtDate(x.createdAt)}</td><td>${esc(x.actorName||"—")}<div class="small mut">${esc(x.actorEmail||"")}</div></td><td>${esc(x.action||"")}</td><td>${esc(x.entityType||"")} · ${esc(x.entityId||"")}</td></tr>`).join("")}</tbody></table>`:`<div class="empty-state">Chưa có nhật ký.</div>`;
+    };$("#auditSearch").addEventListener("input",render);render();
+  }catch(e){$("#auditTable").innerHTML=errorBlock(e,()=>adminAuditLog(c));}
 }
 
 async function adminOverview(c){
@@ -1676,6 +1719,7 @@ const TEACHER_MENU = [
   {key:"qrlinks", label:"QR vĩnh viễn", icon:"🔗"},
   {key:"groups", label:"Thảo luận nhóm", icon:"👥"},
   {key:"history", label:"Lịch sử phiên", icon:"🕓"},
+  {key:"trash", label:"Thùng rác", icon:"🗑️"},
   {key:"reports", label:"Báo cáo", icon:"📄"},
   {key:"account", label:"Tài khoản", icon:"👤"},
 ];
@@ -1701,6 +1745,7 @@ function teacherRoute(){
   if(key==="qrlinks") return qrManager(c, false);
   if(key==="groups") return groupModule(c, false);
   if(key==="history") return teacherHistory(c);
+  if(key==="trash") return teacherTrash(c);
   if(key==="reports") return teacherReportsList(c);
   if(key==="account") return teacherAccount(c);
 }
@@ -1709,9 +1754,20 @@ async function teacherOverview(c){
   const uid = STATE.user.uid;
   c.innerHTML = `<h2>Xin chào, ${esc(STATE.profile.displayName||STATE.profile.email)} 👋</h2>
     <div class="grid grid-4" id="tOvGrid"></div>
-    <div class="mt-20"><button class="btn btn-lg" id="btnNewSession">+ TẠO TƯƠNG TÁC MỚI</button></div>
+    <div class="card mt-20">
+      <h3 style="margin-top:0">Bắt đầu nhanh</h3>
+      <div class="flex gap-10" style="flex-wrap:wrap">
+        <button class="btn btn-lg" id="btnNewSession">➕ TẠO TƯƠNG TÁC</button>
+        <button class="btn btn-lg btn-outline" id="btnQuickGroup">👥 THẢO LUẬN NHÓM</button>
+        <button class="btn btn-lg btn-outline" id="btnQuickQr">🔗 QR VĨNH VIỄN</button>
+        <button class="btn btn-lg btn-outline" id="btnQuickLib">📚 THƯ VIỆN CÂU HỎI</button>
+      </div>
+    </div>
     <div class="card mt-20"><h3>Phiên gần đây</h3><div class="table-wrap" id="tOvRecent"><div class="mut">Đang tải…</div></div></div>`;
   $("#btnNewSession").onclick = ()=>{ window.location.hash = "#/wizard"; };
+  $("#btnQuickGroup").onclick=()=>{STATE.teacherNav="groups";teacherRoute();};
+  $("#btnQuickQr").onclick=()=>{STATE.teacherNav="qrlinks";teacherRoute();};
+  $("#btnQuickLib").onclick=()=>{STATE.teacherNav="library";teacherRoute();};
   try{
     const classesQ = query(collection(db,"classes"), where("ownerId","==",uid));
     const sessionsQ = query(collection(db,"sessions"), where("ownerId","==",uid));
@@ -1953,6 +2009,22 @@ function optionRowHtml(val, idx){
 /* ============================================================
    WIZARD TẠO PHIÊN TƯƠNG TÁC (9 bước)
    ============================================================ */
+
+function openWizardStudentPreview(){
+  const w=STATE.wizard;if(!w)return;
+  const q=w.questions[w.qIndex||0]||w.questions[0];if(!q)return;
+  let body="";
+  if(q.type==="single"||q.type==="truefalse") body=(q.options||[]).map((o,i)=>`<label class="student-option"><input type="radio" disabled> ${esc(o)}</label>`).join("");
+  else if(q.type==="multiple") body=(q.options||[]).map(o=>`<label class="student-option"><input type="checkbox" disabled> ${esc(o)}</label>`).join("");
+  else if(q.type==="open") body=`<textarea disabled placeholder="Học viên nhập ý kiến tại đây…"></textarea>`;
+  else if(q.type==="scale") body=`<div class="flex gap-8" style="flex-wrap:wrap">${Array.from({length:(q.scaleMax||5)-(q.scaleMin||1)+1},(_,i)=>`<button class="btn btn-outline" disabled>${(q.scaleMin||1)+i}</button>`).join("")}</div>`;
+  else body=`<div class="mut">Bản xem trước loại câu hỏi: ${esc(QUESTION_TYPES[q.type]?.label||q.type)}</div>`;
+  openModal(`<div style="max-width:520px;margin:auto"><div class="center"><div class="eyebrow">XEM TRƯỚC NHƯ HỌC VIÊN</div><h2>${esc(w.title||"Hoạt động chưa đặt tên")}</h2></div>
+    <div class="card mt-14"><div class="small mut">Câu ${(w.qIndex||0)+1}/${w.questions.length}</div><h3>${esc(q.question||"Nội dung câu hỏi")}</h3>${q.description?`<p class="mut">${esc(q.description)}</p>`:""}<div class="mt-14">${body}</div><button class="btn mt-16" disabled>GỬI CÂU TRẢ LỜI</button></div>
+    <div class="center mt-14"><button class="btn btn-outline" id="closeStudentPreview">ĐÓNG XEM TRƯỚC</button></div></div>`,true);
+  $("#closeStudentPreview").onclick=closeModal;
+}
+
 const WIZARD_STEP_LABELS = ["Tên hoạt động","Chọn lớp","Câu hỏi","Loại câu hỏi","Phương án","Biểu đồ","Thiết lập","Xem trước","Bắt đầu"];
 function blankQuestion(){ return {
   question:"", description:"", type:"single", options:["",""], required:true,
@@ -3145,6 +3217,72 @@ async function confirmAndDeleteSession(sessionId, title, afterDelete){
   }
 }
 
+
+async function logAudit(action, entityType, entityId, detail={}){
+  try{
+    await addDoc(collection(db,"auditLogs"),{
+      actorId:STATE.user?.uid||null,actorEmail:STATE.profile?.email||STATE.user?.email||"",
+      actorName:STATE.profile?.displayName||"",actorRole:STATE.profile?.role||"",
+      action,entityType,entityId,detail,createdAt:serverTimestamp()
+    });
+  }catch(e){ console.warn("audit log",e); }
+}
+async function moveSessionToTrash(sessionId,title,after){
+  if(!confirm(`Chuyển phiên “${title||""}” vào Thùng rác?\n\nDữ liệu chưa bị xóa vĩnh viễn và có thể khôi phục.`)) return;
+  try{
+    const ref=doc(db,"sessions",sessionId),s=await getDoc(ref);
+    if(!s.exists()) return;
+    if(s.data().status==="open"){toast("Hãy đóng phiên trước khi chuyển vào Thùng rác.","warn");return;}
+    await updateDoc(ref,{deletedAt:serverTimestamp(),deletedBy:STATE.user.uid,updatedAt:serverTimestamp()});
+    await logAudit("trash","session",sessionId,{title:title||""});
+    toast("Đã chuyển phiên vào Thùng rác.","ok"); after&&after();
+  }catch(e){toast(mapError(e),"err");}
+}
+async function cloneSessionToWizard(sessionId){
+  try{
+    const sSnap=await getDoc(doc(db,"sessions",sessionId)); if(!sSnap.exists()) return;
+    const s=sSnap.data();
+    const qSnap=await getDocs(query(collection(db,"questions"),where("ownerId","==",STATE.user.uid),where("sessionId","==",sessionId),orderBy("order","asc")));
+    const qs=[];
+    for(const qd of qSnap.docs){
+      const q=qd.data(); let opts=[];
+      if(QUESTION_TYPES[q.type]?.needsOptions){
+        const os=await getDocs(query(collection(db,"questions",qd.id,"options"),orderBy("order","asc")));
+        opts=os.docs.map(x=>x.data().text);
+      }
+      qs.push({...blankQuestion(),question:q.question||"",description:q.description||"",type:q.type||"single",
+        options:q.type==="truefalse"?QUESTION_TYPES.truefalse.fixedOptions.slice():(opts.length?opts:["",""]),
+        chartType:q.chartType||null,scaleMin:q.scaleMin??1,scaleMax:q.scaleMax??5,required:q.required!==false,
+        timeLimit:q.timeLimit||0,allowChangeAnswer:!!q.allowChangeAnswer});
+    }
+    initWizard();
+    STATE.wizard.title=(s.title||"Phiên")+" - Bản sao";
+    STATE.wizard.classId=s.classId||"";
+    STATE.wizard.questions=qs.length?qs:[blankQuestion()];
+    STATE.wizard.settings={...STATE.wizard.settings,timeLimit:s.timeLimit||0,showResults:s.showResults||"hidden",
+      allowChangeAnswer:!!s.allowChangeAnswer,anonymous:s.anonymous!==false,showResponderCount:s.showResponderCount!==false,
+      allowMultipleResponses:!!s.allowMultipleResponses};
+    STATE.wizard.step=1;STATE.wizard.qIndex=0;
+    await logAudit("clone_to_wizard","session",sessionId,{title:s.title||""});
+    window.location.hash="#/wizard";toast("Đã nhân bản vào màn hình Tạo tương tác. Anh có thể đổi tên, lớp và câu hỏi trước khi lưu.","ok");
+  }catch(e){toast(mapError(e),"err");console.error(e);}
+}
+async function teacherTrash(c){
+  c.innerHTML=`<div class="section-title"><div><h2>🗑️ Thùng rác</h2><p class="mut">Các phiên đã chuyển vào đây có thể khôi phục hoặc xóa vĩnh viễn.</p></div></div>
+    <div class="card"><div id="trashTable" class="table-wrap"><div class="mut">Đang tải…</div></div></div>`;
+  try{
+    const snap=await getDocs(query(collection(db,"sessions"),where("ownerId","==",STATE.user.uid),orderBy("createdAt","desc"),limit(300)));
+    const list=snap.docs.map(d=>({id:d.id,...d.data()})).filter(x=>x.deletedAt);
+    if(!list.length){$("#trashTable").innerHTML=`<div class="empty-state"><div class="ic">🗑️</div>Thùng rác đang trống.</div>`;return;}
+    $("#trashTable").innerHTML=`<table><thead><tr><th>Hoạt động</th><th>Ngày tạo</th><th>Đã xóa</th><th></th></tr></thead><tbody>${list.map(s=>`<tr>
+      <td>${esc(s.title||"—")}</td><td>${fmtDateShort(s.createdAt)}</td><td>${fmtDateShort(s.deletedAt)}</td>
+      <td class="flex gap-8" style="flex-wrap:wrap"><button class="btn btn-sm btn-outline" data-restore="${s.id}">KHÔI PHỤC</button>
+      <button class="btn btn-sm btn-danger" data-hard="${s.id}" data-title="${esc(s.title||"")}">XÓA VĨNH VIỄN</button></td></tr>`).join("")}</tbody></table>`;
+    $$("[data-restore]").forEach(b=>b.onclick=async()=>{try{await updateDoc(doc(db,"sessions",b.dataset.restore),{deletedAt:null,deletedBy:null,updatedAt:serverTimestamp()});await logAudit("restore","session",b.dataset.restore);toast("Đã khôi phục phiên.","ok");teacherTrash(c);}catch(e){toast(mapError(e),"err");}});
+    $$("[data-hard]").forEach(b=>b.onclick=()=>confirmAndDeleteSession(b.dataset.hard,b.dataset.title,async()=>{await logAudit("delete_permanent","session",b.dataset.hard,{title:b.dataset.title});teacherTrash(c);}));
+  }catch(e){$("#trashTable").innerHTML=errorBlock(e,()=>teacherTrash(c));}
+}
+
 async function teacherHistory(c){
   c.innerHTML = `<h2>Lịch sử phiên</h2>
     <p class="mut">Có thể mở lại kết quả, điều khiển phiên hoặc xóa vĩnh viễn các phiên không còn cần thiết. Phiên đang mở phải được đóng trước khi xóa.</p>
@@ -3154,7 +3292,7 @@ async function teacherHistory(c){
   try{
     const classMap = await loadTeacherClassMap();
     const snap = await getDocs(query(collection(db,"sessions"), where("ownerId","==",STATE.user.uid), orderBy("createdAt","desc"), limit(300)));
-    const all = snap.docs.map(d=>({id:d.id,...d.data()}));
+    const all = snap.docs.map(d=>({id:d.id,...d.data()})).filter(s=>!s.deletedAt);
     const render = ()=>{
       const kw = ($("#hSearch").value||"").toLowerCase().trim(); const fl = $("#hFilter").value;
       const list = all.filter(s=> (!fl||s.status===fl) && (!kw||s.title.toLowerCase().includes(kw)) );
@@ -3164,13 +3302,15 @@ async function teacherHistory(c){
         <td class="flex gap-8" style="flex-wrap:wrap;">
           <button class="btn btn-sm btn-outline" data-r="${s.id}">MỞ LẠI KẾT QUẢ</button>
           ${s.status!=="archived"?`<button class="btn btn-sm btn-ghost" data-live="${s.id}">ĐIỀU KHIỂN</button>`:""}
-          <button class="btn btn-sm btn-danger" data-del-session="${s.id}" data-title="${esc(s.title)}" ${s.status==="open"?"disabled title=\"Hãy đóng phiên trước khi xóa\"":""}>XÓA PHIÊN</button>
+          <button class="btn btn-sm btn-outline" data-clone-session="${s.id}">NHÂN BẢN</button>
+          <button class="btn btn-sm btn-danger" data-trash-session="${s.id}" data-title="${esc(s.title)}" ${s.status==="open"?"disabled title=\"Hãy đóng phiên trước khi chuyển vào Thùng rác\"":""}>THÙNG RÁC</button>
         </td></tr>`).join("")}
       </tbody></table>`;
       $$("[data-r]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/report/"+encodeURIComponent(b.dataset.r); });
       $$("[data-live]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/live/"+encodeURIComponent(b.dataset.live); });
-      $$("[data-del-session]").forEach(b=>b.onclick=()=>confirmAndDeleteSession(
-        b.dataset.delSession,
+      $$("[data-clone-session]").forEach(b=>b.onclick=()=>cloneSessionToWizard(b.dataset.cloneSession));
+      $$("[data-trash-session]").forEach(b=>b.onclick=()=>moveSessionToTrash(
+        b.dataset.trashSession,
         b.dataset.title,
         ()=>teacherHistory(c)
       ));
@@ -3185,9 +3325,10 @@ async function teacherReportsList(c){
   try{
     const classMap = await loadTeacherClassMap();
     const snap = await getDocs(query(collection(db,"sessions"), where("ownerId","==",STATE.user.uid), orderBy("createdAt","desc"), limit(300)));
-    if(snap.empty){ $("#repTable").innerHTML = `<div class="empty-state"><div class="ic">📄</div>Chưa có phiên nào để tạo báo cáo.</div>`; return; }
+    const repDocs=snap.docs.filter(d=>!d.data().deletedAt);
+    if(!repDocs.length){ $("#repTable").innerHTML = `<div class="empty-state"><div class="ic">📄</div>Chưa có phiên nào để tạo báo cáo.</div>`; return; }
     $("#repTable").innerHTML = `<table><thead><tr><th>Hoạt động</th><th>Lớp</th><th>Ngày</th><th>Trạng thái</th><th></th></tr></thead><tbody>
-      ${snap.docs.map(d=>{ const s=d.data(); return `<tr><td>${esc(s.title)}</td><td>${esc(classMap[s.classId]?.name||"—")}</td><td>${fmtDateShort(s.createdAt)}</td><td>${sessionStatusBadge(s.status)}</td>
+      ${repDocs.map(d=>{ const s=d.data(); return `<tr><td>${esc(s.title)}</td><td>${esc(classMap[s.classId]?.name||"—")}</td><td>${fmtDateShort(s.createdAt)}</td><td>${sessionStatusBadge(s.status)}</td>
         <td><button class="btn btn-sm btn-outline" data-r="${d.id}">XEM BÁO CÁO</button></td></tr>`; }).join("")}
     </tbody></table>`;
     $$("[data-r]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/report/"+encodeURIComponent(b.dataset.r); });

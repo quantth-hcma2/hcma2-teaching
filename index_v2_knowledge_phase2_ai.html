@@ -4256,7 +4256,10 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
     $("#knToggle").onclick=async()=>{try{await updateDoc(sRef,{status:session.status==="open"?"closed":"open",updatedAt:serverTimestamp()});toast("Đã cập nhật trạng thái phiên.","ok");}catch(e){toast(mapError(e),"err");}};
     $("#knCsv").onclick=knowledgeExportCsv; $("#knAiRun").onclick=()=>knowledgeStartAi(false); $("#knAiRetry").onclick=()=>knowledgeStartAi(true); $("#knAiJson").onclick=knowledgeExportAiJson; $("#knAiCsv").onclick=knowledgeExportAiCsv; $("#knSearch").oninput=knowledgeRenderRecent;$("#knSeq").onchange=knowledgeRenderRecent;
     $("#knMore").onclick=()=>{recentLimit=Math.min(250,recentLimit+50);attachRecent();};
-    attachRecent(); attachAi();
+    attachRecent();
+attachAi();
+knowledgeRenderRecent();
+knowledgeRenderAi();
   }
   function attachAi(){
     if(aiAttached)return; aiAttached=true;

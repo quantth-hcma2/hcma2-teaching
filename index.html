@@ -408,6 +408,30 @@ tr:hover td{background:#fafbfc;}
 .net-banner{position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:12000;padding:9px 16px;border-radius:999px;background:#991b1b;color:#fff;font-weight:800;box-shadow:0 6px 24px #0003;max-width:92vw;text-align:center}.net-banner.online{background:#166534}.health-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.health-item{border:1px solid var(--border);border-radius:12px;padding:10px;background:#fff}.health-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#16a34a;margin-right:6px}.health-dot.bad{background:#dc2626}.health-dot.warn{background:#ca8a04}@media(max-width:800px){.health-grid{grid-template-columns:1fr 1fr}}
 /* Question Sets */
 .qset-card .qset-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.qset-list{max-height:54vh;overflow:auto}.qset-row{border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px}
+/* V2 Phase 1 — Knowledge Space */
+.knowledge-hero{background:linear-gradient(135deg,#0f766e,#155e75);color:#fff;border-radius:16px;padding:22px;margin-bottom:16px}
+.knowledge-hero .mut{color:#d9f7f2}.knowledge-code{font:800 30px/1 monospace;letter-spacing:4px;color:#0f766e}
+.knowledge-stat{padding:18px;text-align:center}.knowledge-stat strong{display:block;font-size:30px;color:var(--brand)}
+.knowledge-list{display:grid;gap:10px}.knowledge-item{border:1px solid var(--border);border-radius:10px;padding:12px;background:#fff;overflow-wrap:anywhere}
+.knowledge-item .meta{font-size:12px;color:var(--text-mute);margin-bottom:5px}.knowledge-progress{height:12px;background:#e5e7eb;border-radius:99px;overflow:hidden}
+.knowledge-progress>span{display:block;height:100%;background:linear-gradient(90deg,#14b8a6,#0891b2);transition:width .2s}
+.knowledge-join{min-height:100vh;background:linear-gradient(180deg,#ecfeff,#f8fafc);padding:16px}.knowledge-join .student-card{margin:24px auto;max-width:620px}
+.ai-status{border-left:4px solid #0891b2}.ai-status.failed{border-left-color:#dc2626}.ai-status.completed{border-left-color:#16a34a}
+.ai-topic-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}.ai-topic-card{border:1px solid var(--border);border-radius:12px;padding:13px;background:#f8fafc}
+.ai-chips{display:flex;gap:6px;flex-wrap:wrap}.ai-chip{display:inline-block;padding:5px 9px;border-radius:999px;background:#ccfbf1;color:#115e59;font-size:12px;font-weight:700}
+.ai-map-row{display:grid;grid-template-columns:minmax(120px,220px) 1fr auto;gap:8px;align-items:center;margin:8px 0}.ai-map-bar{height:10px;background:#e2e8f0;border-radius:99px;overflow:hidden}.ai-map-bar span{display:block;height:100%;background:linear-gradient(90deg,#14b8a6,#0284c7)}
+@media(max-width:600px){.knowledge-hero{padding:17px}.knowledge-code{font-size:25px}.knowledge-stat strong{font-size:25px}}
+/* Second Brain Live presentation card — teacher/admin only, one restrained gradient reusing existing brand tokens */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.second-brain-card{background:linear-gradient(135deg,var(--brand-dark),var(--brand));color:#fff;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.second-brain-card h3{color:#fff;margin-bottom:4px}
+.second-brain-card p{color:#d9f7f2;margin:0}
+.second-brain-head{display:flex;align-items:center;gap:14px;min-width:0}
+.second-brain-icon{flex:none;width:42px;height:42px;border-radius:10px;background:rgba(255,255,255,.16);display:flex;align-items:center;justify-content:center}
+.second-brain-icon svg{width:24px;height:24px}
+.second-brain-card .btn{background:#fff;color:var(--brand-dark);white-space:nowrap;gap:8px}
+.second-brain-card .btn:hover{filter:none;background:#f0fdfa}
+@media(max-width:600px){.second-brain-card{flex-direction:column;align-items:stretch;text-align:center}.second-brain-head{flex-direction:column}}
 </style>
 </head>
 <body>
@@ -472,6 +496,10 @@ const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
 const db = getFirestore(fbApp);
 const storage = getStorage(fbApp);
+
+// Phase 2: chỉ là URL gateway. API key/model 9Router tuyệt đối nằm ở server.
+// Sau khi deploy Functions, thay PROJECT_ID/REGION nếu anh dùng giá trị khác.
+const AI_GATEWAY_URL = "https://asia-southeast1-bo-phieu-hcma2.cloudfunctions.net/aiGateway";
 setPersistence(auth, browserLocalPersistence).catch(()=>{});
 
 // ---------------- App Firebase THỨ HAI — dành riêng cho Học viên & Trình chiếu ----------------
@@ -498,6 +526,14 @@ function logEvent_(name, params){ try{ if(analytics){ import("https://www.gstati
 /* ---------------- Base URL (tự xác định, tương thích subdirectory GitHub Pages) ---------------- */
 
 const APP_BASE_URL = window.location.origin + window.location.pathname;
+
+/* V2 Phase 1: Knowledge Space always uses the current deployed origin/path. */
+function knowledgeJoinUrl(code){
+  const u = new URL(APP_BASE_URL);
+  u.search = ""; u.hash = "";
+  u.searchParams.set("knowledge", code);
+  return u.toString();
+}
 
 let netBannerTimer=null;
 function updateNetworkBanner(){
@@ -657,6 +693,7 @@ function stopProfileWatch(){ if(__profileUnsub){ try{ __profileUnsub(); }catch(e
 function getQueryParams(){ return new URLSearchParams(window.location.search); }
 function getMode(){
   const q = getQueryParams();
+  if(q.has("knowledge")) return "knowledgeStudent";
   if(q.has("r")) return "qrRedirect";
   if(q.has("group")) return "groupStudent";
   if(q.has("join")) return "student";
@@ -683,6 +720,11 @@ function closeModal(){ const h = document.getElementById("globalModal"); if(h) h
 /* ---------------- Khởi động ---------------- */
 function boot(){
   const mode = getMode();
+  if(mode === "knowledgeStudent"){
+    clearListeners();
+    renderKnowledgeStudentEntry();
+    return;
+  }
   if(mode === "qrRedirect"){
     clearListeners();
     renderQrRedirect();
@@ -875,6 +917,7 @@ function pendingSuspendedScreen(icon, title, sub){
    ============================================================ */
 const ADMIN_MENU = [
   {key:"overview", label:"Tổng quan", icon:"🏠"},
+  {key:"knowledge", label:"Đồng kiến tạo tri thức", icon:"🧠"},
   {key:"teachers", label:"Quản lý giảng viên", icon:"👩‍🏫"},
   {key:"classes", label:"Lớp học", icon:"🏫"},
   {key:"sessions", label:"Phiên tương tác", icon:"🗳️"},
@@ -928,6 +971,7 @@ function adminRoute(key){
   const hash = window.location.hash || "";
   if(hash.startsWith("#/group/")) return groupLive(c, decodeURIComponent(hash.split("/")[2]), true);
   if(key==="overview") return adminOverview(c);
+  if(key==="knowledge") return knowledgeModule(c, true);
   if(key==="teachers") return adminTeachers(c);
   if(key==="classes") return adminClassesView(c);
   if(key==="sessions") return adminSessionsView(c);
@@ -1771,6 +1815,7 @@ async function qrManager(c,isAdminView){
    ============================================================ */
 const TEACHER_MENU = [
   {key:"overview", label:"Tổng quan", icon:"🏠"},
+  {key:"knowledge", label:"Đồng kiến tạo tri thức", icon:"🧠"},
   {key:"classes", label:"Lớp học", icon:"🏫"},
   {key:"create", label:"Tạo tương tác", icon:"➕"},
   {key:"library", label:"Thư viện câu hỏi", icon:"📚"},
@@ -1795,9 +1840,11 @@ function teacherRoute(){
   if(hash.startsWith("#/live/")) return teacherLiveControl(c, decodeURIComponent(hash.split("/")[2]));
   if(hash.startsWith("#/report/")) return teacherReportView(c, decodeURIComponent(hash.split("/")[2]));
   if(hash.startsWith("#/group/")) return groupLive(c, decodeURIComponent(hash.split("/")[2]), false);
+  if(hash.startsWith("#/knowledge/")) return knowledgeDashboard(c, decodeURIComponent(hash.split("/")[2]), false);
   if(hash.startsWith("#/wizard")){ const parts=hash.split("/"); return teacherWizard(c, parts[2]?decodeURIComponent(parts[2]):null); }
   const key = STATE.teacherNav;
   if(key==="overview") return teacherOverview(c);
+  if(key==="knowledge") return knowledgeModule(c, false);
   if(key==="classes") return teacherClasses(c);
   if(key==="create"){ window.location.hash="#/wizard"; return teacherWizard(c,null); }
   if(key==="library") return teacherLibrary(c);
@@ -4073,6 +4120,237 @@ function renderPresQuestion(session, sid, question, options){
       }catch(e){ console.warn("Không thể vẽ biểu đồ trình chiếu:", e); }
     }
   }
+}
+
+/* ============================================================
+   V2 PHASE 1 — KNOWLEDGE SPACE (thu thập độc lập với AI)
+   ============================================================ */
+function knowledgeCode(){
+  const alphabet="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes=new Uint8Array(6); crypto.getRandomValues(bytes);
+  return Array.from(bytes,b=>alphabet[b%alphabet.length]).join("");
+}
+function knowledgeStatusBadge(status){
+  return status==="open"?'<span class="badge badge-ok">ĐANG MỞ</span>':'<span class="badge">ĐÃ ĐÓNG</span>';
+}
+function knowledgeDate(v){
+  try{return v&&v.toDate?v.toDate().toLocaleString("vi-VN"):"—";}catch(e){return "—";}
+}
+function openKnowledgeQrPopup(session,url){
+  const existing=document.getElementById("presQrPopup");if(existing)existing.remove();
+  const overlay=document.createElement("div");overlay.id="presQrPopup";overlay.className="pres-qr-popup";overlay.setAttribute("role","dialog");overlay.setAttribute("aria-modal","true");overlay.setAttribute("aria-label","Mã QR Knowledge Session");
+  overlay.innerHTML=`<div class="pres-qr-popup-card"><button type="button" class="pres-qr-popup-close" id="btnClosePresQr" aria-label="Đóng mã QR">✕</button><div class="pres-qr-popup-title">QUÉT MÃ QR ĐỂ THAM GIA</div><div class="pres-qr-popup-sub">Knowledge Session</div><div id="presQrBig"></div><div class="pres-qr-popup-code">${esc(session.joinCode)}</div></div>`;
+  document.body.appendChild(overlay);
+  try{new QRCode(document.getElementById("presQrBig"),{text:url,width:560,height:560,colorDark:"#000000",colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel?QRCode.CorrectLevel.H:undefined});}catch(e){$("#presQrBig").innerHTML='<p style="color:#991b1b">Không thể tạo mã QR.</p>';}
+  const close=()=>overlay.remove();$("#btnClosePresQr").onclick=close;overlay.onclick=e=>{if(e.target===overlay)close();};overlay.onkeydown=e=>{if(e.key==="Escape")close();};overlay.tabIndex=-1;overlay.focus();
+}
+async function knowledgeModule(c,isAdminView){
+  c.innerHTML=`<div class="knowledge-hero"><h2>🧠 Đồng kiến tạo tri thức</h2><p class="mut">Thu thập tình huống và ý kiến nguyên văn theo thời gian thực. Phase 1 không phụ thuộc AI.</p></div>
+    <div class="section-title"><div><h3>Knowledge Sessions</h3><p class="mut">Mỗi học viên gửi tối thiểu 3 tình huống.</p></div><div class="flex gap-8"><button class="btn btn-outline" id="knTrash">🗑️ THÙNG RÁC KNOWLEDGE</button><button class="btn" id="knNew">＋ TẠO PHIÊN</button></div></div>
+    <div id="knSessions"><div class="center-screen"><span class="spinner"></span></div></div>`;
+  $("#knNew").onclick=()=>knowledgeCreateDialog(c,isAdminView);
+  $("#knTrash").onclick=()=>knowledgeTrash(c,isAdminView);
+  const q=isAdminView?query(collection(db,"knowledgeSessions")):query(collection(db,"knowledgeSessions"),where("ownerId","==",STATE.user.uid));
+  track(onSnapshot(q,snap=>{
+    const rows=snap.docs.map(d=>({id:d.id,...d.data()}))
+      .filter(s=>!s.adminDeletedAt && (isAdminView || !s.teacherDeletedAt))
+      .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
+    $("#knSessions").innerHTML=rows.length?`<div class="grid grid-2">${rows.map(s=>`<div class="card">
+      <div class="flex between gap-10"><h3>${esc(s.title)}</h3>${knowledgeStatusBadge(s.status)}</div>
+      <p class="mut small">Mã: <b>${esc(s.joinCode)}</b> · Mục tiêu: ${Number(s.targetSubmissions||1500)} tình huống</p>
+      ${isAdminView?`<p class="small mut">Owner: ${esc(s.ownerId)}</p>`:""}
+      ${isAdminView&&s.teacherDeletedAt?'<p><span class="badge badge-warn">GIẢNG VIÊN ĐÃ ĐƯA VÀO THÙNG RÁC</span></p>':''}
+      <div class="flex gap-8"><button class="btn btn-outline btn-sm" data-kn-open="${s.id}">MỞ DASHBOARD</button>
+      ${isAdminView&&s.teacherDeletedAt?`<button class="btn btn-sm btn-ok" data-kn-teacher-restore="${s.id}">KHÔI PHỤC CHO GIẢNG VIÊN</button>`:''}
+      <button class="btn btn-sm btn-danger" data-kn-trash="${s.id}">${isAdminView?'ĐƯA VÀO ADMIN TRASH':'XÓA'}</button></div></div>`).join("")}</div>`:
+      `<div class="card empty-state"><div class="ic">🧠</div><h3>Chưa có Knowledge Session</h3><p>Tạo phiên đầu tiên để lấy mã và QR cho học viên.</p></div>`;
+    $$('[data-kn-open]').forEach(b=>b.onclick=()=>knowledgeDashboard(c,b.dataset.knOpen,isAdminView));
+    $$('[data-kn-teacher-restore]').forEach(b=>b.onclick=()=>knowledgeRestoreForTeacher(b.dataset.knTeacherRestore,c));
+    $$('[data-kn-trash]').forEach(b=>b.onclick=()=>knowledgeMoveToTrash(b.dataset.knTrash,isAdminView,c));
+  },e=>{$("#knSessions").innerHTML=errorBlock(e,()=>knowledgeModule(c,isAdminView));}));
+}
+async function knowledgeMoveToTrash(sessionId,isAdminView,c){
+  const message=isAdminView
+    ?"Đưa phiên này vào Admin Trash? Học viên sẽ không thể tham gia hoặc gửi thêm dữ liệu."
+    :"Xóa phiên khỏi giao diện giảng viên? Dữ liệu gốc vẫn được giữ và bạn có thể khôi phục trong Thùng rác Knowledge.";
+  if(!confirm(message))return;
+  try{
+    const patch=isAdminView
+      ?{adminDeletedAt:serverTimestamp(),adminDeletedBy:STATE.user.uid,status:"closed",updatedAt:serverTimestamp()}
+      :{teacherDeletedAt:serverTimestamp(),teacherDeletedBy:STATE.user.uid,status:"closed",updatedAt:serverTimestamp()};
+    await updateDoc(doc(db,"knowledgeSessions",sessionId),patch);
+    toast(isAdminView?"Đã chuyển vào Admin Trash.":"Đã chuyển vào Thùng rác Knowledge.","ok");
+  }catch(e){toast(mapError(e),"err");}
+}
+async function knowledgeRestoreForTeacher(sessionId,c){
+  try{await updateDoc(doc(db,"knowledgeSessions",sessionId),{teacherDeletedAt:null,teacherDeletedBy:null,updatedAt:serverTimestamp()});toast("Đã khôi phục phiên cho giảng viên.","ok");}
+  catch(e){toast(mapError(e),"err");}
+}
+async function knowledgeTrash(c,isAdminView){
+  clearListeners();
+  c.innerHTML=`<button class="btn btn-ghost btn-sm" id="knTrashBack">← Knowledge Sessions</button><div class="section-title mt-14"><div><h2>🗑️ ${isAdminView?'Admin Trash':'Thùng rác Knowledge'}</h2><p class="mut">${isAdminView?'Chỉ Admin có thể xóa vĩnh viễn.':'Dữ liệu gốc chưa bị xóa khỏi hệ thống.'}</p></div></div><div id="knTrashList"><div class="center-screen"><span class="spinner"></span></div></div>`;
+  $("#knTrashBack").onclick=()=>knowledgeModule(c,isAdminView);
+  const q=isAdminView?query(collection(db,"knowledgeSessions")):query(collection(db,"knowledgeSessions"),where("ownerId","==",STATE.user.uid));
+  track(onSnapshot(q,snap=>{
+    const rows=snap.docs.map(d=>({id:d.id,...d.data()})).filter(s=>isAdminView?!!s.adminDeletedAt:(!!s.teacherDeletedAt&&!s.adminDeletedAt)).sort((a,b)=>((b.adminDeletedAt||b.teacherDeletedAt)?.seconds||0)-((a.adminDeletedAt||a.teacherDeletedAt)?.seconds||0));
+    $("#knTrashList").innerHTML=rows.length?`<div class="grid grid-2">${rows.map(s=>`<div class="card"><h3>${esc(s.title)}</h3><p class="mut small">Mã: <b>${esc(s.joinCode)}</b> · ${knowledgeDate(isAdminView?s.adminDeletedAt:s.teacherDeletedAt)}</p><div class="flex gap-8"><button class="btn btn-sm btn-ok" data-kn-restore="${s.id}">KHÔI PHỤC</button>${isAdminView?`<button class="btn btn-sm btn-danger" data-kn-hard="${s.id}" data-title="${esc(s.title)}">XÓA VĨNH VIỄN</button>`:''}</div></div>`).join('')}</div>`:'<div class="card empty-state"><div class="ic">🗑️</div><h3>Thùng rác đang trống</h3></div>';
+    $$('[data-kn-restore]').forEach(b=>b.onclick=async()=>{try{const patch=isAdminView?{adminDeletedAt:null,adminDeletedBy:null,updatedAt:serverTimestamp()}:{teacherDeletedAt:null,teacherDeletedBy:null,updatedAt:serverTimestamp()};await updateDoc(doc(db,"knowledgeSessions",b.dataset.knRestore),patch);toast("Đã khôi phục phiên.","ok");}catch(e){toast(mapError(e),"err");}});
+    $$('[data-kn-hard]').forEach(b=>b.onclick=()=>knowledgePermanentDelete(b.dataset.knHard,b.dataset.title));
+  },e=>{$("#knTrashList").innerHTML=errorBlock(e,()=>knowledgeTrash(c,isAdminView));}));
+}
+async function knowledgePermanentDelete(sessionId,title){
+  if(!confirm(`XÓA VĨNH VIỄN “${title||'Knowledge Session'}”?\n\nToàn bộ dữ liệu gốc, submissions và mã tham gia sẽ bị xóa, không thể khôi phục.`))return;
+  if(!confirm("Xác nhận lần cuối: tiếp tục xóa vĩnh viễn?"))return;
+  try{
+    if(!auth.currentUser)throw new Error('Phiên đăng nhập đã hết hạn.');const token=await auth.currentUser.getIdToken();const response=await fetch(`${AI_GATEWAY_URL}/admin-delete-session`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},body:JSON.stringify({sessionId})});const out=await response.json().catch(()=>({}));if(!response.ok)throw new Error(out.error?.message||`Gateway HTTP ${response.status}`);
+    toast(out.idempotentReplay?"Phiên đã được xóa trước đó.":"Đã xóa vĩnh viễn phiên trên máy chủ.","ok");
+  }catch(e){toast(e.message||mapError(e),"err");}
+}
+function knowledgeCreateDialog(c,isAdminView){
+  openModal(`<div class="modal-head"><h3>🧠 Tạo Knowledge Session</h3><button class="modal-x" id="knClose">×</button></div>
+    <div class="field"><label>Tên phiên</label><input id="knTitle" maxlength="120" placeholder="Ví dụ: Tình huống lãnh đạo ngày 06/09"></div>
+    <div class="field"><label>Mục tiêu số tình huống</label><input id="knTarget" type="number" min="3" max="10000" value="1500"><div class="hint">500 học viên × tối thiểu 3 tình huống = 1.500.</div></div>
+    <div class="flex end gap-10"><button class="btn btn-ghost" id="knCancel">Hủy</button><button class="btn" id="knCreate">TẠO PHIÊN</button></div>`);
+  $("#knClose").onclick=$("#knCancel").onclick=closeModal;
+  $("#knCreate").onclick=async()=>{
+    const title=$("#knTitle").value.trim(), target=Number($("#knTarget").value);
+    if(title.length<3){toast("Tên phiên cần ít nhất 3 ký tự.","warn");return;}
+    if(!Number.isInteger(target)||target<3||target>10000){toast("Mục tiêu phải từ 3 đến 10.000.","warn");return;}
+    const btn=$("#knCreate");btn.disabled=true;
+    try{
+      let code="",codeRef=null;
+      for(let i=0;i<5;i++){code=knowledgeCode();codeRef=doc(db,"knowledgeJoinCodes",code);if(!(await getDoc(codeRef)).exists())break;code="";}
+      if(!code)throw new Error("Không thể sinh mã tham gia. Vui lòng thử lại.");
+      const sRef=doc(collection(db,"knowledgeSessions")); const batch=writeBatch(db);
+      batch.set(sRef,{title,joinCode:code,ownerId:STATE.user.uid,status:"open",minimumPerParticipant:3,targetSubmissions:target,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+      batch.set(codeRef,{sessionId:sRef.id,ownerId:STATE.user.uid,createdAt:serverTimestamp()});
+      await batch.commit(); closeModal(); toast("Đã tạo Knowledge Session.","ok"); knowledgeDashboard(c,sRef.id,isAdminView);
+    }catch(e){toast(mapError(e)||e.message,"err");btn.disabled=false;}
+  };
+}
+async function knowledgeDashboard(c,sessionId,isAdminView){
+  clearListeners(); let session=null,recentDocs=[],recentLimit=50,totalCount=0,participantCount=0,aiAttached=false,latestAiSnapshot=null;
+  c.innerHTML=`<button class="btn btn-ghost btn-sm" id="knBack">← Danh sách</button><div id="knDash" class="mt-14"><div class="center-screen"><span class="spinner"></span></div></div>`;
+  $("#knBack").onclick=()=>{window.location.hash=""; if(isAdminView){STATE.adminNav="knowledge";adminRoute("knowledge");}else{STATE.teacherNav="knowledge";teacherRoute();}};
+  const sRef=doc(db,"knowledgeSessions",sessionId);
+  let recentUnsub=null;
+  const attachRecent=()=>{
+    if(recentUnsub)recentUnsub();
+    recentUnsub=onSnapshot(query(collection(db,"knowledgeSessions",sessionId,"submissions"),orderBy("createdAt","desc"),limit(recentLimit)),snap=>{recentDocs=snap.docs.map(d=>({id:d.id,...d.data()}));knowledgeRenderRecent();},e=>toast(mapError(e),"err"));
+    STATE.listeners.push(recentUnsub);
+  };
+  track(onSnapshot(sRef,snap=>{
+    if(!snap.exists()){c.innerHTML='<div class="card">Không tìm thấy phiên.</div>';return;}
+    session={id:snap.id,...snap.data()}; knowledgeRenderDashboard();
+  },e=>{c.innerHTML=errorBlock(e,()=>knowledgeDashboard(c,sessionId,isAdminView));}));
+  track(onSnapshot(collection(db,"knowledgeSessions",sessionId,"submissions"),snap=>{
+    const people=new Set();snap.docs.forEach(d=>people.add(d.data().participantId));participantCount=people.size;totalCount=snap.size;
+    const pc=$("#knParticipants"),sc=$("#knSubmissions");if(pc)pc.textContent=participantCount;if(sc)sc.textContent=totalCount;
+    const pct=session?Math.min(100,Math.round(totalCount/Number(session.targetSubmissions||1500)*100)):0;
+    if($("#knProgressText"))$("#knProgressText").textContent=pct+"%";if($("#knProgressBar"))$("#knProgressBar").style.width=pct+"%";
+  },e=>toast(mapError(e),"err")));
+  function knowledgeRenderDashboard(){
+    const url=knowledgeJoinUrl(session.joinCode);
+    $("#knDash").innerHTML=`<div class="knowledge-hero"><div class="flex between gap-14" style="flex-wrap:wrap"><div><h2>${esc(session.title)}</h2><p class="mut">${knowledgeStatusBadge(session.status)} · Tạo lúc ${knowledgeDate(session.createdAt)}</p></div><div class="card" style="text-align:center"><div class="small mut">MÃ THAM GIA</div><div class="knowledge-code">${esc(session.joinCode)}</div></div></div></div>
+      <div class="grid grid-3"><div class="card knowledge-stat"><strong id="knParticipants">0</strong><span>Học viên</span></div><div class="card knowledge-stat"><strong id="knSubmissions">0</strong><span>Tình huống</span></div><div class="card knowledge-stat"><strong id="knProgressText">0%</strong><span>Mục tiêu ${Number(session.targetSubmissions||1500)}</span></div></div>
+      <div class="card"><div class="knowledge-progress"><span id="knProgressBar" style="width:0"></span></div></div>
+      <div class="grid grid-2 mt-14"><div class="card"><h3>QR / liên kết công khai</h3><div class="flex gap-14" style="align-items:center;flex-wrap:wrap"><div class="pres-qr-wrap clickable" id="knQrWrap" role="button" tabindex="0" aria-label="Phóng to mã QR"><div id="knQr"></div><div class="pres-qr-hint">🔍 Nhấp để phóng to mã QR</div></div><div style="flex:1;min-width:220px"><input id="knUrl" value="${esc(url)}" readonly><div class="flex gap-8 mt-8"><button class="btn btn-sm" id="knCopy">SAO CHÉP</button><button class="btn btn-sm ${session.status==='open'?'btn-danger':'btn-ok'}" id="knToggle">${session.status==='open'?'ĐÓNG PHIÊN':'MỞ LẠI'}</button></div></div></div></div>
+      <div class="card"><h3>🤖 AI Analysis — Phase 2</h3><p class="mut">AI đọc bản sao theo lô; dữ liệu gốc không bị sửa hoặc ghi đè.</p><div class="flex gap-8" style="flex-wrap:wrap"><button class="btn" id="knAiRun">PHÂN TÍCH BẰNG AI</button><button class="btn btn-outline" id="knAiRetry" style="display:none">TIẾP TỤC / THỬ LẠI</button><button class="btn btn-outline" id="knAiJson" disabled>XUẤT AI JSON</button><button class="btn btn-outline" id="knAiCsv" disabled>XUẤT AI CSV</button></div><button class="btn btn-outline mt-8" id="knCsv">XUẤT CSV DỮ LIỆU GỐC</button><div id="knAiStatus" class="mt-14"><span class="mut small">Chưa có bản phân tích.</span></div></div></div>
+      <div class="card second-brain-card mt-14"><div class="second-brain-head"><span class="second-brain-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 4.5a3 3 0 0 0-3 3v.3A3.2 3.2 0 0 0 4.5 10.8a3.2 3.2 0 0 0 1 5.4A3 3 0 0 0 8.5 20a2.7 2.7 0 0 0 2.5-1.6"/><path d="M15 4.5a3 3 0 0 1 3 3v.3a3.2 3.2 0 0 1 1.5 3 3.2 3.2 0 0 1-1 5.4A3 3 0 0 1 15.5 20a2.7 2.7 0 0 1-2.5-1.6"/><path d="M12 4.5v14"/><circle cx="7.2" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="16.8" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="14.5" r=".9" fill="currentColor" stroke="none"/><circle cx="16" cy="14.5" r=".9" fill="currentColor" stroke="none"/></svg></span><div><h3>SECOND BRAIN LIVE</h3><p>Trình chiếu không gian tri thức được hình thành theo thời gian thực</p></div></div><a class="btn btn-lg" href="https://brain.quantth.vn/knowledge-wall.html" target="_blank" rel="noopener noreferrer">MỞ SECOND BRAIN LIVE<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></svg><span class="sr-only"> (mở trong tab mới)</span></a></div>
+      <div id="knAiDashboard" class="mt-14"></div>
+      <div class="card mt-14"><div class="section-title"><div><h3>Tình huống gần đây</h3><p class="mut">Chỉ tải tối đa ${recentLimit} bản ghi trên màn hình; CSV chỉ tải toàn bộ khi được yêu cầu.</p></div></div>
+      <div class="grid grid-2"><input id="knSearch" placeholder="Tìm trong các bản ghi đang hiển thị…"><select id="knSeq"><option value="">Mọi thứ tự</option><option value="1">Tình huống 1</option><option value="2">Tình huống 2</option><option value="3">Tình huống 3</option><option value="more">Từ 4 trở đi</option></select></div><div id="knRecent" class="knowledge-list mt-14"></div><button class="btn btn-ghost btn-sm mt-14" id="knMore">TẢI THÊM 50</button></div>`;
+    $("#knParticipants").textContent=participantCount;$("#knSubmissions").textContent=totalCount;
+    const pct=Math.min(100,Math.round(totalCount/Number(session.targetSubmissions||1500)*100));$("#knProgressText").textContent=pct+"%";$("#knProgressBar").style.width=pct+"%";
+    try{new QRCode($("#knQr"),{text:url,width:150,height:150});}catch(e){}
+    $("#knQrWrap").onclick=()=>openKnowledgeQrPopup(session,url);$("#knQrWrap").onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();openKnowledgeQrPopup(session,url);}};
+    $("#knCopy").onclick=()=>navigator.clipboard.writeText(url).then(()=>toast("Đã sao chép liên kết.","ok")).catch(()=>toast("Hãy sao chép liên kết trong ô.","warn"));
+    $("#knToggle").onclick=async()=>{try{await updateDoc(sRef,{status:session.status==="open"?"closed":"open",updatedAt:serverTimestamp()});toast("Đã cập nhật trạng thái phiên.","ok");}catch(e){toast(mapError(e),"err");}};
+    $("#knCsv").onclick=knowledgeExportCsv; $("#knAiRun").onclick=()=>knowledgeStartAi(false); $("#knAiRetry").onclick=()=>knowledgeStartAi(true); $("#knAiJson").onclick=knowledgeExportAiJson; $("#knAiCsv").onclick=knowledgeExportAiCsv; $("#knSearch").oninput=knowledgeRenderRecent;$("#knSeq").onchange=knowledgeRenderRecent;
+    $("#knMore").onclick=()=>{recentLimit=Math.min(250,recentLimit+50);attachRecent();};
+    attachRecent();
+attachAi();
+knowledgeRenderRecent();
+knowledgeRenderAi();
+  }
+  function attachAi(){
+    if(aiAttached)return; aiAttached=true;
+    const q=query(collection(db,"knowledgeSessions",sessionId,"aiSnapshots"),orderBy("createdAt","desc"),limit(1));
+    track(onSnapshot(q,snap=>{latestAiSnapshot=snap.empty?null:{id:snap.docs[0].id,...snap.docs[0].data()};knowledgeRenderAi();},e=>{const h=$("#knAiStatus");if(h)h.innerHTML=`<span class="small" style="color:#b91c1c">${esc(mapError(e))}</span>`;}));
+  }
+  function knowledgeRenderAi(){
+    const s=latestAiSnapshot,statusHost=$("#knAiStatus"),dash=$("#knAiDashboard");if(!statusHost||!dash)return;
+    const run=$("#knAiRun"),retry=$("#knAiRetry"),j=$("#knAiJson"),csv=$("#knAiCsv");
+    if(!s){statusHost.innerHTML='<span class="mut small">Chưa có bản phân tích.</span>';dash.innerHTML='';return;}
+    const done=Number(s.progress?.batchesDone||0),total=Number(s.progress?.totalBatches||0),pct=total?Math.round(done/total*100):0;
+    statusHost.innerHTML=`<div class="ai-status ${esc(s.status||'')} card"><div class="flex between"><b>${s.status==='completed'?'Hoàn tất':s.status==='failed'?'Có lỗi':s.status==='running'?'Đang phân tích':'Đang chờ'}</b><span>${done}/${total} lô · ${pct}%</span></div><div class="knowledge-progress mt-8"><span style="width:${Math.max(0,Math.min(100,pct))}%"></span></div>${s.error?`<p class="small" style="color:#b91c1c">${esc(s.error.message||s.error)}</p>`:''}</div>`;
+    run.disabled=s.status==='queued'||s.status==='running';run.textContent=run.disabled?'AI ĐANG XỬ LÝ…':'PHÂN TÍCH BẢN MỚI';retry.style.display=s.status==='failed'?'inline-block':'none';j.disabled=csv.disabled=s.status!=='completed';
+    if(s.status!=='completed'||!s.result){dash.innerHTML='';return;}
+    const r=s.result,topics=Array.isArray(r.topics)?r.topics:[],situations=Array.isArray(r.representativeSituations)?r.representativeSituations:[];
+    const max=Math.max(1,...topics.map(t=>Number(t.count||0)));
+    dash.innerHTML=`<div class="card"><div class="section-title"><div><h3>Bản đồ tri thức</h3><p class="mut">${Number(s.sourceCount||totalCount)} tình huống · ${topics.length} chủ đề · ${esc(s.model||'AI')}</p></div></div><div>${topics.map(t=>`<div class="ai-map-row"><b>${esc(t.name||'Chủ đề')}</b><div class="ai-map-bar"><span style="width:${Math.round(Number(t.count||0)/max*100)}%"></span></div><span>${Number(t.count||0)}</span></div>`).join('')}</div></div>
+      <div class="ai-topic-grid mt-14">${topics.map(t=>`<div class="ai-topic-card"><h4>${esc(t.name||'Chủ đề')}</h4><div class="ai-chips">${(t.keywords||[]).slice(0,8).map(k=>`<span class="ai-chip">${esc(k)}</span>`).join('')}</div><p>${esc(t.summary||'')}</p>${(t.issues||[]).length?`<p class="small"><b>Vấn đề:</b> ${esc(t.issues.join('; '))}</p>`:''}</div>`).join('')}</div>
+      <div class="grid grid-2 mt-14"><div class="card"><h3>Đồng thuận / khác biệt</h3><p><b>Đồng thuận:</b> ${esc((r.consensus||[]).join('; ')||'—')}</p><p><b>Khác biệt:</b> ${esc((r.divergence||[]).join('; ')||'—')}</p></div><div class="card"><h3>Tình huống đại diện</h3>${situations.slice(0,12).map(x=>`<div class="knowledge-item"><b>${esc(x.topic||'')}</b><div>${esc(x.text||x.quote||'')}</div></div>`).join('')||'<p class="mut">Chưa có.</p>'}</div></div>
+      <div class="card mt-14"><h3>💬 AI Copilot</h3><p class="mut small">Dùng snapshot và các raw chunks liên quan; không gửi toàn bộ 1.500 bản ghi mỗi câu hỏi.</p><textarea id="knCopilotQuestion" maxlength="1000" rows="3" placeholder="Ví dụ: Ba vấn đề cấp thiết nhất và bằng chứng là gì?"></textarea><button class="btn mt-8" id="knCopilotAsk">HỎI COPILOT</button><div id="knCopilotAnswer" class="knowledge-item mt-14" style="display:none"></div></div>`;
+    $("#knCopilotAsk").onclick=knowledgeAskCopilot;
+  }
+  async function aiGateway(path,body){
+    if(!auth.currentUser)throw new Error('Phiên đăng nhập đã hết hạn.');
+    const token=await auth.currentUser.getIdToken();
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20*60*1000);
+    try{const res=await fetch(`${AI_GATEWAY_URL}/${path}`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},body:JSON.stringify(body),signal:controller.signal});const data=await res.json().catch(()=>({}));if(!res.ok)throw new Error(data.error?.message||data.error||`Gateway HTTP ${res.status}`);return data;}finally{clearTimeout(timer);}
+  }
+  async function knowledgeStartAi(resume){
+    const b=resume?$("#knAiRetry"):$("#knAiRun");if(!confirm(`${resume?'Tiếp tục bản phân tích lỗi':'Tạo bản phân tích AI mới'} từ ${totalCount} tình huống? Dữ liệu gốc sẽ không thay đổi.`))return;b.disabled=true;
+    if(session.status!=="closed"){toast("Hãy đóng phiên trước khi phân tích AI.","warn");b.disabled=false;return;}
+    const runId=resume?(latestAiSnapshot?.runId||latestAiSnapshot?.id):(crypto.randomUUID?crypto.randomUUID():`${Date.now()}_${Math.random().toString(36).slice(2)}`);
+    try{const out=await aiGateway('analyze',{sessionId,resume:!!resume,snapshotId:resume?latestAiSnapshot?.id:null,runId});toast(out.status==='completed'?'Phân tích AI hoàn tất.':'Đã nhận yêu cầu phân tích.','ok');}catch(e){toast(e.name==='AbortError'?'Gateway đang xử lý lâu. Tiến độ vẫn được lưu; có thể mở lại dashboard để xem.':e.message,'err');}finally{b.disabled=false;}
+  }
+  async function knowledgeAskCopilot(){
+    const q=$("#knCopilotQuestion").value.trim();if(q.length<3){toast('Hãy nhập câu hỏi.','warn');return;}const b=$("#knCopilotAsk"),h=$("#knCopilotAnswer");b.disabled=true;b.textContent='ĐANG SUY NGHĨ…';h.style.display='block';h.textContent='Đang tìm các tình huống liên quan…';
+    try{const out=await aiGateway('copilot',{sessionId,snapshotId:latestAiSnapshot.id,question:q});h.innerHTML=`<div>${esc(out.answer||'')}</div>${(out.evidence||[]).length?`<hr><div class="small mut"><b>Dẫn chứng raw:</b><br>${out.evidence.map(x=>`• ${esc(x.text||'')}`).join('<br>')}</div>`:''}`;}catch(e){h.textContent=e.message;}finally{b.disabled=false;b.textContent='HỎI COPILOT';}
+  }
+  function knowledgeExportAiJson(){if(!latestAiSnapshot?.result)return;downloadBlob(`knowledge-${session.joinCode}-ai-${latestAiSnapshot.id}.json`,JSON.stringify(latestAiSnapshot,null,2),'application/json;charset=utf-8');}
+  function knowledgeExportAiCsv(){if(!latestAiSnapshot?.result)return;const rows=[["topic","count","keywords","summary","issues"]];(latestAiSnapshot.result.topics||[]).forEach(t=>rows.push([t.name,t.count,(t.keywords||[]).join('|'),t.summary,(t.issues||[]).join('|')]));const out="﻿"+rows.map(r=>r.map(csvEscape).join(',')).join('\n');downloadBlob(`knowledge-${session.joinCode}-ai-topics.csv`,out,'text/csv;charset=utf-8;');}
+  function knowledgeRenderRecent(){
+    const host=$("#knRecent");if(!host)return;const needle=($("#knSearch")?.value||"").trim().toLowerCase(),sf=$("#knSeq")?.value||"";
+    const list=recentDocs.filter(x=>(!needle||(x.text||"").toLowerCase().includes(needle)||(x.participantId||"").toLowerCase().includes(needle))&&(!sf||(sf==="more"?x.sequence>=4:String(x.sequence)===sf)));
+    host.innerHTML=list.length?list.map(x=>`<div class="knowledge-item"><div class="meta">#${Number(x.sequence)} · ${esc((x.participantId||"").slice(0,10))}… · ${knowledgeDate(x.createdAt)}</div><div>${esc(x.text)}</div></div>`).join(""):'<div class="empty-state"><p>Chưa có tình huống phù hợp.</p></div>';
+    const b=$("#knMore");if(b)b.disabled=recentLimit>=250;
+  }
+  async function knowledgeExportCsv(){
+    const b=$("#knCsv");b.disabled=true;b.textContent="ĐANG TẠO CSV…";
+    try{const snap=await getDocs(query(collection(db,"knowledgeSessions",sessionId,"submissions"),orderBy("createdAt","asc")));
+      const rows=[["sessionId","joinCode","participantId","sequence","text","createdAt"]];snap.forEach(d=>{const x=d.data();rows.push([sessionId,session.joinCode,x.participantId,x.sequence,x.text,x.createdAt?.toDate?x.createdAt.toDate().toISOString():""]);});
+      const csv="﻿"+rows.map(r=>r.map(csvEscape).join(",")).join("\n");downloadBlob(`knowledge-${session.joinCode}-raw.csv`,csv,"text/csv;charset=utf-8;");toast(`Đã xuất ${snap.size} bản ghi gốc.`,"ok");
+    }catch(e){toast(mapError(e),"err");}finally{b.disabled=false;b.textContent="XUẤT CSV DỮ LIỆU GỐC";}
+  }
+}
+function renderKnowledgeStudentEntry(){
+  appRoot().innerHTML=`<div class="knowledge-join"><div class="student-top"><div class="logo">HCMA2 - TEACHING</div></div><div class="student-card card" id="knowledgeStudent"><div class="center-screen"><span class="spinner"></span></div></div></div>`;
+  knowledgeStudentFlow();
+}
+async function knowledgeStudentFlow(){
+  const host=$("#knowledgeStudent");
+  try{
+    const user=await ensureAnonAuth(),code=(getQueryParams().get("knowledge")||"").trim().toUpperCase();
+    if(!/^[A-Z2-9]{6}$/.test(code))throw new Error("Mã tham gia không hợp lệ.");
+    const mapSnap=await getDoc(doc(publicDb,"knowledgeJoinCodes",code));if(!mapSnap.exists())throw new Error("Không tìm thấy Knowledge Session.");
+    const sid=mapSnap.data().sessionId,sSnap=await getDoc(doc(publicDb,"knowledgeSessions",sid));if(!sSnap.exists())throw new Error("Phiên không tồn tại.");
+    const session={id:sid,...sSnap.data()};
+    if(session.status!=="open"||session.teacherDeletedAt||session.adminDeletedAt){host.innerHTML=`<div class="empty-state"><div class="ic">🔒</div><h2>Phiên không hoạt động</h2><p>Giảng viên hiện không nhận thêm tình huống.</p></div>`;return;}
+    const mineQ=query(collection(publicDb,"knowledgeSessions",sid,"submissions"),where("participantId","==",user.uid));
+    const mine=await getDocs(mineQ),next=mine.size+1;
+    host.innerHTML=`<div style="text-align:center"><div style="font-size:42px">🧠</div><h2>${esc(session.title)}</h2><p class="mut">Mã ${esc(code)} · Bạn đã gửi <b>${mine.size}</b> tình huống</p></div>
+      <div class="card" style="box-shadow:none"><label for="knowledgeText">Tình huống / ý kiến số ${next}</label><textarea id="knowledgeText" minlength="10" maxlength="2000" rows="7" placeholder="Mô tả tình huống cụ thể, nguyên văn (10–2.000 ký tự)…"></textarea><div class="flex between mt-8"><span class="hint" id="knChars">0 / 2.000</span><span class="hint">Tối thiểu 3 tình huống/người</span></div><button class="btn btn-lg btn-block mt-14" id="knowledgeSend">GỬI TÌNH HUỐNG ${next}</button></div>
+      <p class="small mut" style="text-align:center">Dữ liệu gốc được lưu nguyên văn. Không có AI tham gia ở bước gửi.</p>`;
+    const ta=$("#knowledgeText");ta.oninput=()=>{$("#knChars").textContent=ta.value.length+" / 2.000";};
+    $("#knowledgeSend").onclick=async()=>{const text=ta.value.trim();if(text.length<10||text.length>2000){toast("Nội dung cần từ 10 đến 2.000 ký tự.","warn");return;}
+      const btn=$("#knowledgeSend");btn.disabled=true;btn.textContent="ĐANG GỬI…";
+      try{await setDoc(doc(publicDb,"knowledgeSessions",sid,"submissions",`${user.uid}_${next}`),{sessionId:sid,participantId:user.uid,text,sequence:next,createdAt:serverTimestamp()});toast("Đã lưu tình huống nguyên văn.","ok");knowledgeStudentFlow();}
+      catch(e){toast(mapError(e),"err");btn.disabled=false;btn.textContent=`GỬI TÌNH HUỐNG ${next}`;}
+    };
+  }catch(e){host.innerHTML=`<div class="empty-state"><div class="ic">⚠️</div><h3>Không thể vào phiên</h3><p>${esc(e.message||mapError(e))}</p><button class="btn btn-outline" id="knRetry">THỬ LẠI</button></div>`;$("#knRetry").onclick=knowledgeStudentFlow;}
 }
 
 /* Giữ kích thước biểu đồ ổn định khi trình duyệt chuyển sang chế độ in/PDF. */

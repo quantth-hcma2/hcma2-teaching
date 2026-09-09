@@ -747,30 +747,56 @@ function boot(){
   }
   // Mặc định: màn hình đăng nhập giảng viên/admin
   onAuthStateChanged(auth, async (user) => {
+    const myGen = ++__authGeneration;
     STATE.authReady = true;
     // Khi đang trong luồng đăng ký thủ công (authFlowLock), luồng đó tự chịu
     // trách nhiệm render để tránh việc onAuthStateChanged "chen ngang" xóa mất
     // form đang thao tác giữa chừng (race condition giữa tạo tài khoản Auth và
     // ghi hồ sơ Firestore users/{uid}).
     if(authFlowLock) return;
+    const newUid = user ? user.uid : null;
+    const accountChanged = __lastAuthUid !== undefined && __lastAuthUid !== newUid;
+    __lastAuthUid = newUid;
+    if(accountChanged){
+      // Tài khoản active trong tab này vừa đổi (không phải lần load đầu tiên): dọn
+      // ngay listener/profile của tài khoản trước, xóa route đang lưu trên hash, đưa
+      // điều hướng riêng tư (tab đang xem) về mặc định, và bỏ mọi bản nháp tạo phiên
+      // dang dở — để tài khoản mới không kế thừa tab/route/bản nháp riêng tư (vd
+      // #/knowledge/..., tab "knowledge" còn sót lại, hay wizard chưa lưu) từ tài
+      // khoản trước.
+      stopProfileWatch();
+      clearListeners();
+      STATE.profile = null;
+      STATE.teacherNav = "overview";
+      STATE.adminNav = "overview";
+      STATE.wizard = null;
+      if(window.location.hash) window.location.hash = "";
+    }
     if(!user){ stopProfileWatch(); STATE.user = null; STATE.profile = null; renderAuthScreen(); return; }
     if(user.isAnonymous){
       // Người dùng ẩn danh không thuộc luồng teacher/admin — quay lại màn hình đăng nhập.
       stopProfileWatch(); STATE.user = null; STATE.profile = null; renderAuthScreen(); return;
     }
-    await loadProfileAndRenderForUser(user);
+    await loadProfileAndRenderForUser(user, myGen);
   });
 }
+let __authGeneration = 0;
+let __lastAuthUid; // undefined cho đến sự kiện auth đầu tiên trong tab này
 let authFlowLock = false;
-async function loadProfileAndRenderForUser(user){
+async function loadProfileAndRenderForUser(user, myGen = __authGeneration){
   STATE.user = user;
   try{
     const snap = await getDoc(doc(db,"users",user.uid));
+    // Một sự kiện auth mới hơn đã xảy ra trong lúc await ở trên (vd tài khoản vừa
+    // đổi lần nữa): bỏ kết quả cũ này, không ghi đè STATE bằng dữ liệu đã lỗi thời.
+    if(myGen !== __authGeneration) return;
     STATE.profile = snap.exists() ? snap.data() : null;
   }catch(e){
+    if(myGen !== __authGeneration) return;
     toast(mapError(e), "err");
     STATE.profile = null;
   }
+  if(myGen !== __authGeneration) return;
   if(!STATE.profile){ stopProfileWatch(); renderNeedsProfileScreen(); return; }
   // cập nhật lastLoginAt (best-effort, không chặn UI)
   updateDoc(doc(db,"users",user.uid), { lastLoginAt: serverTimestamp(), updatedAt: serverTimestamp() }).catch(()=>{});
@@ -1879,28 +1905,33 @@ async function teacherOverview(c){
   $("#btnQuickSets").onclick=()=>{STATE.teacherNav="questionSets";teacherRoute();};
   try{
     const classesQ = query(collection(db,"classes"), where("ownerId","==",uid));
-    const sessionsQ = query(collection(db,"sessions"), where("ownerId","==",uid));
-    const [classesCnt, sessionsCnt] = await Promise.all([getCountFromServer(classesQ), getCountFromServer(sessionsQ)]);
-    const sessSnap = await getDocs(query(collection(db,"sessions"), where("ownerId","==",uid), orderBy("createdAt","desc"), limit(8)));
+    // Sessions không có field deletedAt khi chưa từng bị xóa, nên không thể lọc "chưa xóa"
+    // ngay trong truy vấn Firestore mà không đổi schema/index — lấy tối đa 300 phiên gần nhất
+    // (giống Lịch sử phiên/Thùng rác đã dùng) rồi lọc deletedAt phía client.
+    const [classesCnt, sessSnapAll] = await Promise.all([
+      getCountFromServer(classesQ),
+      getDocs(query(collection(db,"sessions"), where("ownerId","==",uid), orderBy("createdAt","desc"), limit(300)))
+    ]);
+    const activeSessions = sessSnapAll.docs.map(d=>({id:d.id,...d.data()})).filter(s=>!s.deletedAt);
+    const recentSessions = activeSessions.slice(0,8);
     let totalResponses = 0, totalExpected = 0;
     const classSnap = await getDocs(classesQ);
     const classMap = {}; classSnap.docs.forEach(d=>classMap[d.id]=d.data());
-    sessSnap.docs.forEach(d=>{
-      const s = d.data();
+    recentSessions.forEach(s=>{
       totalResponses += s.responseCount||0;
       const cls = classMap[s.classId];
       if(cls && cls.studentCount) totalExpected += (cls.studentCount * (s.questionCount||1));
     });
     const rate = totalExpected>0 ? Math.min(100, Math.round(totalResponses/totalExpected*100)) + "%" : "—";
     $("#tOvGrid").innerHTML = [
-      [classesCnt.data().count,"Số lớp"], [sessionsCnt.data().count,"Số phiên"],
+      [classesCnt.data().count,"Số lớp"], [activeSessions.length,"Số phiên"],
       [totalResponses,"Tổng lượt trả lời (gần đây)"], [rate,"Tỷ lệ tham gia (ước tính)"]
     ].map(([n,l])=>`<div class="stat"><div class="num">${n}</div><div class="lbl">${esc(l)}</div></div>`).join("");
-    if(sessSnap.empty){ $("#tOvRecent").innerHTML = `<div class="empty-state"><div class="ic">🗳️</div>Chưa có phiên tương tác nào. Hãy tạo phiên đầu tiên!</div>`; }
+    if(recentSessions.length===0){ $("#tOvRecent").innerHTML = `<div class="empty-state"><div class="ic">🗳️</div>Chưa có phiên tương tác nào. Hãy tạo phiên đầu tiên!</div>`; }
     else{
       $("#tOvRecent").innerHTML = `<table><thead><tr><th>Hoạt động</th><th>Trạng thái</th><th>Câu hỏi</th><th>Lượt trả lời</th><th>Ngày tạo</th><th></th></tr></thead><tbody>
-        ${sessSnap.docs.map(d=>{ const s=d.data(); return `<tr><td>${esc(s.title)}</td><td>${sessionStatusBadge(s.status)}</td><td>${s.questionCount||0}</td><td>${s.responseCount||0}</td><td>${fmtDateShort(s.createdAt)}</td>
-          <td><button class="btn btn-sm btn-outline" data-open="${d.id}">MỞ</button></td></tr>`; }).join("")}
+        ${recentSessions.map(s=>{ return `<tr><td>${esc(s.title)}</td><td>${sessionStatusBadge(s.status)}</td><td>${s.questionCount||0}</td><td>${s.responseCount||0}</td><td>${fmtDateShort(s.createdAt)}</td>
+          <td><button class="btn btn-sm btn-outline" data-open="${s.id}">MỞ</button></td></tr>`; }).join("")}
       </tbody></table>`;
       $$("[data-open]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/live/"+encodeURIComponent(b.dataset.open); });
     }
@@ -3085,6 +3116,7 @@ async function teacherLiveControl(c, sessionId){
   if(!sessionSnap.exists()){ c.innerHTML = `<div class="empty-state"><div class="ic">🚫</div>Không tìm thấy phiên tương tác.</div>`; return; }
   let session = sessionSnap.data();
   if(session.ownerId !== STATE.user.uid){ c.innerHTML = `<div class="empty-state"><div class="ic">⛔</div>Bạn không có quyền truy cập phiên này.</div>`; return; }
+  if(session.deletedAt){ c.innerHTML = `<div class="empty-state"><div class="ic">🗑️</div>Phiên này đang ở trong Thùng rác. Hãy khôi phục phiên trước khi điều khiển.</div>`; return; }
 
   let questions = [];
   try{
@@ -3569,6 +3601,7 @@ async function teacherReportView(c, sessionId){
     const sSnap = await getDoc(doc(db,"sessions",sessionId));
     if(!sSnap.exists() || sSnap.data().ownerId!==STATE.user.uid){ c.innerHTML = `<div class="empty-state"><div class="ic">⛔</div>Không tìm thấy hoặc không có quyền xem báo cáo này.</div>`; return; }
     const session = sSnap.data();
+    if(session.deletedAt){ c.innerHTML = `<div class="empty-state"><div class="ic">🗑️</div>Phiên này đang ở trong Thùng rác. Hãy khôi phục phiên trước khi xem báo cáo.</div>`; return; }
     const classSnap = session.classId ? await getDoc(doc(db,"classes",session.classId)) : null;
     const className = classSnap && classSnap.exists() ? classSnap.data().name : "—";
     const classSize = classSnap && classSnap.exists() ? Number(classSnap.data().studentCount||0) : 0;
@@ -4162,7 +4195,7 @@ async function knowledgeModule(c,isAdminView){
       ${isAdminView&&s.teacherDeletedAt?'<p><span class="badge badge-warn">GIẢNG VIÊN ĐÃ ĐƯA VÀO THÙNG RÁC</span></p>':''}
       <div class="flex gap-8"><button class="btn btn-outline btn-sm" data-kn-open="${s.id}">MỞ DASHBOARD</button>
       ${isAdminView&&s.teacherDeletedAt?`<button class="btn btn-sm btn-ok" data-kn-teacher-restore="${s.id}">KHÔI PHỤC CHO GIẢNG VIÊN</button>`:''}
-      <button class="btn btn-sm btn-danger" data-kn-trash="${s.id}">${isAdminView?'ĐƯA VÀO ADMIN TRASH':'XÓA'}</button></div></div>`).join("")}</div>`:
+      <button class="btn btn-sm btn-danger" data-kn-trash="${s.id}">${isAdminView?'ĐƯA VÀO ADMIN TRASH':'ĐƯA VÀO THÙNG RÁC'}</button></div></div>`).join("")}</div>`:
       `<div class="card empty-state"><div class="ic">🧠</div><h3>Chưa có Knowledge Session</h3><p>Tạo phiên đầu tiên để lấy mã và QR cho học viên.</p></div>`;
     $$('[data-kn-open]').forEach(b=>b.onclick=()=>knowledgeDashboard(c,b.dataset.knOpen,isAdminView));
     $$('[data-kn-teacher-restore]').forEach(b=>b.onclick=()=>knowledgeRestoreForTeacher(b.dataset.knTeacherRestore,c));
@@ -4230,20 +4263,35 @@ function knowledgeCreateDialog(c,isAdminView){
 }
 async function knowledgeDashboard(c,sessionId,isAdminView){
   clearListeners(); let session=null,recentDocs=[],recentLimit=50,totalCount=0,participantCount=0,aiAttached=false,latestAiSnapshot=null;
+  const openerUid=STATE.user.uid;
   c.innerHTML=`<button class="btn btn-ghost btn-sm" id="knBack">← Danh sách</button><div id="knDash" class="mt-14"><div class="center-screen"><span class="spinner"></span></div></div>`;
   $("#knBack").onclick=()=>{window.location.hash=""; if(isAdminView){STATE.adminNav="knowledge";adminRoute("knowledge");}else{STATE.teacherNav="knowledge";teacherRoute();}};
   const sRef=doc(db,"knowledgeSessions",sessionId);
+  // Client guard (defense-in-depth, không thay thế Firestore Rules): xác minh chủ sở hữu
+  // TRƯỚC khi gắn bất kỳ listener riêng tư nào (submissions/AI), để route sâu bị lưu lại
+  // (vd #/knowledge/xxx) không thể lộ dữ liệu của giảng viên khác qua tài khoản đang đăng nhập.
+  let ownerCheckSnap;
+  try{ ownerCheckSnap = await getDoc(sRef); }
+  catch(e){ $("#knDash").innerHTML=errorBlock(e,()=>knowledgeDashboard(c,sessionId,isAdminView)); return; }
+  if(STATE.user.uid!==openerUid) return; // tài khoản đã đổi trong lúc chờ — bỏ qua, không render
+  if(!ownerCheckSnap.exists()){ $("#knDash").innerHTML='<div class="card">Không tìm thấy phiên.</div>'; return; }
+  if(!isAdminView && ownerCheckSnap.data().ownerId!==openerUid){
+    $("#knDash").innerHTML='<div class="empty-state"><div class="ic">⛔</div>Bạn không có quyền truy cập phiên này.</div>';
+    return;
+  }
   let recentUnsub=null;
   const attachRecent=()=>{
     if(recentUnsub)recentUnsub();
-    recentUnsub=onSnapshot(query(collection(db,"knowledgeSessions",sessionId,"submissions"),orderBy("createdAt","desc"),limit(recentLimit)),snap=>{recentDocs=snap.docs.map(d=>({id:d.id,...d.data()}));knowledgeRenderRecent();},e=>toast(mapError(e),"err"));
+    recentUnsub=onSnapshot(query(collection(db,"knowledgeSessions",sessionId,"submissions"),orderBy("createdAt","desc"),limit(recentLimit)),snap=>{if(STATE.user.uid!==openerUid)return;recentDocs=snap.docs.map(d=>({id:d.id,...d.data()}));knowledgeRenderRecent();},e=>toast(mapError(e),"err"));
     STATE.listeners.push(recentUnsub);
   };
   track(onSnapshot(sRef,snap=>{
+    if(STATE.user.uid!==openerUid)return;
     if(!snap.exists()){c.innerHTML='<div class="card">Không tìm thấy phiên.</div>';return;}
     session={id:snap.id,...snap.data()}; knowledgeRenderDashboard();
   },e=>{c.innerHTML=errorBlock(e,()=>knowledgeDashboard(c,sessionId,isAdminView));}));
   track(onSnapshot(collection(db,"knowledgeSessions",sessionId,"submissions"),snap=>{
+    if(STATE.user.uid!==openerUid)return;
     const people=new Set();snap.docs.forEach(d=>people.add(d.data().participantId));participantCount=people.size;totalCount=snap.size;
     const pc=$("#knParticipants"),sc=$("#knSubmissions");if(pc)pc.textContent=participantCount;if(sc)sc.textContent=totalCount;
     const pct=session?Math.min(100,Math.round(totalCount/Number(session.targetSubmissions||1500)*100)):0;
@@ -4276,7 +4324,7 @@ knowledgeRenderAi();
   function attachAi(){
     if(aiAttached)return; aiAttached=true;
     const q=query(collection(db,"knowledgeSessions",sessionId,"aiSnapshots"),orderBy("createdAt","desc"),limit(1));
-    track(onSnapshot(q,snap=>{latestAiSnapshot=snap.empty?null:{id:snap.docs[0].id,...snap.docs[0].data()};knowledgeRenderAi();},e=>{const h=$("#knAiStatus");if(h)h.innerHTML=`<span class="small" style="color:#b91c1c">${esc(mapError(e))}</span>`;}));
+    track(onSnapshot(q,snap=>{if(STATE.user.uid!==openerUid)return;latestAiSnapshot=snap.empty?null:{id:snap.docs[0].id,...snap.docs[0].data()};knowledgeRenderAi();},e=>{const h=$("#knAiStatus");if(h)h.innerHTML=`<span class="small" style="color:#b91c1c">${esc(mapError(e))}</span>`;}));
   }
   function knowledgeRenderAi(){
     const s=latestAiSnapshot,statusHost=$("#knAiStatus"),dash=$("#knAiDashboard");if(!statusHost||!dash)return;

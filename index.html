@@ -4239,23 +4239,80 @@ async function knowledgePermanentDelete(sessionId,title){
     toast(out.idempotentReplay?"Phiên đã được xóa trước đó.":"Đã xóa vĩnh viễn phiên trên máy chủ.","ok");
   }catch(e){toast(e.message||mapError(e),"err");}
 }
+const KN_PARTICIPANT_FIELD_LABELS={fullName:"Họ và tên",className:"Lớp",email:"Email",phone:"Số điện thoại"};
+function knowledgeNormalizeClassOptions(raw){
+  const seen=new Set(),out=[];
+  (raw||"").split("\n").forEach(line=>{
+    const v=line.trim();
+    if(!v||seen.has(v))return;
+    seen.add(v);out.push(v);
+  });
+  return out;
+}
 function knowledgeCreateDialog(c,isAdminView){
   openModal(`<div class="modal-head"><h3>🧠 Tạo Knowledge Session</h3><button class="modal-x" id="knClose">×</button></div>
     <div class="field"><label>Tên phiên</label><input id="knTitle" maxlength="120" placeholder="Ví dụ: Tình huống lãnh đạo ngày 06/09"></div>
     <div class="field"><label>Mục tiêu số tình huống</label><input id="knTarget" type="number" min="3" max="10000" value="1500"><div class="hint">500 học viên × tối thiểu 3 tình huống = 1.500.</div></div>
-    <div class="flex end gap-10"><button class="btn btn-ghost" id="knCancel">Hủy</button><button class="btn" id="knCreate">TẠO PHIÊN</button></div>`);
+    <div class="field"><label>Số tình huống tối thiểu mỗi người</label><input id="knMinPer" type="number" min="1" max="20" value="3"></div>
+    <div class="field"><label class="flex gap-8" style="align-items:center"><input type="checkbox" id="knCollectProfile"> Thu thập thông tin người tham gia</label></div>
+    <div id="knProfileFields" style="display:none">
+      <div class="field"><label>Trường thông tin thu thập</label>
+        <table><thead><tr><th>Trường</th><th>Bật</th><th>Bắt buộc</th></tr></thead><tbody>
+          ${Object.keys(KN_PARTICIPANT_FIELD_LABELS).map(f=>`<tr><td>${KN_PARTICIPANT_FIELD_LABELS[f]}</td>
+            <td><input type="checkbox" class="knPfEnabled" data-field="${f}" ${f==="fullName"||f==="className"?"checked":""}></td>
+            <td><input type="checkbox" class="knPfRequired" data-field="${f}" ${f==="fullName"||f==="className"?"checked":""}></td></tr>`).join("")}
+        </tbody></table>
+      </div>
+      <div class="field" id="knClassOptionsWrap"><label>Danh sách lớp (mỗi lớp một dòng)</label>
+        <textarea id="knClassOptions" rows="6" placeholder="K77.A01&#10;K77.A02&#10;..."></textarea>
+        <div class="hint">Danh sách lớp riêng cho phiên này — không dùng chung giữa các phiên.</div>
+      </div>
+    </div>
+    <div class="flex end gap-10"><button class="btn btn-ghost" id="knCancel">Hủy</button><button class="btn" id="knCreate">TẠO PHIÊN</button></div>`,true);
   $("#knClose").onclick=$("#knCancel").onclick=closeModal;
+  $("#knCollectProfile").onchange=()=>{ $("#knProfileFields").style.display=$("#knCollectProfile").checked?"":"none"; };
+  $$(".knPfEnabled").forEach(cb=>{
+    cb.onchange=()=>{
+      const req=$(`.knPfRequired[data-field="${cb.dataset.field}"]`);
+      if(!cb.checked){req.checked=false;req.disabled=true;}else{req.disabled=false;}
+      if(cb.dataset.field==="className")$("#knClassOptionsWrap").style.display=cb.checked?"":"none";
+    };
+    if(!cb.checked){
+      const req=$(`.knPfRequired[data-field="${cb.dataset.field}"]`);req.disabled=true;
+      if(cb.dataset.field==="className")$("#knClassOptionsWrap").style.display="none";
+    }
+  });
   $("#knCreate").onclick=async()=>{
-    const title=$("#knTitle").value.trim(), target=Number($("#knTarget").value);
+    const title=$("#knTitle").value.trim(), target=Number($("#knTarget").value), minPer=Number($("#knMinPer").value);
     if(title.length<3){toast("Tên phiên cần ít nhất 3 ký tự.","warn");return;}
     if(!Number.isInteger(target)||target<3||target>10000){toast("Mục tiêu phải từ 3 đến 10.000.","warn");return;}
+    if(!Number.isInteger(minPer)||minPer<1||minPer>20){toast("Số tình huống tối thiểu mỗi người phải từ 1 đến 20.","warn");return;}
+    const collectProfile=$("#knCollectProfile").checked;
+    let participantFields=null,classOptions=null;
+    if(collectProfile){
+      participantFields={};
+      Object.keys(KN_PARTICIPANT_FIELD_LABELS).forEach(f=>{
+        const enabled=$(`.knPfEnabled[data-field="${f}"]`).checked;
+        const required=enabled&&$(`.knPfRequired[data-field="${f}"]`).checked;
+        participantFields[f]={enabled,required};
+      });
+      if(!Object.values(participantFields).some(x=>x.enabled)){toast("Cần bật ít nhất một trường thông tin.","warn");return;}
+      classOptions=participantFields.className.enabled?knowledgeNormalizeClassOptions($("#knClassOptions").value):[];
+      if(participantFields.className.enabled&&classOptions.length===0){toast("Cần nhập ít nhất một lớp khi bật trường Lớp.","warn");return;}
+      // GATE 3C: mỗi tên lớp tối đa 40 ký tự — khớp đúng giới hạn className của hồ sơ
+      // người tham gia (participants/{uid}.className) trong firestore.rules.candidate,
+      // để một lớp hợp lệ trong danh sách này không bao giờ bị Rules từ chối khi học viên chọn.
+      if(classOptions.some(cl=>cl.length>40)){toast("Mỗi tên lớp tối đa 40 ký tự.","warn");return;}
+    }
     const btn=$("#knCreate");btn.disabled=true;
     try{
       let code="",codeRef=null;
       for(let i=0;i<5;i++){code=knowledgeCode();codeRef=doc(db,"knowledgeJoinCodes",code);if(!(await getDoc(codeRef)).exists())break;code="";}
       if(!code)throw new Error("Không thể sinh mã tham gia. Vui lòng thử lại.");
       const sRef=doc(collection(db,"knowledgeSessions")); const batch=writeBatch(db);
-      batch.set(sRef,{title,joinCode:code,ownerId:STATE.user.uid,status:"open",minimumPerParticipant:3,targetSubmissions:target,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+      const sessionData={title,joinCode:code,ownerId:STATE.user.uid,status:"open",minimumPerParticipant:minPer,targetSubmissions:target,createdAt:serverTimestamp(),updatedAt:serverTimestamp()};
+      if(collectProfile){sessionData.collectParticipantProfile=true;sessionData.participantFields=participantFields;sessionData.classOptions=classOptions;}
+      batch.set(sRef,sessionData);
       batch.set(codeRef,{sessionId:sRef.id,ownerId:STATE.user.uid,createdAt:serverTimestamp()});
       await batch.commit(); closeModal(); toast("Đã tạo Knowledge Session.","ok"); knowledgeDashboard(c,sRef.id,isAdminView);
     }catch(e){toast(mapError(e)||e.message,"err");btn.disabled=false;}
@@ -4263,6 +4320,12 @@ function knowledgeCreateDialog(c,isAdminView){
 }
 async function knowledgeDashboard(c,sessionId,isAdminView){
   clearListeners(); let session=null,recentDocs=[],recentLimit=50,totalCount=0,participantCount=0,aiAttached=false,latestAiSnapshot=null;
+  // GATE 3D: participants (hồ sơ PII) chỉ tải ON-DEMAND (getDocs, không phải onSnapshot
+  // realtime) và CHỈ SAU KHI xác minh chủ sở hữu bên dưới đã thành công — không bao giờ
+  // gắn trước bước xác thực đó. participantCounts được cập nhật realtime từ listener
+  // submissions HIỆN CÓ (không đọc thêm PII) để tiến độ luôn mới mà không cần tải lại hồ sơ.
+  let participants=null,participantsLoading=false;
+  const participantCounts=new Map();
   const openerUid=STATE.user.uid;
   c.innerHTML=`<button class="btn btn-ghost btn-sm" id="knBack">← Danh sách</button><div id="knDash" class="mt-14"><div class="center-screen"><span class="spinner"></span></div></div>`;
   $("#knBack").onclick=()=>{window.location.hash=""; if(isAdminView){STATE.adminNav="knowledge";adminRoute("knowledge");}else{STATE.teacherNav="knowledge";teacherRoute();}};
@@ -4292,10 +4355,15 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
   },e=>{c.innerHTML=errorBlock(e,()=>knowledgeDashboard(c,sessionId,isAdminView));}));
   track(onSnapshot(collection(db,"knowledgeSessions",sessionId,"submissions"),snap=>{
     if(STATE.user.uid!==openerUid)return;
-    const people=new Set();snap.docs.forEach(d=>people.add(d.data().participantId));participantCount=people.size;totalCount=snap.size;
+    const people=new Set();participantCounts.clear();
+    snap.docs.forEach(d=>{const pid=d.data().participantId;people.add(pid);participantCounts.set(pid,(participantCounts.get(pid)||0)+1);});
+    participantCount=people.size;totalCount=snap.size;
     const pc=$("#knParticipants"),sc=$("#knSubmissions");if(pc)pc.textContent=participantCount;if(sc)sc.textContent=totalCount;
     const pct=session?Math.min(100,Math.round(totalCount/Number(session.targetSubmissions||1500)*100)):0;
     if($("#knProgressText"))$("#knProgressText").textContent=pct+"%";if($("#knProgressBar"))$("#knProgressBar").style.width=pct+"%";
+    // GATE 3D: chỉ TÍNH LẠI tiến độ trên hồ sơ đã có sẵn trong bộ nhớ — không đọc lại
+    // participants (PII) chỉ vì submissions vừa thay đổi.
+    if(session&&session.collectParticipantProfile===true&&participants!==null)knowledgeRenderParticipants();
   },e=>toast(mapError(e),"err")));
   function knowledgeRenderDashboard(){
     const url=knowledgeJoinUrl(session.joinCode);
@@ -4303,6 +4371,7 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
       <div class="grid grid-3"><div class="card knowledge-stat"><strong id="knParticipants">0</strong><span>Học viên</span></div><div class="card knowledge-stat"><strong id="knSubmissions">0</strong><span>Tình huống</span></div><div class="card knowledge-stat"><strong id="knProgressText">0%</strong><span>Mục tiêu ${Number(session.targetSubmissions||1500)}</span></div></div>
       <div class="card"><div class="knowledge-progress"><span id="knProgressBar" style="width:0"></span></div></div>
       <div class="grid grid-2 mt-14"><div class="card"><h3>QR / liên kết công khai</h3><div class="flex gap-14" style="align-items:center;flex-wrap:wrap"><div class="pres-qr-wrap clickable" id="knQrWrap" role="button" tabindex="0" aria-label="Phóng to mã QR"><div id="knQr"></div><div class="pres-qr-hint">🔍 Nhấp để phóng to mã QR</div></div><div style="flex:1;min-width:220px"><input id="knUrl" value="${esc(url)}" readonly><div class="flex gap-8 mt-8"><button class="btn btn-sm" id="knCopy">SAO CHÉP</button><button class="btn btn-sm ${session.status==='open'?'btn-danger':'btn-ok'}" id="knToggle">${session.status==='open'?'ĐÓNG PHIÊN':'MỞ LẠI'}</button></div></div></div></div>
+      ${session.collectParticipantProfile===true?`<div class="card mt-14" id="knPfCard"><div class="section-title"><div><h3>👥 Người tham gia</h3><p class="mut">Thông tin cá nhân chỉ tải khi mở mục này — không cập nhật theo thời gian thực; bấm "Làm mới danh sách" để lấy dữ liệu mới nhất.</p></div></div><div id="knPfWrap"><div class="center-screen"><span class="spinner"></span></div></div></div>`:""}
       <div class="card"><h3>🤖 AI Analysis — Phase 2</h3><p class="mut">AI đọc bản sao theo lô; dữ liệu gốc không bị sửa hoặc ghi đè.</p><div class="flex gap-8" style="flex-wrap:wrap"><button class="btn" id="knAiRun">PHÂN TÍCH BẰNG AI</button><button class="btn btn-outline" id="knAiRetry" style="display:none">TIẾP TỤC / THỬ LẠI</button><button class="btn btn-outline" id="knAiJson" disabled>XUẤT AI JSON</button><button class="btn btn-outline" id="knAiCsv" disabled>XUẤT AI CSV</button></div><button class="btn btn-outline mt-8" id="knCsv">XUẤT CSV DỮ LIỆU GỐC</button><div id="knAiStatus" class="mt-14"><span class="mut small">Chưa có bản phân tích.</span></div></div></div>
       <div class="card second-brain-card mt-14"><div class="second-brain-head"><span class="second-brain-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 4.5a3 3 0 0 0-3 3v.3A3.2 3.2 0 0 0 4.5 10.8a3.2 3.2 0 0 0 1 5.4A3 3 0 0 0 8.5 20a2.7 2.7 0 0 0 2.5-1.6"/><path d="M15 4.5a3 3 0 0 1 3 3v.3a3.2 3.2 0 0 1 1.5 3 3.2 3.2 0 0 1-1 5.4A3 3 0 0 1 15.5 20a2.7 2.7 0 0 1-2.5-1.6"/><path d="M12 4.5v14"/><circle cx="7.2" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="16.8" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="14.5" r=".9" fill="currentColor" stroke="none"/><circle cx="16" cy="14.5" r=".9" fill="currentColor" stroke="none"/></svg></span><div><h3>SECOND BRAIN LIVE</h3><p>Trình chiếu không gian tri thức được hình thành theo thời gian thực</p></div></div><a class="btn btn-lg" href="https://brain.quantth.vn/knowledge-wall.html" target="_blank" rel="noopener noreferrer">MỞ SECOND BRAIN LIVE<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></svg><span class="sr-only"> (mở trong tab mới)</span></a></div>
       <div id="knAiDashboard" class="mt-14"></div>
@@ -4314,6 +4383,13 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
     $("#knQrWrap").onclick=()=>openKnowledgeQrPopup(session,url);$("#knQrWrap").onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();openKnowledgeQrPopup(session,url);}};
     $("#knCopy").onclick=()=>navigator.clipboard.writeText(url).then(()=>toast("Đã sao chép liên kết.","ok")).catch(()=>toast("Hãy sao chép liên kết trong ô.","warn"));
     $("#knToggle").onclick=async()=>{try{await updateDoc(sRef,{status:session.status==="open"?"closed":"open",updatedAt:serverTimestamp()});toast("Đã cập nhật trạng thái phiên.","ok");}catch(e){toast(mapError(e),"err");}};
+    // GATE 3D: chỉ tải participants (PII) khi phiên có bật thu thập hồ sơ — không bao giờ
+    // với phiên cũ/OFF. Tải lại (getDocs on-demand) chỉ khi chưa có sẵn trong bộ nhớ, để
+    // việc phiên tự re-render (vd đổi trạng thái) không gây đọc lại PII không cần thiết.
+    if(session.collectParticipantProfile===true){
+      if(participants===null&&!participantsLoading)loadParticipants();
+      else knowledgeRenderParticipants();
+    }
     $("#knCsv").onclick=knowledgeExportCsv; $("#knAiRun").onclick=()=>knowledgeStartAi(false); $("#knAiRetry").onclick=()=>knowledgeStartAi(true); $("#knAiJson").onclick=knowledgeExportAiJson; $("#knAiCsv").onclick=knowledgeExportAiCsv; $("#knSearch").oninput=knowledgeRenderRecent;$("#knSeq").onchange=knowledgeRenderRecent;
     $("#knMore").onclick=()=>{recentLimit=Math.min(250,recentLimit+50);attachRecent();};
     attachRecent();
@@ -4360,6 +4436,71 @@ knowledgeRenderAi();
   }
   function knowledgeExportAiJson(){if(!latestAiSnapshot?.result)return;downloadBlob(`knowledge-${session.joinCode}-ai-${latestAiSnapshot.id}.json`,JSON.stringify(latestAiSnapshot,null,2),'application/json;charset=utf-8');}
   function knowledgeExportAiCsv(){if(!latestAiSnapshot?.result)return;const rows=[["topic","count","keywords","summary","issues"]];(latestAiSnapshot.result.topics||[]).forEach(t=>rows.push([t.name,t.count,(t.keywords||[]).join('|'),t.summary,(t.issues||[]).join('|')]));const out="﻿"+rows.map(r=>r.map(csvEscape).join(',')).join('\n');downloadBlob(`knowledge-${session.joinCode}-ai-topics.csv`,out,'text/csv;charset=utf-8;');}
+  // GATE 3D: đọc participants MỘT LẦN theo yêu cầu (getDocs, không phải onSnapshot) —
+  // hàm này chỉ được gọi từ những chỗ đã xác minh session.collectParticipantProfile===true
+  // VÀ sau khi bước xác minh chủ sở hữu ở đầu knowledgeDashboard() đã qua từ trước.
+  async function loadParticipants(){
+    if(session.collectParticipantProfile!==true)return;
+    participantsLoading=true;
+    const wrap=$("#knPfWrap");if(wrap)wrap.innerHTML='<div class="center-screen"><span class="spinner"></span></div>';
+    try{
+      const snap=await getDocs(collection(db,"knowledgeSessions",sessionId,"participants"));
+      if(STATE.user.uid!==openerUid){participantsLoading=false;return;}
+      participants=snap.docs.map(d=>({id:d.id,...d.data()}));
+    }catch(e){
+      participantsLoading=false;
+      if(wrap)wrap.innerHTML=errorBlock(e,loadParticipants);
+      return;
+    }
+    participantsLoading=false;
+    knowledgeRenderParticipants();
+  }
+  function knowledgeRenderParticipants(){
+    const wrap=$("#knPfWrap");if(!wrap||session.collectParticipantProfile!==true||participants===null)return;
+    const minPer=(Number.isInteger(session.minimumPerParticipant)&&session.minimumPerParticipant>=1)?session.minimumPerParticipant:3;
+    const pf=session.participantFields||{};
+    const activeFields=Object.keys(KN_PARTICIPANT_FIELD_LABELS).filter(f=>pf[f]&&pf[f].enabled);
+    const rows=participants.map(p=>{const cnt=participantCounts.get(p.id)||0;return{...p,_count:cnt,_complete:cnt>=minPer};});
+    const total=rows.length,completed=rows.filter(r=>r._complete).length,incomplete=total-completed;
+    // GATE 3D (mục 4): submissions không khớp hồ sơ nào — chỉ đếm, KHÔNG hiển thị PII giả.
+    const knownIds=new Set(rows.map(r=>r.id));
+    let orphanCount=0;participantCounts.forEach((cnt,pid)=>{if(!knownIds.has(pid))orphanCount++;});
+    const filter=$("#knPfFilter")?.value||"all";
+    const filtered=rows.filter(r=>filter==="complete"?r._complete:(filter==="incomplete"?!r._complete:true));
+    wrap.innerHTML=`<div class="grid grid-3"><div class="card knowledge-stat"><strong>${total}</strong><span>Đã đăng ký</span></div><div class="card knowledge-stat"><strong>${completed}</strong><span>Đã hoàn thành</span></div><div class="card knowledge-stat"><strong>${incomplete}</strong><span>Chưa hoàn thành</span></div></div>
+      ${orphanCount>0?`<p class="small" style="color:#b45309">⚠️ ${orphanCount} lượt gửi không khớp với hồ sơ người tham gia nào — không hiển thị trong bảng dưới đây.</p>`:""}
+      <div class="flex gap-8 mt-8" style="flex-wrap:wrap"><select id="knPfFilter"><option value="all">Tất cả</option><option value="complete">Đã hoàn thành</option><option value="incomplete">Chưa hoàn thành</option></select><button class="btn btn-outline btn-sm" id="knPfRefresh">🔄 Làm mới danh sách</button><button class="btn btn-outline btn-sm" id="knPfExport">XUẤT DANH SÁCH NGƯỜI THAM GIA</button></div>
+      <div class="table-wrap mt-8"><table><thead><tr>${activeFields.map(f=>`<th>${esc(KN_PARTICIPANT_FIELD_LABELS[f])}</th>`).join("")}<th>Tiến độ</th><th>Trạng thái</th></tr></thead><tbody>
+        ${filtered.length?filtered.map(r=>`<tr>${activeFields.map(f=>`<td>${esc(r[f]||"—")}</td>`).join("")}<td>${r._count}/${minPer}</td><td>${r._complete?"Hoàn thành":"Chưa hoàn thành"}</td></tr>`).join(""):`<tr><td colspan="${activeFields.length+2}">Không có người tham gia phù hợp.</td></tr>`}
+      </tbody></table></div>`;
+    $("#knPfFilter").value=filter;
+    $("#knPfFilter").onchange=knowledgeRenderParticipants;
+    $("#knPfRefresh").onclick=()=>{if(!participantsLoading)loadParticipants();};
+    $("#knPfExport").onclick=knowledgeExportParticipants;
+  }
+  // GATE 3D (mục 9): trung hòa formula injection — giá trị bắt đầu bằng = + - @ được
+  // thêm dấu ' phía trước để Excel/Sheets luôn hiểu là văn bản, không bao giờ thực thi
+  // như công thức. Chỉ áp dụng cho BẢN XUẤT — không sửa giá trị gốc lưu trong Firestore.
+  function knowledgeSpreadsheetSafe(v){
+    const s=String(v==null?"":v);
+    return /^[=+\-@]/.test(s)?"'"+s:s;
+  }
+  async function knowledgeExportParticipants(){
+    if(session.collectParticipantProfile!==true||participants===null)return;
+    const btn=$("#knPfExport");if(btn){btn.disabled=true;btn.textContent="ĐANG TẠO CSV…";}
+    try{
+      const minPer=(Number.isInteger(session.minimumPerParticipant)&&session.minimumPerParticipant>=1)?session.minimumPerParticipant:3;
+      const rows=[["Họ và tên","Lớp","Email","Số điện thoại","Số tình huống","Yêu cầu tối thiểu","Trạng thái","Mã phiên","Tên phiên"]];
+      participants.forEach(p=>{
+        const cnt=participantCounts.get(p.id)||0;
+        rows.push([p.fullName||"",p.className||"",p.email||"",p.phone||"",cnt,minPer,cnt>=minPer?"Hoàn thành":"Chưa hoàn thành",session.joinCode||"",session.title||""]);
+      });
+      const csv="﻿"+rows.map(r=>r.map(v=>csvEscape(knowledgeSpreadsheetSafe(v))).join(",")).join("\n");
+      downloadBlob(`knowledge-${session.joinCode}-nguoi-tham-gia.csv`,csv,"text/csv;charset=utf-8;");
+      toast(`Đã xuất ${participants.length} người tham gia.`,"ok");
+    }catch(e){toast(mapError(e),"err");}
+    finally{if(btn){btn.disabled=false;btn.textContent="XUẤT DANH SÁCH NGƯỜI THAM GIA";}}
+  }
   function knowledgeRenderRecent(){
     const host=$("#knRecent");if(!host)return;const needle=($("#knSearch")?.value||"").trim().toLowerCase(),sf=$("#knSeq")?.value||"";
     const list=recentDocs.filter(x=>(!needle||(x.text||"").toLowerCase().includes(needle)||(x.participantId||"").toLowerCase().includes(needle))&&(!sf||(sf==="more"?x.sequence>=4:String(x.sequence)===sf)));
@@ -4378,6 +4519,97 @@ function renderKnowledgeStudentEntry(){
   appRoot().innerHTML=`<div class="knowledge-join"><div class="student-top"><div class="logo">HCMA2 - TEACHING</div></div><div class="student-card card" id="knowledgeStudent"><div class="center-screen"><span class="spinner"></span></div></div></div>`;
   knowledgeStudentFlow();
 }
+// GATE 3C: hồ sơ hợp lệ khi mọi field ĐANG BẬT và BẮT BUỘC đều có giá trị, và nếu Lớp
+// đang bật thì giá trị Lớp đã lưu phải khớp đúng một trong classOptions hiện tại của
+// phiên (cấu hình phiên bất biến sau khi tạo — xem Gate 3B — nên việc này ổn định).
+function knowledgeProfileIsValid(profile,participantFields,classOptions){
+  if(!profile)return false;
+  const pf=participantFields||{};
+  for(const f of Object.keys(KN_PARTICIPANT_FIELD_LABELS)){
+    const cfg=pf[f];
+    if(!cfg||!cfg.enabled)continue;
+    const v=profile[f];
+    if(cfg.required&&(!v||!String(v).trim()))return false;
+  }
+  if(pf.className&&pf.className.enabled&&profile.className&&!(classOptions||[]).includes(profile.className))return false;
+  return true;
+}
+function knowledgeRenderProfileForm(host,session,sid,user,existingProfile,onValid){
+  const pf=session.participantFields||{};
+  const fields=Object.keys(KN_PARTICIPANT_FIELD_LABELS).filter(f=>pf[f]&&pf[f].enabled);
+  host.innerHTML=`<div style="text-align:center"><div style="font-size:42px">🧠</div><h2>${esc(session.title)}</h2><p class="mut">Vui lòng điền thông tin trước khi gửi tình huống.</p></div>
+    <div class="card" style="box-shadow:none">
+      ${fields.map(f=>{
+        const req=pf[f].required;
+        const label=esc(KN_PARTICIPANT_FIELD_LABELS[f])+(req?" *":"");
+        if(f==="className"){
+          const opts=(session.classOptions||[]).map(cl=>`<option value="${esc(cl)}" ${existingProfile&&existingProfile.className===cl?"selected":""}>${esc(cl)}</option>`).join("");
+          return `<div class="field"><label>${label}</label><select id="knPf_className"><option value="">— Chọn lớp —</option>${opts}</select></div>`;
+        }
+        const type=f==="email"?"email":(f==="phone"?"tel":"text");
+        const maxlen=f==="fullName"?120:(f==="email"?200:20);
+        const val=esc((existingProfile&&existingProfile[f])||"");
+        return `<div class="field"><label>${label}</label><input type="${type}" id="knPf_${f}" maxlength="${maxlen}" value="${val}"></div>`;
+      }).join("")}
+      <div id="knPfErr" class="error-text hidden"></div>
+      <button class="btn btn-lg btn-block mt-14" id="knPfSubmit">TIẾP TỤC</button>
+    </div>`;
+  $("#knPfSubmit").onclick=async()=>{
+    const data={};
+    for(const f of fields){
+      const v=$(`#knPf_${f}`).value.trim();
+      if(f==="className"){
+        if(pf.className.required&&!v){toast("Vui lòng chọn lớp.","warn");return;}
+        if(v&&!(session.classOptions||[]).includes(v)){toast("Lớp không hợp lệ.","warn");return;}
+      }else if(f==="fullName"){
+        if(pf.fullName.required&&!v){toast("Vui lòng nhập họ và tên.","warn");return;}
+        if(v.length>120){toast("Họ và tên tối đa 120 ký tự.","warn");return;}
+      }else if(f==="email"){
+        if(pf.email.required&&!v){toast("Vui lòng nhập email.","warn");return;}
+        if(v){
+          if(v.length>200){toast("Email tối đa 200 ký tự.","warn");return;}
+          if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)){toast("Email không hợp lệ.","warn");return;}
+        }
+      }else if(f==="phone"){
+        if(pf.phone.required&&!v){toast("Vui lòng nhập số điện thoại.","warn");return;}
+        if(v){
+          if(v.length>20){toast("Số điện thoại tối đa 20 ký tự.","warn");return;}
+          if(!/^[0-9+\-.\s()]{6,20}$/.test(v)){toast("Số điện thoại không hợp lệ.","warn");return;}
+        }
+      }
+      if(v)data[f]=v;
+    }
+    const btn=$("#knPfSubmit");btn.disabled=true;btn.textContent="ĐANG LƯU…";
+    try{
+      const payload={...data,updatedAt:serverTimestamp()};
+      payload.createdAt=(existingProfile&&existingProfile.createdAt)||serverTimestamp();
+      await setDoc(doc(publicDb,"knowledgeSessions",sid,"participants",user.uid),payload);
+      onValid();
+    }catch(e){toast(mapError(e),"err");btn.disabled=false;btn.textContent="TIẾP TỤC";}
+  };
+}
+async function knowledgeRenderSubmissionUI(host,session,sid,code,user,profile){
+  const profileOn=session.collectParticipantProfile===true;
+  const minPer=(Number.isInteger(session.minimumPerParticipant)&&session.minimumPerParticipant>=1)?session.minimumPerParticipant:3;
+  const mineQ=query(collection(publicDb,"knowledgeSessions",sid,"submissions"),where("participantId","==",user.uid));
+  const mine=await getDocs(mineQ),next=mine.size+1;
+  const progressLine=profileOn?`<p class="mut small">Tiến độ: ${mine.size}/${minPer} tình huống</p>`:"";
+  host.innerHTML=`<div style="text-align:center"><div style="font-size:42px">🧠</div><h2>${esc(session.title)}</h2><p class="mut">Mã ${esc(code)} · Bạn đã gửi <b>${mine.size}</b> tình huống</p>${progressLine}</div>
+    <div class="card" style="box-shadow:none"><label for="knowledgeText">Tình huống / ý kiến số ${next}</label><textarea id="knowledgeText" minlength="10" maxlength="2000" rows="7" placeholder="Mô tả tình huống cụ thể, nguyên văn (10–2.000 ký tự)…"></textarea><div class="flex between mt-8"><span class="hint" id="knChars">0 / 2.000</span><span class="hint">Tối thiểu ${minPer} tình huống/người</span></div><button class="btn btn-lg btn-block mt-14" id="knowledgeSend">GỬI TÌNH HUỐNG ${next}</button></div>
+    <p class="small mut" style="text-align:center">Dữ liệu gốc được lưu nguyên văn. Không có AI tham gia ở bước gửi.</p>`;
+  const ta=$("#knowledgeText");ta.oninput=()=>{$("#knChars").textContent=ta.value.length+" / 2.000";};
+  $("#knowledgeSend").onclick=async()=>{
+    const text=ta.value.trim();if(text.length<10||text.length>2000){toast("Nội dung cần từ 10 đến 2.000 ký tự.","warn");return;}
+    // GATE 3C phòng thủ nhiều lớp: xác thực lại hồ sơ (đã tải sẵn, không đọc lại) NGAY
+    // TRƯỚC khi ghi mỗi tình huống — không tin tưởng tuyệt đối vào cổng đã qua lúc vào trang.
+    if(profileOn&&!knowledgeProfileIsValid(profile,session.participantFields||{},session.classOptions||[])){
+      toast("Vui lòng hoàn tất thông tin trước khi gửi.","warn");knowledgeStudentFlow();return;
+    }
+    const btn=$("#knowledgeSend");btn.disabled=true;btn.textContent="ĐANG GỬI…";
+    try{await setDoc(doc(publicDb,"knowledgeSessions",sid,"submissions",`${user.uid}_${next}`),{sessionId:sid,participantId:user.uid,text,sequence:next,createdAt:serverTimestamp()});toast("Đã lưu tình huống nguyên văn.","ok");knowledgeStudentFlow();}
+    catch(e){toast(mapError(e),"err");btn.disabled=false;btn.textContent=`GỬI TÌNH HUỐNG ${next}`;}
+  };
+}
 async function knowledgeStudentFlow(){
   const host=$("#knowledgeStudent");
   try{
@@ -4387,17 +4619,20 @@ async function knowledgeStudentFlow(){
     const sid=mapSnap.data().sessionId,sSnap=await getDoc(doc(publicDb,"knowledgeSessions",sid));if(!sSnap.exists())throw new Error("Phiên không tồn tại.");
     const session={id:sid,...sSnap.data()};
     if(session.status!=="open"||session.teacherDeletedAt||session.adminDeletedAt){host.innerHTML=`<div class="empty-state"><div class="ic">🔒</div><h2>Phiên không hoạt động</h2><p>Giảng viên hiện không nhận thêm tình huống.</p></div>`;return;}
-    const mineQ=query(collection(publicDb,"knowledgeSessions",sid,"submissions"),where("participantId","==",user.uid));
-    const mine=await getDocs(mineQ),next=mine.size+1;
-    host.innerHTML=`<div style="text-align:center"><div style="font-size:42px">🧠</div><h2>${esc(session.title)}</h2><p class="mut">Mã ${esc(code)} · Bạn đã gửi <b>${mine.size}</b> tình huống</p></div>
-      <div class="card" style="box-shadow:none"><label for="knowledgeText">Tình huống / ý kiến số ${next}</label><textarea id="knowledgeText" minlength="10" maxlength="2000" rows="7" placeholder="Mô tả tình huống cụ thể, nguyên văn (10–2.000 ký tự)…"></textarea><div class="flex between mt-8"><span class="hint" id="knChars">0 / 2.000</span><span class="hint">Tối thiểu 3 tình huống/người</span></div><button class="btn btn-lg btn-block mt-14" id="knowledgeSend">GỬI TÌNH HUỐNG ${next}</button></div>
-      <p class="small mut" style="text-align:center">Dữ liệu gốc được lưu nguyên văn. Không có AI tham gia ở bước gửi.</p>`;
-    const ta=$("#knowledgeText");ta.oninput=()=>{$("#knChars").textContent=ta.value.length+" / 2.000";};
-    $("#knowledgeSend").onclick=async()=>{const text=ta.value.trim();if(text.length<10||text.length>2000){toast("Nội dung cần từ 10 đến 2.000 ký tự.","warn");return;}
-      const btn=$("#knowledgeSend");btn.disabled=true;btn.textContent="ĐANG GỬI…";
-      try{await setDoc(doc(publicDb,"knowledgeSessions",sid,"submissions",`${user.uid}_${next}`),{sessionId:sid,participantId:user.uid,text,sequence:next,createdAt:serverTimestamp()});toast("Đã lưu tình huống nguyên văn.","ok");knowledgeStudentFlow();}
-      catch(e){toast(mapError(e),"err");btn.disabled=false;btn.textContent=`GỬI TÌNH HUỐNG ${next}`;}
-    };
+    // GATE 3C: session.collectParticipantProfile !== true (kể cả field hoàn toàn vắng mặt
+    // ở các phiên cũ trước Gate 3B) đi thẳng vào luồng gửi tình huống như trước đây —
+    // KHÔNG đọc collection participants, KHÔNG render form hồ sơ.
+    if(session.collectParticipantProfile===true){
+      const pSnap=await getDoc(doc(publicDb,"knowledgeSessions",sid,"participants",user.uid));
+      const existingProfile=pSnap.exists()?pSnap.data():null;
+      if(!knowledgeProfileIsValid(existingProfile,session.participantFields||{},session.classOptions||[])){
+        knowledgeRenderProfileForm(host,session,sid,user,existingProfile,()=>knowledgeStudentFlow());
+        return;
+      }
+      await knowledgeRenderSubmissionUI(host,session,sid,code,user,existingProfile);
+    }else{
+      await knowledgeRenderSubmissionUI(host,session,sid,code,user,null);
+    }
   }catch(e){host.innerHTML=`<div class="empty-state"><div class="ic">⚠️</div><h3>Không thể vào phiên</h3><p>${esc(e.message||mapError(e))}</p><button class="btn btn-outline" id="knRetry">THỬ LẠI</button></div>`;$("#knRetry").onclick=knowledgeStudentFlow;}
 }
 

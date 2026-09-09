@@ -1,0 +1,722 @@
+rules_version = '2';
+
+// ============================================================
+// HCMA2 - TEACHING — Firestore Security Rules — V2 Knowledge Phase 2 AI
+// ============================================================
+// GATE 3B CANDIDATE — LOCAL ONLY, NOT DEPLOYED.
+// Base text: the actual currently-published production rules for project
+// bo-phieu-hcma2, as retrieved by the user from Firebase Console and pasted
+// into this session on Gate 3A.1 (NOT the stale repo firestore.rules file).
+// Every rule below is byte-for-byte identical to that production text EXCEPT
+// the sections explicitly marked "GATE 3B:" — those are the minimum changes
+// needed for configurable minimumPerParticipant + Participant Profile
+// session config + the new knowledgeSessions/{sessionId}/participants
+// subcollection. Nothing else was touched.
+// ============================================================
+// Nguyên tắc:
+// - Không có rule mở toàn bộ database.
+// - Giảng viên CHỈ truy cập dữ liệu do chính mình sở hữu (ownerId == uid),
+//   VÀ CHỈ KHI tài khoản đang ở trạng thái role=='teacher' && status=='active'
+//   (FIX 2 — một giảng viên bị suspended bị chặn NGAY tại tầng Rules, không chỉ ẩn ở UI).
+// - Học viên (anonymous) không đăng nhập bằng email/password, chỉ được:
+//     + đọc session đã OPEN/CLOSED/ARCHIVED (không đọc DRAFT/READY),
+//     + đọc câu hỏi + phương án đang active của session OPEN,
+//     + gửi (create) response CHỈ cho ĐÚNG câu hỏi đang active của session OPEN,
+//       trong ĐÚNG thời hạn timeLimit (nếu có) — kiểm tra bằng request.time (FIX 3 + FIX 4),
+//     + response được giới hạn field bằng allowlist, submittedAt bắt buộc = request.time (FIX 9),
+//     + KHÔNG được đọc responses của người khác, KHÔNG được liệt kê (list) responses,
+//     + KHÔNG được tự đổi role/status/ownerId của bất kỳ ai.
+// - Admin (role=='admin' && status=='active') được quản lý toàn hệ thống,
+//   nhưng KHÔNG ai được tự nâng quyền chính mình lên admin từ client.
+// - sessionTokens/{token} và joinCodes/{code}: chỉ cho GET-theo-ID, KHÔNG cho LIST,
+//   để học viên tra được sessionId từ QR/mã tham gia mà không thể liệt kê toàn bộ hệ thống.
+// ============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------- Helper functions ----------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAnon() {
+      return isSignedIn() &&
+        request.auth.token.firebase.sign_in_provider == 'anonymous';
+    }
+
+    function userData(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && !isAnon() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        userData(request.auth.uid).role == 'admin' &&
+        userData(request.auth.uid).status == 'active';
+    }
+
+    function isActiveTeacher() {
+      return isSignedIn() && !isAnon() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        userData(request.auth.uid).role == 'teacher' &&
+        userData(request.auth.uid).status == 'active';
+    }
+
+    // FIX 2: chủ sở hữu CHỈ có quyền nếu chính là uid == ownerId VÀ hiện đang là
+    // giảng viên active (role=='teacher' && status=='active'). Một giảng viên bị
+    // suspended sẽ KHÔNG còn thỏa điều kiện này nữa cho DÙ ownerId có khớp uid,
+    // nên mọi rule dùng isOwnerOrAdmin() đều tự động chặn giảng viên bị khóa.
+    function isOwnerActiveTeacher(ownerId) {
+      return isSignedIn() && !isAnon() &&
+        request.auth.uid == ownerId && isActiveTeacher();
+    }
+
+    function isOwnerOrAdmin(ownerId) {
+      return isOwnerActiveTeacher(ownerId) || isAdmin();
+    }
+
+    function sessionData(sessionId) {
+      return get(/databases/$(database)/documents/sessions/$(sessionId)).data;
+    }
+
+    function questionData(questionId) {
+      return get(/databases/$(database)/documents/questions/$(questionId)).data;
+    }
+
+    function sessionDataAfter(sessionId) {
+      return getAfter(/databases/$(database)/documents/sessions/$(sessionId)).data;
+    }
+
+    function questionDataAfter(questionId) {
+      return getAfter(/databases/$(database)/documents/questions/$(questionId)).data;
+    }
+
+    function withinTimeLimit(sessionId, questionId) {
+      let q = questionData(questionId);
+      let s = sessionData(sessionId);
+      return q.timeLimit == 0 ||
+        (s.activeQuestionStartedAt != null &&
+         request.time <= s.activeQuestionStartedAt + duration.value(q.timeLimit, 's'));
+    }
+
+    function isActiveQuestion(sessionId, questionId) {
+      return sessionData(sessionId).activeQuestionId == questionId;
+    }
+
+    // ---------------- USERS ----------------
+    match /users/{uid} {
+      allow read: if isSignedIn() && !isAnon() &&
+        (request.auth.uid == uid || isAdmin());
+
+      allow create: if isSignedIn() && !isAnon() &&
+        request.auth.uid == uid &&
+        request.resource.data.uid == uid &&
+        request.resource.data.role == 'teacher' &&
+        request.resource.data.status == 'pending';
+
+      allow update: if isSignedIn() && !isAnon() && (
+        (
+          request.auth.uid == uid &&
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.status == resource.data.status &&
+          request.resource.data.approvedBy == resource.data.approvedBy &&
+          request.resource.data.approvedAt == resource.data.approvedAt &&
+          request.resource.data.uid == resource.data.uid &&
+          request.resource.data.email == resource.data.email
+        ) ||
+        (
+          isAdmin() &&
+          request.resource.data.uid == resource.data.uid &&
+          request.resource.data.email == resource.data.email
+        )
+      );
+
+      allow delete: if false;
+    }
+
+    // ---------------- CLASSES ----------------
+    match /classes/{classId} {
+      allow read: if isOwnerOrAdmin(resource.data.ownerId);
+      allow create: if isActiveTeacher() &&
+        request.resource.data.ownerId == request.auth.uid;
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+    }
+
+    // ---------------- LIBRARY ----------------
+    match /library/{itemId} {
+      allow read: if isOwnerOrAdmin(resource.data.ownerId);
+      allow create: if isActiveTeacher() && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+    }
+
+    // ---------------- QUESTION SETS / BỘ CÂU HỎI MẪU ----------------
+    match /questionSets/{setId} {
+      allow read: if isOwnerOrAdmin(resource.data.ownerId);
+      allow create: if isActiveTeacher() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.questions is list &&
+        request.resource.data.questions.size() >= 1 &&
+        request.resource.data.questions.size() <= 50;
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.questions is list &&
+        request.resource.data.questions.size() <= 50;
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+    }
+
+    // ---------------- JOIN CODES ----------------
+    match /joinCodes/{code} {
+      allow get: if isSignedIn();
+      allow list: if false;
+      allow create: if isActiveTeacher() && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+    }
+
+    // ---------------- SESSION TOKENS (FIX 8) ----------------
+    match /sessionTokens/{token} {
+      allow get: if isSignedIn();
+      allow list: if false;
+      allow create: if isActiveTeacher() && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+    }
+
+    // ---------------- SESSIONS ----------------
+    match /sessions/{sessionId} {
+      allow get: if isOwnerOrAdmin(resource.data.ownerId) || (
+        isSignedIn() &&
+        (resource.data.status == 'open' || resource.data.status == 'closed' || resource.data.status == 'archived')
+      );
+      allow list: if isOwnerOrAdmin(resource.data.ownerId);
+
+      allow create: if isActiveTeacher() &&
+        request.resource.data.ownerId == request.auth.uid;
+
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        request.resource.data.ownerId == resource.data.ownerId;
+
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+
+      match /responses/{responseId} {
+        allow get: if isOwnerOrAdmin(sessionData(sessionId).ownerId) ||
+          (isAnon() && resource.data.participantId == request.auth.uid);
+
+        allow list: if isOwnerOrAdmin(sessionData(sessionId).ownerId);
+
+        allow create: if isAnon() &&
+          request.auth.uid == request.resource.data.participantId &&
+          request.resource.data.sessionId == sessionId &&
+          questionData(request.resource.data.questionId).sessionId == sessionId &&
+          sessionData(sessionId).status == 'open' &&
+          isActiveQuestion(sessionId, request.resource.data.questionId) &&
+          withinTimeLimit(sessionId, request.resource.data.questionId) &&
+          responseId == (request.resource.data.questionId + '_' + request.resource.data.participantId) &&
+          request.resource.data.keys().hasOnly(['sessionId','questionId','participantId','answer','selectedOptions','submittedAt']) &&
+          request.resource.data.keys().hasAll(['sessionId','questionId','participantId','answer','selectedOptions','submittedAt']) &&
+          request.resource.data.submittedAt == request.time;
+
+        allow update: if isAnon() &&
+          request.auth.uid == resource.data.participantId &&
+          request.resource.data.participantId == resource.data.participantId &&
+          request.resource.data.questionId == resource.data.questionId &&
+          request.resource.data.sessionId == resource.data.sessionId &&
+          sessionData(sessionId).status == 'open' &&
+          isActiveQuestion(sessionId, resource.data.questionId) &&
+          withinTimeLimit(sessionId, resource.data.questionId) &&
+          questionData(resource.data.questionId).allowChangeAnswer == true &&
+          request.resource.data.keys().hasOnly(['sessionId','questionId','participantId','answer','selectedOptions','submittedAt']) &&
+          request.resource.data.keys().hasAll(['sessionId','questionId','participantId','answer','selectedOptions','submittedAt']) &&
+          request.resource.data.submittedAt == request.time;
+
+        allow delete: if isAdmin();
+      }
+
+      match /liveAggregates/{questionId} {
+        allow read: if isOwnerOrAdmin(sessionData(sessionId).ownerId) || (
+          isSignedIn() &&
+          (sessionData(sessionId).status == 'open' ||
+           sessionData(sessionId).status == 'closed' ||
+           sessionData(sessionId).status == 'archived')
+        );
+        allow create, update: if isOwnerOrAdmin(sessionData(sessionId).ownerId) &&
+          request.resource.data.ownerId == sessionData(sessionId).ownerId &&
+          request.resource.data.sessionId == sessionId &&
+          request.resource.data.questionId == questionId;
+        allow delete: if isOwnerOrAdmin(sessionData(sessionId).ownerId);
+      }
+    }
+
+    match /{path=**}/responses/{responseId} {
+      allow read: if isAdmin();
+    }
+
+    // ---------------- QUESTIONS ----------------
+    match /questions/{questionId} {
+      allow read: if isOwnerOrAdmin(resource.data.ownerId) || (
+        isSignedIn() &&
+        sessionData(resource.data.sessionId).status == 'open' &&
+        sessionData(resource.data.sessionId).activeQuestionId == questionId
+      );
+
+      allow create: if isActiveTeacher() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        sessionDataAfter(request.resource.data.sessionId).ownerId == request.auth.uid;
+
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.sessionId == resource.data.sessionId;
+
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+
+      match /options/{optionId} {
+        allow read: if isOwnerOrAdmin(questionData(questionId).ownerId) || (
+          isSignedIn() &&
+          sessionData(questionData(questionId).sessionId).status == 'open' &&
+          sessionData(questionData(questionId).sessionId).activeQuestionId == questionId
+        );
+
+        allow create: if isOwnerOrAdmin(questionDataAfter(questionId).ownerId);
+
+        allow update, delete: if isOwnerOrAdmin(questionData(questionId).ownerId);
+      }
+    }
+
+    // ---------------- QR VĨNH VIỄN ----------------
+    match /qrlinks/{code} {
+      allow get: if true;
+
+      allow list: if isAdmin() ||
+        (isActiveTeacher() && resource.data.ownerId == request.auth.uid);
+
+      allow create: if (isAdmin() || isActiveTeacher()) &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.clicks == 0;
+
+      allow update: if (
+        (isAdmin() || (isActiveTeacher() && resource.data.ownerId == request.auth.uid)) &&
+        request.resource.data.ownerId == resource.data.ownerId
+      ) || (
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clicks','lastScanAt']) &&
+        request.resource.data.clicks == resource.data.clicks + 1 &&
+        request.resource.data.lastScanAt == request.time
+      );
+
+      allow delete: if isAdmin() ||
+        (isActiveTeacher() && resource.data.ownerId == request.auth.uid);
+    }
+
+
+    // ---------------- THẢO LUẬN NHÓM ----------------
+    match /groupActivities/{activityId} {
+      allow get: if isOwnerOrAdmin(resource.data.ownerId) || isSignedIn();
+
+      allow list: if isAdmin() ||
+        (isActiveTeacher() && resource.data.ownerId == request.auth.uid);
+
+      allow create: if isActiveTeacher() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.groupCount >= 2 &&
+        request.resource.data.groupCount <= 12 &&
+        request.resource.data.status == 'draft';
+
+      allow update: if (
+          isAdmin() ||
+          (isActiveTeacher() && resource.data.ownerId == request.auth.uid)
+        ) &&
+        request.resource.data.ownerId == resource.data.ownerId;
+
+      allow delete: if isAdmin() ||
+        (isActiveTeacher() && resource.data.ownerId == request.auth.uid);
+
+      match /topics/{groupId} {
+        allow read: if isSignedIn();
+
+        allow create: if isAdmin() ||
+          (isActiveTeacher() &&
+           getAfter(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+
+        allow update, delete: if isAdmin() ||
+          (isActiveTeacher() &&
+           get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+      }
+
+      match /notes/{noteId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn() &&
+          get(/databases/$(database)/documents/groupActivities/$(activityId)).data.status == 'open' &&
+          request.resource.data.participantId == request.auth.uid &&
+          request.resource.data.group >= 1 &&
+          request.resource.data.group <= get(/databases/$(database)/documents/groupActivities/$(activityId)).data.groupCount &&
+          request.resource.data.text is string &&
+          request.resource.data.text.size() > 0 &&
+          request.resource.data.text.size() <= 1500 &&
+          request.resource.data.createdAt == request.time;
+        allow update: if false;
+        allow delete: if isAdmin() ||
+          (isActiveTeacher() &&
+           get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+      }
+
+      match /photos/{photoId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn() &&
+          get(/databases/$(database)/documents/groupActivities/$(activityId)).data.status == 'open' &&
+          get(/databases/$(database)/documents/groupActivities/$(activityId)).data.allowPhoto == true &&
+          request.resource.data.participantId == request.auth.uid &&
+          request.resource.data.group >= 1 &&
+          request.resource.data.group <= get(/databases/$(database)/documents/groupActivities/$(activityId)).data.groupCount &&
+          request.resource.data.url is string &&
+          request.resource.data.storagePath is string &&
+          request.resource.data.size is int &&
+          request.resource.data.size <= 5242880 &&
+          request.resource.data.createdAt == request.time;
+        allow update: if false;
+        allow delete: if isAdmin() ||
+          (isActiveTeacher() &&
+           get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+      }
+
+      match /files/{fileId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn() &&
+          get(/databases/$(database)/documents/groupActivities/$(activityId)).data.status == 'open' &&
+          get(/databases/$(database)/documents/groupActivities/$(activityId)).data.allowFile == true &&
+          request.resource.data.participantId == request.auth.uid &&
+          request.resource.data.group >= 1 &&
+          request.resource.data.group <= get(/databases/$(database)/documents/groupActivities/$(activityId)).data.groupCount &&
+          request.resource.data.createdAt == request.time &&
+          (
+            (
+              request.resource.data.url is string &&
+              request.resource.data.storagePath is string &&
+              request.resource.data.size is int &&
+              request.resource.data.size <= 10485760
+            ) ||
+            (request.resource.data.link is string && request.resource.data.link.size() <= 2000)
+          );
+        allow update: if false;
+        allow delete: if isAdmin() ||
+          (isActiveTeacher() &&
+           get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+      }
+    }
+
+    match /groupJoinCodes/{code} {
+      allow get: if isSignedIn();
+      allow list: if isAdmin();
+
+      allow create: if isActiveTeacher() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(request.resource.data.activityId)).data.ownerId == request.auth.uid;
+
+      allow update: if false;
+      allow delete: if isAdmin() ||
+        (isActiveTeacher() && resource.data.ownerId == request.auth.uid);
+    }
+
+
+    // ============================================================
+    // V2 PHASE 1 — KNOWLEDGE SPACE
+    // ============================================================
+    function knowledgeSessionData(sessionId) {
+      return get(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data;
+    }
+
+    function knowledgeSessionDataAfter(sessionId) {
+      return getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data;
+    }
+
+    // GATE 3B: kiểm tra shape của participantFields (map 4 field, mỗi field có
+    // enabled/required kiểu bool, required=>enabled) trên dữ liệu ĐANG GHI (request.resource.data).
+    function validParticipantFieldsShape(d) {
+      return d.participantFields is map &&
+        d.participantFields.keys().hasOnly(['fullName','className','email','phone']) &&
+        d.participantFields.fullName is map &&
+        d.participantFields.fullName.enabled is bool &&
+        d.participantFields.fullName.required is bool &&
+        (!d.participantFields.fullName.required || d.participantFields.fullName.enabled) &&
+        d.participantFields.className is map &&
+        d.participantFields.className.enabled is bool &&
+        d.participantFields.className.required is bool &&
+        (!d.participantFields.className.required || d.participantFields.className.enabled) &&
+        d.participantFields.email is map &&
+        d.participantFields.email.enabled is bool &&
+        d.participantFields.email.required is bool &&
+        (!d.participantFields.email.required || d.participantFields.email.enabled) &&
+        d.participantFields.phone is map &&
+        d.participantFields.phone.enabled is bool &&
+        d.participantFields.phone.required is bool &&
+        (!d.participantFields.phone.required || d.participantFields.phone.enabled) &&
+        (d.participantFields.fullName.enabled || d.participantFields.className.enabled ||
+         d.participantFields.email.enabled || d.participantFields.phone.enabled) &&
+        d.classOptions is list &&
+        d.classOptions.size() <= 200 &&
+        (d.participantFields.className.enabled ? d.classOptions.size() >= 1 : d.classOptions.size() == 0);
+    }
+
+    // GATE 3B: collectParticipantProfile/participantFields/classOptions PHẢI đi cùng
+    // nhau (cả 3 cùng có hoặc cả 3 cùng không có) — không cho trạng thái nửa vời.
+    function validProfileConfigOnWrite(d) {
+      return (
+        !('collectParticipantProfile' in d) &&
+        !('participantFields' in d) &&
+        !('classOptions' in d)
+      ) || (
+        d.collectParticipantProfile == true &&
+        validParticipantFieldsShape(d)
+      );
+    }
+
+    match /knowledgeJoinCodes/{code} {
+      allow get: if isAdmin() || isActiveTeacher() ||
+        (isAnon() &&
+         exists(/databases/$(database)/documents/knowledgeSessions/$(resource.data.sessionId)) &&
+         knowledgeSessionData(resource.data.sessionId).status == 'open' &&
+         (!('teacherDeletedAt' in knowledgeSessionData(resource.data.sessionId)) || knowledgeSessionData(resource.data.sessionId).teacherDeletedAt == null) &&
+         (!('adminDeletedAt' in knowledgeSessionData(resource.data.sessionId)) || knowledgeSessionData(resource.data.sessionId).adminDeletedAt == null));
+      allow list: if false;
+
+      allow create: if (isActiveTeacher() || isAdmin()) &&
+        request.resource.data.keys().hasOnly(['sessionId', 'ownerId', 'createdAt']) &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.sessionId is string &&
+        request.resource.data.createdAt == request.time &&
+        knowledgeSessionDataAfter(request.resource.data.sessionId).ownerId == request.auth.uid &&
+        knowledgeSessionDataAfter(request.resource.data.sessionId).joinCode == code;
+
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /knowledgeSessions/{sessionId} {
+      allow get: if isOwnerOrAdmin(resource.data.ownerId) ||
+        (isAnon() && resource.data.status == 'open' &&
+         (!('teacherDeletedAt' in resource.data) || resource.data.teacherDeletedAt == null) &&
+         (!('adminDeletedAt' in resource.data) || resource.data.adminDeletedAt == null));
+      allow list: if isAdmin() || isOwnerActiveTeacher(resource.data.ownerId);
+
+      // GATE 3B: allowlist mở rộng thêm 3 field config Participant Profile (tùy chọn);
+      // minimumPerParticipant đổi từ hằng số ==3 sang khoảng hợp lệ 1..20.
+      allow create: if (isActiveTeacher() || isAdmin()) &&
+        request.resource.data.keys().hasOnly([
+          'title', 'joinCode', 'ownerId', 'status', 'minimumPerParticipant',
+          'targetSubmissions', 'createdAt', 'updatedAt',
+          'collectParticipantProfile', 'participantFields', 'classOptions'
+        ]) &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.title is string &&
+        request.resource.data.title.size() >= 3 &&
+        request.resource.data.title.size() <= 120 &&
+        request.resource.data.joinCode is string &&
+        request.resource.data.joinCode.size() == 6 &&
+        request.resource.data.status == 'open' &&
+        request.resource.data.minimumPerParticipant is int &&
+        request.resource.data.minimumPerParticipant >= 1 &&
+        request.resource.data.minimumPerParticipant <= 20 &&
+        request.resource.data.targetSubmissions is int &&
+        request.resource.data.targetSubmissions >= 3 &&
+        request.resource.data.targetSubmissions <= 10000 &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        validProfileConfigOnWrite(request.resource.data);
+
+      // GATE 3B: allowlist (tổng field được phép TỒN TẠI trên tài liệu) mở rộng thêm
+      // 3 field config mới — BẮT BUỘC, vì tài liệu kết quả sau update vẫn mang các field
+      // này nếu đã có từ lúc tạo. Nhưng affectedKeys().hasOnly() (field ĐƯỢC PHÉP THAY ĐỔI
+      // GIÁ TRỊ) KHÔNG thêm 3 field mới — cấu hình Participant Profile bất biến sau khi tạo
+      // phiên, theo đúng yêu cầu Gate 3B (ưu tiên an toàn, chưa cần chỉnh sửa sau khi tạo).
+      allow update: if isOwnerActiveTeacher(resource.data.ownerId) &&
+        request.resource.data.keys().hasOnly([
+          'title', 'joinCode', 'ownerId', 'status', 'minimumPerParticipant',
+          'targetSubmissions', 'createdAt', 'updatedAt',
+          'teacherDeletedAt', 'teacherDeletedBy', 'adminDeletedAt', 'adminDeletedBy',
+          'analysisFence', 'analysisLease', 'adminDeleting', 'deletingAt', 'deleteRunId',
+          'collectParticipantProfile', 'participantFields', 'classOptions'
+        ]) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'analysisFence', 'analysisLease', 'adminDeleting', 'deletingAt', 'deleteRunId'
+        ]) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title', 'status', 'targetSubmissions', 'updatedAt',
+          'teacherDeletedAt', 'teacherDeletedBy'
+        ]) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.joinCode == resource.data.joinCode &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.minimumPerParticipant == resource.data.minimumPerParticipant &&
+        (!('collectParticipantProfile' in request.resource.data) || request.resource.data.collectParticipantProfile == resource.data.collectParticipantProfile) &&
+        (!('participantFields' in request.resource.data) || request.resource.data.participantFields == resource.data.participantFields) &&
+        (!('classOptions' in request.resource.data) || request.resource.data.classOptions == resource.data.classOptions) &&
+        request.resource.data.status in ['open', 'closed'] &&
+        request.resource.data.title is string &&
+        request.resource.data.title.size() >= 3 &&
+        request.resource.data.title.size() <= 120 &&
+        request.resource.data.targetSubmissions is int &&
+        request.resource.data.targetSubmissions >= 3 &&
+        request.resource.data.targetSubmissions <= 10000 &&
+        request.resource.data.updatedAt == request.time &&
+        (!('teacherDeletedAt' in request.resource.data) ||
+          request.resource.data.teacherDeletedAt == null ||
+          request.resource.data.teacherDeletedAt == request.time) &&
+        (!('teacherDeletedBy' in request.resource.data) ||
+          request.resource.data.teacherDeletedBy == null ||
+          request.resource.data.teacherDeletedBy == request.auth.uid);
+
+      // GATE 3B: cùng nguyên tắc bất biến như nhánh teacher ở trên.
+      allow update: if isAdmin() &&
+        request.resource.data.keys().hasOnly([
+          'title', 'joinCode', 'ownerId', 'status', 'minimumPerParticipant',
+          'targetSubmissions', 'createdAt', 'updatedAt',
+          'teacherDeletedAt', 'teacherDeletedBy', 'adminDeletedAt', 'adminDeletedBy',
+          'analysisFence', 'analysisLease', 'adminDeleting', 'deletingAt', 'deleteRunId',
+          'collectParticipantProfile', 'participantFields', 'classOptions'
+        ]) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'analysisFence', 'analysisLease', 'adminDeleting', 'deletingAt', 'deleteRunId'
+        ]) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.joinCode == resource.data.joinCode &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.minimumPerParticipant == resource.data.minimumPerParticipant &&
+        (!('collectParticipantProfile' in request.resource.data) || request.resource.data.collectParticipantProfile == resource.data.collectParticipantProfile) &&
+        (!('participantFields' in request.resource.data) || request.resource.data.participantFields == resource.data.participantFields) &&
+        (!('classOptions' in request.resource.data) || request.resource.data.classOptions == resource.data.classOptions) &&
+        request.resource.data.status in ['open', 'closed'] &&
+        request.resource.data.updatedAt == request.time &&
+        (!('adminDeletedAt' in request.resource.data) ||
+          request.resource.data.adminDeletedAt == null ||
+          request.resource.data.adminDeletedAt == request.time) &&
+        (!('adminDeletedBy' in request.resource.data) ||
+          request.resource.data.adminDeletedBy == null ||
+          request.resource.data.adminDeletedBy == request.auth.uid);
+
+      allow delete: if false;
+
+      match /submissions/{submissionId} {
+        allow get, list: if isOwnerOrAdmin(knowledgeSessionData(sessionId).ownerId) ||
+          (isAnon() &&
+           knowledgeSessionData(sessionId).status == 'open' &&
+           (!('teacherDeletedAt' in knowledgeSessionData(sessionId)) || knowledgeSessionData(sessionId).teacherDeletedAt == null) &&
+           (!('adminDeletedAt' in knowledgeSessionData(sessionId)) || knowledgeSessionData(sessionId).adminDeletedAt == null) &&
+           resource.data.participantId == request.auth.uid);
+
+        allow create: if isAnon() &&
+          knowledgeSessionData(sessionId).status == 'open' &&
+          (!('teacherDeletedAt' in knowledgeSessionData(sessionId)) || knowledgeSessionData(sessionId).teacherDeletedAt == null) &&
+          (!('adminDeletedAt' in knowledgeSessionData(sessionId)) || knowledgeSessionData(sessionId).adminDeletedAt == null) &&
+          request.resource.data.keys().hasOnly([
+            'sessionId', 'participantId', 'text', 'sequence', 'createdAt'
+          ]) &&
+          request.resource.data.sessionId == sessionId &&
+          request.resource.data.participantId == request.auth.uid &&
+          request.resource.data.sequence is int &&
+          request.resource.data.sequence >= 1 &&
+          submissionId == request.auth.uid + '_' + string(request.resource.data.sequence) &&
+          request.resource.data.text is string &&
+          request.resource.data.text.size() >= 10 &&
+          request.resource.data.text.size() <= 2000 &&
+          request.resource.data.createdAt == request.time;
+
+        allow update: if false;
+        allow delete: if false;
+      }
+
+      // GATE 3B (NEW, additive only), TIGHTENED IN GATE 3C: hồ sơ người tham gia (PII) —
+      // tách biệt hoàn toàn khỏi submissions, không ai ngoài chủ phiên/Admin/chính
+      // participant đó đọc được.
+      // GATE 3C review: className giờ PHẢI khớp đúng một giá trị trong classOptions của
+      // phiên (List.hasAny() hoạt động an toàn với danh sách độ dài bất kỳ, không cần
+      // lặp/unroll từng phần tử). Field TẮT (participantFields.<f>.enabled==false) không
+      // được xuất hiện trong tài liệu; field BẮT BUỘC phải có mặt và không rỗng.
+      // GIỚI HẠN ĐÃ BIẾT: Firestore Rules không có cách lặp qua từng phần tử của MỘT
+      // MẢNG (classOptions) để kiểm tra ĐỘ DÀI riêng từng chuỗi — nên không thể validate
+      // ở đây rằng mỗi tên lớp trong classOptions ≤ 40 ký tự. Giới hạn đó được validate ở
+      // phía client lúc TẠO PHIÊN (index.html, knowledgeCreateDialog), và giới hạn
+      // className.size() dưới đây được nới ra 120 (bằng fullName) — an toàn, generous,
+      // không phụ thuộc vào việc client-side check kia có luôn chạy hay không.
+      match /participants/{participantId} {
+        allow get: if isOwnerOrAdmin(knowledgeSessionData(sessionId).ownerId) ||
+          (isAnon() && request.auth.uid == participantId);
+        allow list: if isOwnerOrAdmin(knowledgeSessionData(sessionId).ownerId);
+
+        allow create: if isAnon() &&
+          request.auth.uid == participantId &&
+          knowledgeSessionData(sessionId).collectParticipantProfile == true &&
+          request.resource.data.keys().hasOnly(['fullName','className','email','phone','createdAt','updatedAt']) &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.updatedAt == request.time &&
+          (knowledgeSessionData(sessionId).participantFields.fullName.enabled || !('fullName' in request.resource.data)) &&
+          (!knowledgeSessionData(sessionId).participantFields.fullName.required || ('fullName' in request.resource.data && request.resource.data.fullName is string && request.resource.data.fullName.size() > 0)) &&
+          (!('fullName' in request.resource.data) || (request.resource.data.fullName is string && request.resource.data.fullName.size() <= 120)) &&
+          (knowledgeSessionData(sessionId).participantFields.className.enabled || !('className' in request.resource.data)) &&
+          (!knowledgeSessionData(sessionId).participantFields.className.required || ('className' in request.resource.data && request.resource.data.className is string && request.resource.data.className.size() > 0)) &&
+          (!('className' in request.resource.data) || (request.resource.data.className is string && request.resource.data.className.size() <= 120 && knowledgeSessionData(sessionId).classOptions.hasAny([request.resource.data.className]))) &&
+          (knowledgeSessionData(sessionId).participantFields.email.enabled || !('email' in request.resource.data)) &&
+          (!knowledgeSessionData(sessionId).participantFields.email.required || ('email' in request.resource.data && request.resource.data.email is string && request.resource.data.email.size() > 0)) &&
+          (!('email' in request.resource.data) || (request.resource.data.email is string && request.resource.data.email.size() <= 200)) &&
+          (knowledgeSessionData(sessionId).participantFields.phone.enabled || !('phone' in request.resource.data)) &&
+          (!knowledgeSessionData(sessionId).participantFields.phone.required || ('phone' in request.resource.data && request.resource.data.phone is string && request.resource.data.phone.size() > 0)) &&
+          (!('phone' in request.resource.data) || (request.resource.data.phone is string && request.resource.data.phone.size() <= 20));
+
+        allow update: if isAnon() &&
+          request.auth.uid == participantId &&
+          knowledgeSessionData(sessionId).collectParticipantProfile == true &&
+          request.resource.data.keys().hasOnly(['fullName','className','email','phone','createdAt','updatedAt']) &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          request.resource.data.updatedAt == request.time &&
+          (knowledgeSessionData(sessionId).participantFields.fullName.enabled || !('fullName' in request.resource.data)) &&
+          (!knowledgeSessionData(sessionId).participantFields.fullName.required || ('fullName' in request.resource.data && request.resource.data.fullName is string && request.resource.data.fullName.size() > 0)) &&
+          (!('fullName' in request.resource.data) || (request.resource.data.fullName is string && request.resource.data.fullName.size() <= 120)) &&
+          (knowledgeSessionData(sessionId).participantFields.className.enabled || !('className' in request.resource.data)) &&
+          (!knowledgeSessionData(sessionId).participantFields.className.required || ('className' in request.resource.data && request.resource.data.className is string && request.resource.data.className.size() > 0)) &&
+          (!('className' in request.resource.data) || (request.resource.data.className is string && request.resource.data.className.size() <= 120 && knowledgeSessionData(sessionId).classOptions.hasAny([request.resource.data.className]))) &&
+          (knowledgeSessionData(sessionId).participantFields.email.enabled || !('email' in request.resource.data)) &&
+          (!knowledgeSessionData(sessionId).participantFields.email.required || ('email' in request.resource.data && request.resource.data.email is string && request.resource.data.email.size() > 0)) &&
+          (!('email' in request.resource.data) || (request.resource.data.email is string && request.resource.data.email.size() <= 200)) &&
+          (knowledgeSessionData(sessionId).participantFields.phone.enabled || !('phone' in request.resource.data)) &&
+          (!knowledgeSessionData(sessionId).participantFields.phone.required || ('phone' in request.resource.data && request.resource.data.phone is string && request.resource.data.phone.size() > 0)) &&
+          (!('phone' in request.resource.data) || (request.resource.data.phone is string && request.resource.data.phone.size() <= 20));
+
+        allow delete: if false;
+      }
+
+      match /aiSnapshots/{snapshotId} {
+        allow get, list: if isOwnerOrAdmin(knowledgeSessionData(sessionId).ownerId);
+        allow create, update: if false;
+        allow delete: if false;
+
+        match /aiBatches/{batchId} {
+          allow get, list: if isOwnerOrAdmin(knowledgeSessionData(sessionId).ownerId);
+          allow create, update: if false;
+          allow delete: if false;
+        }
+
+        match /copilotRuns/{runId} {
+          allow get, list: if isOwnerOrAdmin(knowledgeSessionData(sessionId).ownerId);
+          allow create, update: if false;
+          allow delete: if false;
+        }
+      }
+    }
+
+    // ---------------- AUDIT LOGS ----------------
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn() && !isAnon() &&
+        request.resource.data.actorId == request.auth.uid &&
+        request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // ---------------- Mặc định: chặn tất cả ----------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

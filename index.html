@@ -475,7 +475,7 @@ import {
 import {
   getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, getDoc, getDocs,
   query, where, orderBy, limit, onSnapshot, serverTimestamp, Timestamp, writeBatch, increment,
-  getCountFromServer, collectionGroup
+  getCountFromServer, collectionGroup, runTransaction
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 import {
   getStorage, ref as storageRef, uploadBytes, getDownloadURL, deleteObject
@@ -716,6 +716,115 @@ function openModal(html, large){
   return host;
 }
 function closeModal(){ const h = document.getElementById("globalModal"); if(h) h.innerHTML=""; }
+
+// Gate 1A: field-level conflict checks; no lifecycle, identity or collected data writes.
+const SESSION_INFO_FIELDS = {
+  sessions: ["title", "description"],
+  groupActivities: ["title", "instructions"],
+  knowledgeSessions: ["title", "targetSubmissions"]
+};
+function sessionInfoError(message){ return new Error(message); }
+function checkSessionInfoAccess(data){
+  const p=STATE.profile, uid=STATE.user?.uid;
+  if(!uid || !((p?.role==="admin" && p.status==="active") || (p?.role==="teacher" && p.status==="active" && data.ownerId===uid)))
+    throw sessionInfoError("Bạn không có quyền sửa phiên này.");
+  if(data.deletedAt || data.teacherDeletedAt || data.adminDeletedAt || data.adminDeleting)
+    throw sessionInfoError("Phiên đang trong thùng rác hoặc đang xóa. Hãy khôi phục trước khi sửa.");
+}
+async function loadSessionInfo(kind,id){
+  if(!SESSION_INFO_FIELDS[kind]) throw sessionInfoError("Loại phiên không hợp lệ.");
+  const ref=doc(db,kind,id), snap=await getDoc(ref);
+  if(!snap.exists()) throw sessionInfoError("Phiên không còn tồn tại.");
+  const original=snap.data(); checkSessionInfoAccess(original);
+  const rows=[{ref,original,fields:SESSION_INFO_FIELDS[kind]}];
+  if(kind==="groupActivities"){
+    if(!Number.isInteger(original.groupCount) || original.groupCount<2 || original.groupCount>12)
+      throw sessionInfoError("Cấu hình số nhóm không hợp lệ; cần kiểm tra trước khi sửa.");
+    const topics=await Promise.all(Array.from({length:original.groupCount},async(_,i)=>{
+      const ref=doc(db,kind,id,"topics",String(i+1)), s=await getDoc(ref);
+      return {ref,original:s.exists()?s.data():null,fields:["topic"],group:i+1};
+    }));
+    rows.push(...topics);
+  }
+  return {kind,rows,uid:STATE.user.uid};
+}
+function validateSessionInfo(kind,values){
+  if(typeof values[0]?.title!=="string" || !values[0].title.trim())
+    throw sessionInfoError("Vui lòng nhập tên phiên.");
+  if(kind==="knowledgeSessions"){
+    if(values[0].title.length<3 || values[0].title.length>120)
+      throw sessionInfoError("Tên phiên phải có từ 3 đến 120 ký tự.");
+    if(!Number.isInteger(values[0].targetSubmissions) || values[0].targetSubmissions<3 || values[0].targetSubmissions>10000)
+      throw sessionInfoError("Mục tiêu phải là số nguyên từ 3 đến 10.000.");
+  }
+}
+async function saveSessionInfo(model,values){
+  validateSessionInfo(model.kind,values);
+  // Missing optional text fields stay missing unless the user actually enters text.
+  const edits=model.rows.map((row,i)=>Object.fromEntries(row.fields
+    .filter(k=>values[i][k] !== (row.original?.[k] ?? ""))
+    .map(k=>[k,values[i][k]])));
+  if(!edits.some(e=>Object.keys(e).length)) return false;
+  await runTransaction(db,async tx=>{
+    if(STATE.user?.uid!==model.uid) throw sessionInfoError("Tài khoản đã thay đổi. Hãy mở lại cửa sổ sửa.");
+    const snaps=[];
+    // All reads precede writes. Firestore retries if a document changes during save.
+    for(const row of model.rows) snaps.push(await tx.get(row.ref));
+    if(!snaps[0].exists()) throw sessionInfoError("Phiên không còn tồn tại.");
+    const current=snaps[0].data(); checkSessionInfoAccess(current);
+    if(current.ownerId!==model.rows[0].original.ownerId)
+      throw sessionInfoError("Chủ phiên đã thay đổi. Hãy mở lại cửa sổ sửa.");
+    if(model.kind==="groupActivities" && current.groupCount!==model.rows[0].original.groupCount)
+      throw sessionInfoError("Số nhóm đã thay đổi ở cửa sổ khác. Bản nhập vẫn được giữ; hãy kiểm tra lại phiên.");
+    model.rows.forEach((row,i)=>{
+      const patch=edits[i], latest=snaps[i].exists()?snaps[i].data():null;
+      if(!Object.keys(patch).length) return;
+      if(row.original && !latest) throw sessionInfoError("Dữ liệu đã bị xóa ở cửa sổ khác. Bản nhập vẫn được giữ.");
+      for(const key of Object.keys(patch)){
+        if(latest?.[key]!==row.original?.[key] && latest?.[key]!==patch[key])
+          throw sessionInfoError("Nội dung bạn đang sửa vừa được thay đổi ở cửa sổ khác. Chưa lưu; bản nhập vẫn được giữ. Hãy sao chép bản nhập, hủy và mở lại để đối chiếu.");
+      }
+      if(latest) tx.update(row.ref,{...patch,updatedAt:serverTimestamp()});
+      else tx.set(row.ref,{group:row.group,...patch,updatedAt:serverTimestamp()});
+    });
+  });
+  return true;
+}
+async function openSessionInfoEditor(kind,id,onSaved){
+  let model;
+  try{model=await loadSessionInfo(kind,id);}catch(e){toast(e.message || mapError(e),"err");return;}
+  const labels={title:"Tên phiên",description:"Mô tả",instructions:"Hướng dẫn / nhiệm vụ chung",targetSubmissions:"Mục tiêu lượt gửi",topic:"Nhiệm vụ nhóm"};
+  const host=openModal(`<h3>Sửa phiên</h3><p class="mut">Lưu thông tin trên phiên hiện có.</p>
+    ${model.rows.map((row,i)=>row.fields.map(key=>{
+      const val=row.original?.[key]??"", inputId=`si-${i}-${key}`;
+      return `<div class="field"><label for="${inputId}">${esc(labels[key])}${row.group?` ${row.group}`:""}</label>${key==="targetSubmissions"?
+        `<input id="${inputId}" type="number" min="3" max="10000" step="1" value="${esc(val)}">`:
+        key==="title"?`<input type="text" id="${inputId}" value="${esc(val)}" ${kind==="knowledgeSessions"?'maxlength="120"':""}>`:
+        `<textarea id="${inputId}" rows="4">${esc(val)}</textarea>`}</div>`;
+    }).join("")).join("")}
+    <div id="siError" class="error-text" role="alert"></div>
+    <div class="flex-between mt-14"><button class="btn btn-ghost" id="siCancel">HỦY</button><button class="btn" id="siSave">LƯU THAY ĐỔI</button></div>`,true);
+  const save=host.querySelector("#siSave"),cancel=host.querySelector("#siCancel"),error=host.querySelector("#siError");
+  let busy=false;
+  // Do not let a backdrop click discard a draft while a save is pending.
+  host.querySelector("#modalBackdrop").addEventListener("click",e=>{if(busy)e.stopImmediatePropagation();},true);
+  cancel.onclick=()=>{if(!busy)closeModal();};
+  save.onclick=async()=>{
+    if(busy)return;
+    busy=true; save.disabled=true; cancel.disabled=true; error.textContent="";
+    const values=model.rows.map((row,i)=>Object.fromEntries(row.fields.map(key=>{
+      const value=host.querySelector(`#si-${i}-${key}`).value;
+      return [key,key==="targetSubmissions"?Number(value):value];
+    })));
+    host.querySelectorAll("input,textarea").forEach(el=>el.disabled=true);
+    try{
+      const changed=await saveSessionInfo(model,values);closeModal();toast(changed?"Đã lưu thông tin phiên.":"Không có thay đổi cần lưu.","ok");
+      if(changed && onSaved) Promise.resolve().then(onSaved).catch(()=>toast("Đã lưu. Hãy tải lại danh sách để xem thông tin mới.","warn"));
+    }
+    catch(e){error.textContent=e.code?mapError(e):e.message;}
+    finally{busy=false;save.disabled=false;cancel.disabled=false;host.querySelectorAll("input,textarea").forEach(el=>el.disabled=false);}
+  };
+}
 
 /* ---------------- Khởi động ---------------- */
 function boot(){
@@ -1343,9 +1452,10 @@ async function groupModule(c,isAdminView){
         ${isAdminView?`<td>${esc(ownerMap[x.ownerId]?.name||"—")}<div class="group-admin-owner">${esc(ownerMap[x.ownerId]?.email||"")}</div></td>`:""}
         <td>${esc(x.className||"—")}</td><td>${x.groupCount||0}</td><td><b>${esc(x.joinCode||"")}</b></td><td>${groupStatusBadge(x.status)}</td>
         <td>${fmtDateShort(x.createdAt)}</td>
-        <td><div class="flex gap-8" style="flex-wrap:wrap"><button class="btn btn-sm btn-outline" data-group-open="${x.id}">MỞ</button>
+        <td><div class="flex gap-8" style="flex-wrap:wrap"><button class="btn btn-sm btn-outline" data-group-open="${x.id}">MỞ</button><button class="btn btn-sm btn-outline" data-group-info="${x.id}">SỬA PHIÊN</button>
         ${(isAdminView || x.ownerId===STATE.user.uid)?`<button class="btn btn-sm btn-danger" data-group-del="${x.id}" data-title="${esc(x.title||"")}">XÓA</button>`:""}</div></td>
       </tr>`).join("")}</tbody></table>`;
+    $$("[data-group-info]").forEach(b=>b.onclick=()=>openSessionInfoEditor("groupActivities",b.dataset.groupInfo));
     $$("[data-group-open]").forEach(b=>b.onclick=()=>{window.location.hash="#/group/"+encodeURIComponent(b.dataset.groupOpen);});
     $$("[data-group-del]").forEach(b=>b.onclick=async()=>{
       const id=b.dataset.groupDel;
@@ -1438,16 +1548,16 @@ async function groupLive(c,id,isAdminView){
   if(!canManage){c.innerHTML=`<div class="empty-state"><div class="ic">🔒</div>Bạn không có quyền mở hoạt động này.</div>`;return;}
   const join=groupJoinLink(a.joinCode);
   c.innerHTML=`<div class="group-head">
-    <div><button class="btn btn-sm btn-ghost" id="gBack">← QUAY LẠI</button><h2 style="margin-bottom:4px">${esc(a.title||"Thảo luận nhóm")}</h2>
+    <div><button class="btn btn-sm btn-ghost" id="gBack">← QUAY LẠI</button><h2 id="gLiveTitle" style="margin-bottom:4px">${esc(a.title||"Thảo luận nhóm")}</h2>
       <div class="mut">${esc(a.className||"")} · Mã phòng: <b>${esc(a.joinCode||"")}</b> · <span id="gStatusBadge">${groupStatusBadge(a.status)}</span></div></div>
     <div class="flex gap-8" style="flex-wrap:wrap">
       <button class="btn btn-ok" id="gOpen">${a.status==="open"?"ĐANG MỞ":"MỞ HOẠT ĐỘNG"}</button>
-      <button class="btn btn-outline" id="gClose">ĐÓNG HOẠT ĐỘNG</button>
+      <button class="btn btn-outline" id="gSessionInfo">SỬA PHIÊN</button><button class="btn btn-outline" id="gClose">ĐÓNG HOẠT ĐỘNG</button>
       <button class="btn btn-outline" id="gTimerStart">⏱ BẮT ĐẦU LẠI ĐỒNG HỒ</button>
       <button class="btn btn-danger" id="gTimerStop">⏹ DỪNG ĐỒNG HỒ</button>
     </div>
   </div>
-  ${a.instructions?`<div class="card mt-14"><b>Nhiệm vụ chung:</b><div class="mt-8">${esc(a.instructions)}</div></div>`:""}
+  <div class="card mt-14 ${a.instructions?"":"hidden"}" id="gInstructionsCard"><b>Nhiệm vụ chung:</b><div class="mt-8" id="gLiveInstructions" style="white-space:pre-wrap">${esc(a.instructions||"")}</div></div>
   <div class="grid grid-2 mt-14">
     <div class="card">
       <div class="flex-between"><div><h3 style="margin:0">QR tham gia</h3><div class="small mut">Học viên quét QR → chọn nhóm → gửi kết quả.</div></div>
@@ -1457,7 +1567,7 @@ async function groupLive(c,id,isAdminView){
         <div style="flex:1;min-width:220px"><label>Liên kết tham gia</label><input value="${esc(join)}" readonly><button class="btn btn-sm btn-outline mt-8" id="gCopy">SAO CHÉP LINK</button></div>
       </div>
     </div>
-    <div class="card"><h3>Chủ đề từng nhóm</h3><div id="gTopics"></div><button class="btn btn-outline mt-8" id="gSaveTopics">LƯU CHỦ ĐỀ</button></div>
+    <div class="card"><h3>Chủ đề từng nhóm</h3><div id="gTopics"></div><button class="btn btn-outline mt-8" id="gSaveTopics">SỬA NHIỆM VỤ</button></div>
   </div>
   <div class="flex-between mt-20"><h3 style="margin:0">Bảng ý kiến nhóm — Realtime</h3><span class="small mut" id="gRespCount"></span></div>
   <div id="gPanels" class="group-live-grid"></div>
@@ -1493,6 +1603,7 @@ async function groupLive(c,id,isAdminView){
   $("#groupPanelPopup").onclick=e=>{if(e.target.id==="groupPanelPopup") $("#groupPanelPopup").classList.add("hidden");};
 
   $("#gOpen").onclick=()=>{try{$("#groupCountdownSound")?.load();}catch(e){} updateDoc(doc(db,GROUP_COLLECTION,id),{status:"open",startedAt:serverTimestamp(),pausedRemainingSec:null,updatedAt:serverTimestamp()}).catch(e=>toast(mapError(e),"err"));};
+  $("#gSessionInfo").onclick=()=>openSessionInfoEditor("groupActivities",id);
   $("#gClose").onclick=()=>updateDoc(doc(db,GROUP_COLLECTION,id),{status:"closed",updatedAt:serverTimestamp()}).catch(e=>toast(mapError(e),"err"));
   $("#gTimerStart").onclick=()=>{try{$("#groupCountdownSound")?.load();}catch(e){} groupWarnedAt10=false; updateDoc(doc(db,GROUP_COLLECTION,id),{startedAt:serverTimestamp(),pausedRemainingSec:null,updatedAt:serverTimestamp()}).catch(e=>toast(mapError(e),"err"));};
   const stopGroupTimer=async()=>{
@@ -1512,15 +1623,9 @@ async function groupLive(c,id,isAdminView){
   let current=a, notes=[],photos=[],files=[],topics={};
   function renderTopics(){
     $("#gTopics").innerHTML=Array.from({length:current.groupCount||6},(_,k)=>k+1).map(i=>
-      `<div class="field" style="margin-bottom:8px"><label>Nhóm ${i}</label><input data-topic="${i}" value="${esc(topics[String(i)]?.topic||"")}" placeholder="Ví dụ: Giải pháp / Nguyên nhân / Kiến nghị…"></div>`).join("");
+      `<div class="field" style="margin-bottom:8px"><label>Nhóm ${i}</label><div style="white-space:pre-wrap">${esc(topics[String(i)]?.topic||"Chưa có nhiệm vụ")}</div></div>`).join("");
   }
-  $("#gSaveTopics").onclick=async()=>{
-    try{
-      const batch=writeBatch(db);
-      $$("[data-topic]").forEach(inp=>batch.set(doc(db,GROUP_COLLECTION,id,"topics",String(inp.dataset.topic)),{group:Number(inp.dataset.topic),topic:inp.value.trim(),updatedAt:serverTimestamp()},{merge:true}));
-      await batch.commit();toast("Đã lưu chủ đề các nhóm.","ok");
-    }catch(e){toast(mapError(e),"err");}
-  };
+  $("#gSaveTopics").onclick=()=>openSessionInfoEditor("groupActivities",id);
   function renderPanels(){
     let total=0;
     $("#gPanels").innerHTML=Array.from({length:current.groupCount||6},(_,k)=>k+1).map(i=>{
@@ -1594,7 +1699,7 @@ async function groupLive(c,id,isAdminView){
   };
   document.addEventListener("keydown",groupKeyHandler); track(()=>document.removeEventListener("keydown",groupKeyHandler));
 
-  track(onSnapshot(doc(db,GROUP_COLLECTION,id),s=>{if(!s.exists())return;current={id,...s.data()};$("#gStatusBadge").innerHTML=groupStatusBadge(current.status);renderPanels();updateTimer();}));
+  track(onSnapshot(doc(db,GROUP_COLLECTION,id),s=>{if(!s.exists())return;current={id,...s.data()};$("#gLiveTitle").textContent=current.title||"";$("#gLiveInstructions").textContent=current.instructions||"";$("#gInstructionsCard").classList.toggle("hidden",!current.instructions);$("#gStatusBadge").innerHTML=groupStatusBadge(current.status);renderPanels();updateTimer();}));
   track(onSnapshot(collection(db,GROUP_COLLECTION,id,"topics"),s=>{topics={};s.forEach(d=>topics[d.id]=d.data());renderTopics();renderPanels();}));
   track(onSnapshot(collection(db,GROUP_COLLECTION,id,"notes"),s=>{notes=s.docs.map(d=>({id:d.id,...d.data()}));renderPanels();}));
   track(onSnapshot(collection(db,GROUP_COLLECTION,id,"photos"),s=>{photos=s.docs.map(d=>({id:d.id,...d.data()}));renderPanels();}));
@@ -1620,10 +1725,10 @@ async function renderGroupStudentEntry(){
     if(!aSnap.exists()) throw {code:"not-found"};
     let a={id,...aSnap.data()},topics={};
     appRoot().innerHTML=`<div class="group-student-wrap">
-      <div class="center"><div class="eyebrow">HCMA2 - TEACHING</div><h1>👥 ${esc(a.title||"Thảo luận nhóm")}</h1><p class="mut">${esc(a.instructions||"")}</p></div>
+      <div class="center"><div class="eyebrow">HCMA2 - TEACHING</div><h1 id="gsLiveTitle">👥 ${esc(a.title||"Thảo luận nhóm")}</h1><p class="mut" id="gsLiveInstructions" style="white-space:pre-wrap">${esc(a.instructions||"")}</p></div>
       <div class="group-student-card"><div class="flex-between"><div><b>Mã phòng: ${esc(code)}</b><div class="small mut" id="gsStatus"></div></div><div class="group-timer" id="gsTimer">--:--</div></div>
         <div class="field mt-14"><label>Chọn nhóm của anh/chị *</label><select id="gsGroup"><option value="">— Chọn nhóm —</option>${Array.from({length:a.groupCount||6},(_,k)=>`<option value="${k+1}">Nhóm ${k+1}</option>`).join("")}</select></div>
-        <div id="gsTopic" class="group-topic hidden"></div>
+        <div id="gsTopic" class="group-topic hidden" style="white-space:pre-wrap"></div>
       </div>
       <div class="group-student-card hidden" id="gsSubmitCard">
         ${a.allowText!==false?`<div class="field"><label>Ý kiến thảo luận</label><textarea id="gsText" maxlength="1500" placeholder="Nhập ý kiến của nhóm…"></textarea><div class="small mut" id="gsChar">0/1500</div></div><button class="btn" id="gsSendText">GỬI Ý KIẾN</button><div id="gsTextMsg" class="small mt-8"></div>`:""}
@@ -1634,7 +1739,7 @@ async function renderGroupStudentEntry(){
       <div class="group-student-card"><h3>Ý kiến đã gửi của nhóm</h3><div id="gsMyNotes"><div class="mut small">Chọn nhóm để xem.</div></div></div>
     </div>`;
 
-    const unsubA=onSnapshot(doc(publicDb,GROUP_COLLECTION,id),s=>{if(s.exists()){a={id,...s.data()};updateStudentState();}});
+    const unsubA=onSnapshot(doc(publicDb,GROUP_COLLECTION,id),s=>{if(s.exists()){a={id,...s.data()};$("#gsLiveTitle").textContent="👥 "+(a.title||"Thảo luận nhóm");$("#gsLiveInstructions").textContent=a.instructions||"";updateStudentState();}});
     track(unsubA);
     const unsubT=onSnapshot(collection(publicDb,GROUP_COLLECTION,id,"topics"),s=>{topics={};s.forEach(d=>topics[d.id]=d.data());updateTopic();});
     track(unsubT);
@@ -1931,8 +2036,9 @@ async function teacherOverview(c){
     else{
       $("#tOvRecent").innerHTML = `<table><thead><tr><th>Hoạt động</th><th>Trạng thái</th><th>Câu hỏi</th><th>Lượt trả lời</th><th>Ngày tạo</th><th></th></tr></thead><tbody>
         ${recentSessions.map(s=>{ return `<tr><td>${esc(s.title)}</td><td>${sessionStatusBadge(s.status)}</td><td>${s.questionCount||0}</td><td>${s.responseCount||0}</td><td>${fmtDateShort(s.createdAt)}</td>
-          <td><button class="btn btn-sm btn-outline" data-open="${s.id}">MỞ</button></td></tr>`; }).join("")}
+          <td><button class="btn btn-sm btn-outline" data-open="${s.id}">MỞ</button><button class="btn btn-sm btn-outline" data-session-info="${s.id}">SỬA PHIÊN</button></td></tr>`; }).join("")}
       </tbody></table>`;
+      $$("[data-session-info]").forEach(b=>b.onclick=()=>openSessionInfoEditor("sessions",b.dataset.sessionInfo,()=>teacherOverview(c)));
       $$("[data-open]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/live/"+encodeURIComponent(b.dataset.open); });
     }
   }catch(e){ $("#tOvGrid").innerHTML = errorBlock(e, ()=>teacherOverview(c)); }
@@ -3156,7 +3262,7 @@ async function teacherLiveControl(c, sessionId){
   function renderShell(){
     c.innerHTML = `
     <div class="flex-between no-print">
-      <h2 style="margin:0;">${esc(session.title)}</h2>
+      <h2 id="liveSessionTitle" style="margin:0;">${esc(session.title)}</h2>
       ${sessionStatusBadge(session.status)}
     </div>
     <div class="flex gap-8 mt-8 no-print" style="flex-wrap:wrap;">
@@ -3167,7 +3273,7 @@ async function teacherLiveControl(c, sessionId){
       <button class="btn btn-outline" id="btnPresent" ${session.status==="draft"?"disabled":""}>HIỂN THỊ TRÌNH CHIẾU</button>
       ${session.status!=="archived" ? `<button class="btn btn-outline" id="btnEditTime">⏱ ĐỔI THỜI GIAN</button>` : ""}
       <button class="btn ${session.showResults==='live'?'btn-warn':'btn-outline'}" id="btnToggleResults">${session.showResults==='live'?"ẨN KẾT QUẢ":"HIỂN THỊ KẾT QUẢ"}</button>
-      <button class="btn btn-ghost" id="btnBackDash">← Về tổng quan</button>
+      <button class="btn btn-outline" id="btnSessionInfo">SỬA PHIÊN</button><button class="btn btn-ghost" id="btnBackDash">← Về tổng quan</button>
     </div>
     <div class="card mt-14 no-print"><div class="health-grid">
       <div class="health-item"><div><span class="health-dot" id="healthNetDot"></span><b>Internet</b></div><div class="small mut" id="healthNet">Đang kiểm tra…</div></div>
@@ -3192,6 +3298,7 @@ async function teacherLiveControl(c, sessionId){
         <div class="card mt-14"><div class="chart-box"><canvas id="liveChart"></canvas></div><div id="liveChartSummary"></div></div>
       </div>
     </div>`;
+    $("#btnSessionInfo").onclick=()=>openSessionInfoEditor("sessions",sessionId);
     $("#btnBackDash").onclick = ()=>{ window.location.hash=""; STATE.teacherNav="overview"; teacherRoute(); };
     $$(".qcount [data-q]").forEach(b=>b.onclick=()=>switchQuestion(Number(b.dataset.q)));
     if($("#btnPrevQ")) $("#btnPrevQ").onclick = ()=>switchQuestion(curIndex-1);
@@ -3260,7 +3367,7 @@ async function teacherLiveControl(c, sessionId){
       }
     }, (err)=>{ toast(mapError(err),"err"); }));
     // vẫn theo dõi thay đổi trạng thái session (đóng/mở từ nơi khác)
-    track(onSnapshot(sessionRef, (snap)=>{ if(snap.exists()){ session = snap.data(); } }));
+    track(onSnapshot(sessionRef, (snap)=>{ if(snap.exists()){ session = snap.data(); if($("#liveSessionTitle"))$("#liveSessionTitle").textContent=session.title||""; } }));
   }
   function renderOpenList(docs){
     const el = $("#openList"); if(!el) return;
@@ -3562,11 +3669,13 @@ async function teacherHistory(c){
         <td class="flex gap-8" style="flex-wrap:wrap;">
           <button class="btn btn-sm btn-outline" data-r="${s.id}">MỞ LẠI KẾT QUẢ</button>
           ${s.status!=="archived"?`<button class="btn btn-sm btn-ghost" data-live="${s.id}">ĐIỀU KHIỂN</button>`:""}
+          <button class="btn btn-sm btn-outline" data-session-info="${s.id}">SỬA PHIÊN</button>
           <button class="btn btn-sm btn-outline" data-clone-session="${s.id}">NHÂN BẢN</button>
           <button class="btn btn-sm btn-danger" data-trash-session="${s.id}" data-title="${esc(s.title)}" ${s.status==="open"?"disabled title=\"Hãy đóng phiên trước khi chuyển vào Thùng rác\"":""}>THÙNG RÁC</button>
         </td></tr>`).join("")}
       </tbody></table>`;
       $$("[data-r]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/report/"+encodeURIComponent(b.dataset.r); });
+      $$("[data-session-info]").forEach(b=>b.onclick=()=>openSessionInfoEditor("sessions",b.dataset.sessionInfo,()=>teacherHistory(c)));
       $$("[data-live]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/live/"+encodeURIComponent(b.dataset.live); });
       $$("[data-clone-session]").forEach(b=>b.onclick=()=>cloneSessionToWizard(b.dataset.cloneSession));
       $$("[data-trash-session]").forEach(b=>b.onclick=()=>moveSessionToTrash(
@@ -4193,10 +4302,11 @@ async function knowledgeModule(c,isAdminView){
       <p class="mut small">Mã: <b>${esc(s.joinCode)}</b> · Mục tiêu: ${Number(s.targetSubmissions||1500)} tình huống</p>
       ${isAdminView?`<p class="small mut">Owner: ${esc(s.ownerId)}</p>`:""}
       ${isAdminView&&s.teacherDeletedAt?'<p><span class="badge badge-warn">GIẢNG VIÊN ĐÃ ĐƯA VÀO THÙNG RÁC</span></p>':''}
-      <div class="flex gap-8"><button class="btn btn-outline btn-sm" data-kn-open="${s.id}">MỞ DASHBOARD</button>
+      <div class="flex gap-8"><button class="btn btn-outline btn-sm" data-kn-open="${s.id}">MỞ DASHBOARD</button>${!s.teacherDeletedAt?`<button class="btn btn-outline btn-sm" data-kn-info="${s.id}">SỬA PHIÊN</button>`:""}
       ${isAdminView&&s.teacherDeletedAt?`<button class="btn btn-sm btn-ok" data-kn-teacher-restore="${s.id}">KHÔI PHỤC CHO GIẢNG VIÊN</button>`:''}
       <button class="btn btn-sm btn-danger" data-kn-trash="${s.id}">${isAdminView?'ĐƯA VÀO ADMIN TRASH':'ĐƯA VÀO THÙNG RÁC'}</button></div></div>`).join("")}</div>`:
       `<div class="card empty-state"><div class="ic">🧠</div><h3>Chưa có Knowledge Session</h3><p>Tạo phiên đầu tiên để lấy mã và QR cho học viên.</p></div>`;
+    $$("[data-kn-info]").forEach(b=>b.onclick=()=>openSessionInfoEditor("knowledgeSessions",b.dataset.knInfo));
     $$('[data-kn-open]').forEach(b=>b.onclick=()=>knowledgeDashboard(c,b.dataset.knOpen,isAdminView));
     $$('[data-kn-teacher-restore]').forEach(b=>b.onclick=()=>knowledgeRestoreForTeacher(b.dataset.knTeacherRestore,c));
     $$('[data-kn-trash]').forEach(b=>b.onclick=()=>knowledgeMoveToTrash(b.dataset.knTrash,isAdminView,c));
@@ -4370,7 +4480,7 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
     $("#knDash").innerHTML=`<div class="knowledge-hero"><div class="flex between gap-14" style="flex-wrap:wrap"><div><h2>${esc(session.title)}</h2><p class="mut">${knowledgeStatusBadge(session.status)} · Tạo lúc ${knowledgeDate(session.createdAt)}</p></div><div class="card" style="text-align:center"><div class="small mut">MÃ THAM GIA</div><div class="knowledge-code">${esc(session.joinCode)}</div></div></div></div>
       <div class="grid grid-3"><div class="card knowledge-stat"><strong id="knParticipants">0</strong><span>Học viên</span></div><div class="card knowledge-stat"><strong id="knSubmissions">0</strong><span>Tình huống</span></div><div class="card knowledge-stat"><strong id="knProgressText">0%</strong><span>Mục tiêu ${Number(session.targetSubmissions||1500)}</span></div></div>
       <div class="card"><div class="knowledge-progress"><span id="knProgressBar" style="width:0"></span></div></div>
-      <div class="grid grid-2 mt-14"><div class="card"><h3>QR / liên kết công khai</h3><div class="flex gap-14" style="align-items:center;flex-wrap:wrap"><div class="pres-qr-wrap clickable" id="knQrWrap" role="button" tabindex="0" aria-label="Phóng to mã QR"><div id="knQr"></div><div class="pres-qr-hint">🔍 Nhấp để phóng to mã QR</div></div><div style="flex:1;min-width:220px"><input id="knUrl" value="${esc(url)}" readonly><div class="flex gap-8 mt-8"><button class="btn btn-sm" id="knCopy">SAO CHÉP</button><button class="btn btn-sm ${session.status==='open'?'btn-danger':'btn-ok'}" id="knToggle">${session.status==='open'?'ĐÓNG PHIÊN':'MỞ LẠI'}</button></div></div></div></div>
+      <div class="grid grid-2 mt-14"><div class="card"><h3>QR / liên kết công khai</h3><div class="flex gap-14" style="align-items:center;flex-wrap:wrap"><div class="pres-qr-wrap clickable" id="knQrWrap" role="button" tabindex="0" aria-label="Phóng to mã QR"><div id="knQr"></div><div class="pres-qr-hint">🔍 Nhấp để phóng to mã QR</div></div><div style="flex:1;min-width:220px"><input id="knUrl" value="${esc(url)}" readonly><div class="flex gap-8 mt-8"><button class="btn btn-sm" id="knCopy">SAO CHÉP</button><button class="btn btn-sm btn-outline" id="knSessionInfo">SỬA PHIÊN</button><button class="btn btn-sm ${session.status==='open'?'btn-danger':'btn-ok'}" id="knToggle">${session.status==='open'?'ĐÓNG PHIÊN':'MỞ LẠI'}</button></div></div></div></div>
       ${session.collectParticipantProfile===true?`<div class="card mt-14" id="knPfCard"><div class="section-title"><div><h3>👥 Người tham gia</h3><p class="mut">Thông tin cá nhân chỉ tải khi mở mục này — không cập nhật theo thời gian thực; bấm "Làm mới danh sách" để lấy dữ liệu mới nhất.</p></div></div><div id="knPfWrap"><div class="center-screen"><span class="spinner"></span></div></div></div>`:""}
       <div class="card"><h3>🤖 AI Analysis — Phase 2</h3><p class="mut">AI đọc bản sao theo lô; dữ liệu gốc không bị sửa hoặc ghi đè.</p><div class="flex gap-8" style="flex-wrap:wrap"><button class="btn" id="knAiRun">PHÂN TÍCH BẰNG AI</button><button class="btn btn-outline" id="knAiRetry" style="display:none">TIẾP TỤC / THỬ LẠI</button><button class="btn btn-outline" id="knAiJson" disabled>XUẤT AI JSON</button><button class="btn btn-outline" id="knAiCsv" disabled>XUẤT AI CSV</button></div><button class="btn btn-outline mt-8" id="knCsv">XUẤT CSV DỮ LIỆU GỐC</button><div id="knAiStatus" class="mt-14"><span class="mut small">Chưa có bản phân tích.</span></div></div></div>
       <div class="card second-brain-card mt-14"><div class="second-brain-head"><span class="second-brain-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 4.5a3 3 0 0 0-3 3v.3A3.2 3.2 0 0 0 4.5 10.8a3.2 3.2 0 0 0 1 5.4A3 3 0 0 0 8.5 20a2.7 2.7 0 0 0 2.5-1.6"/><path d="M15 4.5a3 3 0 0 1 3 3v.3a3.2 3.2 0 0 1 1.5 3 3.2 3.2 0 0 1-1 5.4A3 3 0 0 1 15.5 20a2.7 2.7 0 0 1-2.5-1.6"/><path d="M12 4.5v14"/><circle cx="7.2" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="16.8" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="14.5" r=".9" fill="currentColor" stroke="none"/><circle cx="16" cy="14.5" r=".9" fill="currentColor" stroke="none"/></svg></span><div><h3>SECOND BRAIN LIVE</h3><p>Trình chiếu không gian tri thức được hình thành theo thời gian thực</p></div></div><a class="btn btn-lg" href="https://brain.quantth.vn/knowledge-wall.html" target="_blank" rel="noopener noreferrer">MỞ SECOND BRAIN LIVE<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></svg><span class="sr-only"> (mở trong tab mới)</span></a></div>
@@ -4382,6 +4492,7 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
     try{new QRCode($("#knQr"),{text:url,width:150,height:150});}catch(e){}
     $("#knQrWrap").onclick=()=>openKnowledgeQrPopup(session,url);$("#knQrWrap").onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();openKnowledgeQrPopup(session,url);}};
     $("#knCopy").onclick=()=>navigator.clipboard.writeText(url).then(()=>toast("Đã sao chép liên kết.","ok")).catch(()=>toast("Hãy sao chép liên kết trong ô.","warn"));
+    $("#knSessionInfo").onclick=()=>openSessionInfoEditor("knowledgeSessions",sessionId);
     $("#knToggle").onclick=async()=>{try{await updateDoc(sRef,{status:session.status==="open"?"closed":"open",updatedAt:serverTimestamp()});toast("Đã cập nhật trạng thái phiên.","ok");}catch(e){toast(mapError(e),"err");}};
     // GATE 3D: chỉ tải participants (PII) khi phiên có bật thu thập hồ sơ — không bao giờ
     // với phiên cũ/OFF. Tải lại (getDocs on-demand) chỉ khi chưa có sẵn trong bộ nhớ, để

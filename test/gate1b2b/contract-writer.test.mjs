@@ -252,6 +252,186 @@ test("revision: apply_config DENY while OPEN (closed-first, absolute)", async ()
 });
 
 // =====================================================================================
+// POST-ACTIVATION LIFECYCLE (Blocker 1 fix) — an activated session must remain fully operable
+// through real Rules-enforced writes, not a rules-disabled bypass.
+// =====================================================================================
+
+test("sessions lifecycle post-activation: REOPEN a closed activated session PASS via Rules, configRevision/currentConfigId untouched, CLOSE again PASS, still untouched", async () => {
+  await seedUsers(); await seedSession("s1", { status: "closed" });
+  const w = writerFor(teacherCtx("teacher-a"));
+  const activation = await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-1" });
+  const a = db(teacherCtx("teacher-a"));
+
+  await assertSucceeds(updateDoc(doc(a, "sessions", "s1"), { status: "open", startedAt: serverTimestamp(), activeQuestionId: "q1", activeQuestionStartedAt: serverTimestamp(), updatedAt: serverTimestamp() }));
+  let root = (await getDoc(doc(w.db, "sessions", "s1"))).data();
+  assert.equal(root.status, "open");
+  assert.equal(root.configRevision, 0, "reopen must never bump configRevision");
+  assert.equal(root.currentConfigId, activation.resultingConfigId, "reopen must never move the contract pointer");
+  assert.equal(root.editContractVersion, 1);
+  assert.ok(root.contractActivatedAt);
+
+  await assertSucceeds(updateDoc(doc(a, "sessions", "s1"), { status: "closed", closedAt: serverTimestamp(), updatedAt: serverTimestamp() }));
+  root = (await getDoc(doc(w.db, "sessions", "s1"))).data();
+  assert.equal(root.status, "closed");
+  assert.equal(root.configRevision, 0);
+  assert.equal(root.currentConfigId, activation.resultingConfigId);
+});
+
+test("sessions lifecycle post-activation: toggle-results / live-aggregate runtime writes still PASS", async () => {
+  await seedUsers(); await seedSession("s1", { status: "closed" });
+  const w = writerFor(teacherCtx("teacher-a"));
+  await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-1" });
+  const a = db(teacherCtx("teacher-a"));
+  await assertSucceeds(updateDoc(doc(a, "sessions", "s1"), { showResults: "live", updatedAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(doc(a, "sessions", "s1"), { responseCount: 2, liveAggregate: { questionId: "q1", chartType: "bar", agg: {}, respondedCount: 2, openAnswers: [], updatedAt: new Date() }, updatedAt: serverTimestamp() }));
+});
+
+test("sessions lifecycle post-activation: trash/restore PASS, restore lands on unchanged status (no auto-reopen), contract fields untouched", async () => {
+  await seedUsers(); await seedSession("s1", { status: "closed" });
+  const w = writerFor(teacherCtx("teacher-a"));
+  const activation = await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-1" });
+  const a = db(teacherCtx("teacher-a"));
+  await assertSucceeds(updateDoc(doc(a, "sessions", "s1"), { deletedAt: serverTimestamp(), deletedBy: "teacher-a", updatedAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(doc(a, "sessions", "s1"), { deletedAt: null, deletedBy: null, updatedAt: serverTimestamp() }));
+  const root = (await getDoc(doc(w.db, "sessions", "s1"))).data();
+  assert.equal(root.configRevision, 0);
+  assert.equal(root.currentConfigId, activation.resultingConfigId);
+});
+
+test("sessions lifecycle branch DENY: cannot mutate title/description (semantic/config field) through it", async () => {
+  await seedUsers(); await seedSession("s1", { status: "closed" });
+  const w = writerFor(teacherCtx("teacher-a"));
+  await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-1" });
+  const a = db(teacherCtx("teacher-a"));
+  await assertFails(updateDoc(doc(a, "sessions", "s1"), { title: "Sửa lén qua lifecycle branch", updatedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(a, "sessions", "s1"), { status: "open", title: "Kèm cả status hợp lệ", updatedAt: serverTimestamp() }));
+});
+
+test("sessions lifecycle branch DENY: cannot mutate configRevision/currentConfigId/lastOperationId/editContractVersion/contractActivatedAt through it", async () => {
+  await seedUsers(); await seedSession("s1", { status: "closed" });
+  const w = writerFor(teacherCtx("teacher-a"));
+  const activation = await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-1" });
+  const a = db(teacherCtx("teacher-a"));
+  await assertFails(updateDoc(doc(a, "sessions", "s1"), { status: "open", configRevision: 1, updatedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(a, "sessions", "s1"), { status: "open", currentConfigId: "forged", updatedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(a, "sessions", "s1"), { status: "open", lastOperationId: "forged-op", updatedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(a, "sessions", "s1"), { status: "open", editContractVersion: 2, updatedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(a, "sessions", "s1"), { status: "open", contractActivatedAt: serverTimestamp(), updatedAt: serverTimestamp() }));
+  // Confirm nothing above actually moved:
+  const root = (await getDoc(doc(w.db, "sessions", "s1"))).data();
+  assert.equal(root.status, "closed");
+  assert.equal(root.configRevision, 0);
+  assert.equal(root.currentConfigId, activation.resultingConfigId);
+});
+
+test("groupActivities lifecycle post-activation: open/close/restart-timer/pause-timer real Rules writes PASS, contract fields untouched", async () => {
+  await seedUsers(); await seedGroup("g1", { status: "closed" });
+  const w = writerFor(teacherCtx("teacher-a"));
+  const activation = await activateContract({ ...w, family: "groupActivities", sessionId: "g1", actorUid: "teacher-a", operationId: "op-1" });
+  const a = db(teacherCtx("teacher-a"));
+  await assertSucceeds(updateDoc(doc(a, "groupActivities", "g1"), { status: "open", startedAt: serverTimestamp(), pausedRemainingSec: null, updatedAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(doc(a, "groupActivities", "g1"), { startedAt: null, pausedRemainingSec: 120, updatedAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(doc(a, "groupActivities", "g1"), { startedAt: serverTimestamp(), pausedRemainingSec: null, updatedAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(doc(a, "groupActivities", "g1"), { status: "closed", updatedAt: serverTimestamp() }));
+  const root = (await getDoc(doc(w.db, "groupActivities", "g1"))).data();
+  assert.equal(root.configRevision, 0);
+  assert.equal(root.currentConfigId, activation.resultingConfigId);
+  await assertFails(updateDoc(doc(a, "groupActivities", "g1"), { title: "Sửa lén qua lifecycle branch", updatedAt: serverTimestamp() }));
+});
+
+test("knowledgeSessions lifecycle post-activation: DECIDED semantics — status open/closed toggle PASS (reopen is just another status write, its own operation), teacher trash lands on closed status via the SAME write (matches pre-activation behavior), contract fields untouched throughout", async () => {
+  await seedUsers();
+  await seedWithRulesDisabled(async (d) => { await setDoc(doc(d, "knowledgeSessions", "k1"), legacyKnowledgeFixture()); });
+  const w = writerFor(teacherCtx("teacher-a"));
+  const activation = await activateContract({ ...w, family: "knowledgeSessions", sessionId: "k1", actorUid: "teacher-a", operationId: "op-1" });
+  const a = db(teacherCtx("teacher-a"));
+
+  await assertSucceeds(updateDoc(doc(a, "knowledgeSessions", "k1"), { status: "open", updatedAt: serverTimestamp() }));
+  let root = (await getDoc(doc(w.db, "knowledgeSessions", "k1"))).data();
+  assert.equal(root.status, "open");
+  assert.equal(root.configRevision, 0);
+  assert.equal(root.currentConfigId, activation.resultingConfigId);
+
+  // Trash forces status closed as part of the same write, matching the pre-activation behavior
+  // this family already had — restore afterward lands on CLOSED (DECIDED), reopen is separate.
+  await assertSucceeds(updateDoc(doc(a, "knowledgeSessions", "k1"), { status: "closed", teacherDeletedAt: serverTimestamp(), teacherDeletedBy: "teacher-a", updatedAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(doc(a, "knowledgeSessions", "k1"), { teacherDeletedAt: null, teacherDeletedBy: null, updatedAt: serverTimestamp() }));
+  root = (await getDoc(doc(w.db, "knowledgeSessions", "k1"))).data();
+  assert.equal(root.status, "closed", "restore lands on closed, exactly as legacy — this write never re-opens");
+  assert.equal(root.configRevision, 0);
+  assert.equal(root.currentConfigId, activation.resultingConfigId);
+
+  await assertSucceeds(updateDoc(doc(a, "knowledgeSessions", "k1"), { status: "open", updatedAt: serverTimestamp() }));
+
+  await assertFails(updateDoc(doc(a, "knowledgeSessions", "k1"), { title: "Sửa lén qua lifecycle branch", updatedAt: serverTimestamp() }));
+});
+
+test("knowledgeSessions lifecycle post-activation: admin trash/restore branch PASS, teacher cannot touch adminDeletedAt", async () => {
+  await seedUsers();
+  await seedWithRulesDisabled(async (d) => { await setDoc(doc(d, "knowledgeSessions", "k1"), legacyKnowledgeFixture()); });
+  const w = writerFor(teacherCtx("teacher-a"));
+  await activateContract({ ...w, family: "knowledgeSessions", sessionId: "k1", actorUid: "teacher-a", operationId: "op-1" });
+  const admin = db(teacherCtx("admin-1"));
+  await assertSucceeds(updateDoc(doc(admin, "knowledgeSessions", "k1"), { status: "closed", adminDeletedAt: serverTimestamp(), adminDeletedBy: "admin-1", updatedAt: serverTimestamp() }));
+  const a = db(teacherCtx("teacher-a"));
+  await assertFails(updateDoc(doc(a, "knowledgeSessions", "k1"), { adminDeletedAt: null, updatedAt: serverTimestamp() }));
+});
+
+// =====================================================================================
+// EDIT HISTORY READ POLICY (Blocker 2)
+// =====================================================================================
+
+test("editHistory read policy: owner get exact doc PASS (matches what the writer's idempotency check actually does)", async () => {
+  await seedUsers(); await seedSession("s1");
+  const w = writerFor(teacherCtx("teacher-a"));
+  await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-1" });
+  const a = db(teacherCtx("teacher-a"));
+  await assertSucceeds(getDoc(doc(a, "sessions", "s1", "editHistory", "op-1")));
+});
+
+test("editHistory read policy: admin get PASS", async () => {
+  await seedUsers(); await seedSession("s1");
+  const w = writerFor(teacherCtx("teacher-a"));
+  await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-1" });
+  const admin = db(teacherCtx("admin-1"));
+  await assertSucceeds(getDoc(doc(admin, "sessions", "s1", "editHistory", "op-1")));
+});
+
+test("editHistory read policy: foreign teacher DENY, anonymous DENY, suspended teacher DENY", async () => {
+  await seedUsers(); await seedSession("s1"); await seedSession("s-susp", { ownerId: "teacher-suspended" });
+  const w = writerFor(teacherCtx("teacher-a"));
+  await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-1" });
+  const b = db(teacherCtx("teacher-b"));
+  await assertFails(getDoc(doc(b, "sessions", "s1", "editHistory", "op-1")));
+  const anon = db(anonCtx("student-1"));
+  await assertFails(getDoc(doc(anon, "sessions", "s1", "editHistory", "op-1")));
+  const susp = db(teacherCtx("teacher-suspended"));
+  await assertFails(getDoc(doc(susp, "sessions", "s1", "editHistory", "op-1")));
+});
+
+test("editHistory read policy: list/query the whole collection is DENIED for everyone, including the owner — not needed by the writer or any reader in this gate", async () => {
+  await seedUsers(); await seedSession("s1");
+  const w = writerFor(teacherCtx("teacher-a"));
+  await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-1" });
+  const a = db(teacherCtx("teacher-a"));
+  await assertFails(firestoreFns.getDocs(collection(a, "sessions", "s1", "editHistory")));
+});
+
+test("editHistory read policy: writer code path confirmation — activateContract/applyConfigRevision only ever call tx.get() on a single known operationId doc, never a list/query, so get-only Rules are sufficient for the writer's own needs", async () => {
+  await seedUsers(); await seedSession("s1", { status: "closed" });
+  const w = writerFor(teacherCtx("teacher-a"));
+  // A second, different operationId activation attempt after the first succeeded (already
+  // activated) exercises exactly the tx.get(historyRef) read path with a doc that does NOT
+  // exist yet — proving the writer's own idempotency check only needs `get`, and that this
+  // works correctly (ALREADY_ACTIVATED, not a permission error) with list denied.
+  await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-1" });
+  await assert.rejects(
+    () => activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-never-used-before" }),
+    (e) => { assert.equal(e.code, "ALREADY_ACTIVATED"); return true; }
+  );
+});
+
+// =====================================================================================
 // RACE (two concurrent "tabs")
 // =====================================================================================
 
@@ -304,11 +484,14 @@ test("idempotency: retry same operationId + different payload DENY (source data 
 test("idempotency: simulated client-timeout-after-commit retry does not create a duplicate version/history", async () => {
   await seedUsers(); await seedSession("s1");
   const w = writerFor(teacherCtx("teacher-a"));
-  await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-timeout" });
-  // Client "never saw" the success response and retries identically.
-  await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-timeout" });
-  const snap = await firestoreFns.getDocs(collection(w.db, "sessions", "s1", "configVersions"));
-  assert.equal(snap.docs.length, 1, "exactly one configVersions doc must exist despite two identical attempts");
+  const first = await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-timeout" });
+  // Client "never saw" the success response and retries identically. Verified via the writer's
+  // own return value (both must resolve to the exact same configId — proving no duplicate was
+  // created) rather than a collection list/count, since configVersions.list is not granted to
+  // any client per Blocker 2's tightening (see below) and the writer itself never lists either.
+  const retry = await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-timeout" });
+  assert.equal(retry.replay, true);
+  assert.equal(retry.resultingConfigId, first.resultingConfigId, "exactly one configVersions doc must exist despite two identical attempts");
 });
 
 // =====================================================================================

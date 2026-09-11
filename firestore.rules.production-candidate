@@ -329,11 +329,36 @@ service cloud.firestore {
         getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingConfigId == request.resource.data.currentConfigId &&
         getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.actorUid == request.auth.uid;
 
+      // GATE 1B.2B (fix, post-review): contract non-config lifecycle/runtime updates. An
+      // activated session must remain fully operable — open/close/reopen, active-question
+      // switching, edit-time, toggle-results, live-aggregate recompute, trash/restore — exactly
+      // as before activation, WITHOUT that being a config edit. This branch allows only the
+      // same non-config fields the legacy branch always allowed (title/description are
+      // deliberately EXCLUDED here — they are Class-B/config fields; editing them post-
+      // activation is not implemented in Gate 1B.2B and must go through a future contract
+      // "edit_info" operation, not this branch). configRevision, currentConfigId,
+      // editContractVersion, contractActivatedAt and lastOperationId are all absent from the
+      // allowlist below, so none of them can move through this branch — this is exactly what
+      // prevents it from being used to fake a configVersion or bypass semantic-config
+      // protection: it can change lifecycle/runtime state, never the contract pointer/revision.
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        ('configRevision' in resource.data) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status','startedAt','closedAt','activeQuestionId','activeQuestionStartedAt',
+          'showResults','responseCount','liveAggregate','deletedAt','deletedBy','updatedAt'
+        ]);
+
       allow delete: if isOwnerOrAdmin(resource.data.ownerId);
 
       // ---------------- GATE 1B.2B: CONTRACT VERSIONS (immutable) ----------------
       match /configVersions/{configId} {
-        allow get, list: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId);
+        // BLOCKER 2 fix (post-review): get-only, no list — the writer (contract-writer.mjs)
+        // only ever reads one specific, already-known configId via a transaction get() (to
+        // resolve the ancestry chain, or to compare an idempotency retry's manifest), never a
+        // collection query. No reader/UI in this gate lists the whole configVersions
+        // collection either, so list is not granted until something actually needs it.
+        allow get: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId);
         // The getAfter() check on the parent session closes the loop the other direction from
         // the root update rules above: a version doc can only be created if, in the SAME
         // commit, the session root ends up pointing at it via currentConfigId — a client cannot
@@ -354,7 +379,11 @@ service cloud.firestore {
 
       // ---------------- GATE 1B.2B: EDIT HISTORY (append-only) ----------------
       match /editHistory/{operationId} {
-        allow get, list: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId);
+        // BLOCKER 2 fix (post-review): get-only, no list — same reasoning as configVersions
+        // above. contract-writer.mjs's idempotency check reads exactly one editHistory doc by
+        // its operationId (a transaction get() on a known path), it never lists/queries the
+        // collection, so list is not granted.
+        allow get: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId);
         // Same closing-the-loop reasoning as configVersions above, anchored via lastOperationId.
         allow create: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId) &&
           getAfter(/databases/$(database)/documents/sessions/$(sessionId)).data.lastOperationId == operationId &&
@@ -641,12 +670,26 @@ service cloud.firestore {
         getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingConfigId == request.resource.data.currentConfigId &&
         getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.actorUid == request.auth.uid;
 
+      // GATE 1B.2B (fix, post-review): contract non-config lifecycle/runtime updates — see
+      // sessions family above for full reasoning. title/instructions are deliberately excluded
+      // (Class-B/config, not implemented as a post-activation edit_info operation in this gate).
+      allow update: if (
+          isAdmin() ||
+          (isActiveTeacher() && resource.data.ownerId == request.auth.uid)
+        ) &&
+        ('configRevision' in resource.data) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status','startedAt','pausedRemainingSec','updatedAt'
+        ]);
+
       allow delete: if isAdmin() ||
         (isActiveTeacher() && resource.data.ownerId == request.auth.uid);
 
       // ---------------- GATE 1B.2B: CONTRACT VERSIONS (immutable) ----------------
       match /configVersions/{configId} {
-        allow get, list: if isAdmin() ||
+        // BLOCKER 2 fix (post-review): get-only, no list — see sessions family above.
+        allow get: if isAdmin() ||
           (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
         allow create: if (
             isAdmin() ||
@@ -665,7 +708,8 @@ service cloud.firestore {
 
       // ---------------- GATE 1B.2B: EDIT HISTORY (append-only) ----------------
       match /editHistory/{operationId} {
-        allow get, list: if isAdmin() ||
+        // BLOCKER 2 fix (post-review): get-only, no list — see sessions family above.
+        allow get: if isAdmin() ||
           (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
         allow create: if (
             isAdmin() ||
@@ -1006,6 +1050,27 @@ service cloud.firestore {
         getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingConfigId == request.resource.data.currentConfigId &&
         getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.actorUid == request.auth.uid;
 
+      // GATE 1B.2B (fix, post-review): contract non-config lifecycle/runtime updates — teacher
+      // branch. An activated session must remain fully operable (open/close toggle, teacher
+      // trash/restore — DECIDED: restore always lands on CLOSED, since the legacy write shape
+      // here never sets status back to 'open' either, reopen stays its own explicit operation)
+      // without that being a config edit. title/targetSubmissions are deliberately excluded —
+      // Class-B/config, not implemented as a post-activation edit_info operation in this gate.
+      allow update: if isOwnerActiveTeacher(resource.data.ownerId) &&
+        ('configRevision' in resource.data) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status','teacherDeletedAt','teacherDeletedBy','updatedAt'
+        ]);
+
+      // GATE 1B.2B (fix, post-review): same as above, admin branch (also covers admin trash).
+      allow update: if isAdmin() &&
+        ('configRevision' in resource.data) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status','teacherDeletedAt','teacherDeletedBy','adminDeletedAt','adminDeletedBy','updatedAt'
+        ]);
+
       // Xóa vật lý chỉ qua Cloud Function admin-delete-session.
       allow delete: if false;
 
@@ -1015,7 +1080,8 @@ service cloud.firestore {
       // participant PII values. No participant document is ever read to build this, and no PII
       // field name is in the allowlist below.
       match /configVersions/{configId} {
-        allow get, list: if isOwnerOrAdmin(get(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.ownerId);
+        // BLOCKER 2 fix (post-review): get-only, no list — see sessions family above.
+        allow get: if isOwnerOrAdmin(get(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.ownerId);
         allow create: if isOwnerOrAdmin(get(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.ownerId) &&
           request.resource.data.createdBy == request.auth.uid &&
           request.resource.data.createdAt == request.time &&
@@ -1032,7 +1098,8 @@ service cloud.firestore {
 
       // ---------------- GATE 1B.2B: EDIT HISTORY (append-only) ----------------
       match /editHistory/{operationId} {
-        allow get, list: if isOwnerOrAdmin(get(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.ownerId);
+        // BLOCKER 2 fix (post-review): get-only, no list — see sessions family above.
+        allow get: if isOwnerOrAdmin(get(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.ownerId);
         allow create: if isOwnerOrAdmin(get(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.ownerId) &&
           getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.lastOperationId == operationId &&
           request.resource.data.operationId == operationId &&

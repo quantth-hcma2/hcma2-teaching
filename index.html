@@ -488,7 +488,7 @@ import {
 // but is not yet call-sited beyond this marker check — there is no real contract data for it
 // to read yet, and wiring it into the live render paths without that is Gate 1B.2 scope.
 import { isContractSession, assertLegacyWritable, resolveSessionSemantics, makeFirestoreDbFacade } from "./session-reader.mjs";
-import { qrModalViewModel, presentationRenderState, buildInteractionJsonExport } from "./session-view.mjs";
+import { qrModalViewModel, presentationRenderState, buildInteractionJsonExport, liveTitleForSnapshot } from "./session-view.mjs";
 
 /* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
 const firebaseConfig = {
@@ -3406,10 +3406,13 @@ async function teacherLiveControl(c, sessionId){
       }
     }, (err)=>{ toast(mapError(err),"err"); }));
     // vẫn theo dõi thay đổi trạng thái session (đóng/mở từ nơi khác)
-    // Gate 1B.2C: title is intentionally re-read from displaySemantics (resolved once above),
-    // never from the live snapshot's raw session.title — the root field is frozen-at-activation
-    // for a contract session and must not reappear as a "live" value here.
-    track(onSnapshot(sessionRef, (snap)=>{ if(snap.exists()){ session = snap.data(); if($("#liveSessionTitle"))$("#liveSessionTitle").textContent=displaySemantics.title||""; } }));
+    // Gate 1B.2C-P1: a contract session must keep showing the once-resolved effective title
+    // (displaySemantics.title) — the root field is frozen-at-activation and must not reappear
+    // as a "live" value. A LEGACY session has no such freeze: Gate 1A can still edit its root
+    // title while this screen stays open, so it must follow the FRESH snapshot value on every
+    // update, exactly as it did before the contract-bridge work. liveTitleForSnapshot() picks
+    // between the two without re-resolving the contract config on every snapshot.
+    track(onSnapshot(sessionRef, (snap)=>{ if(snap.exists()){ session = snap.data(); if($("#liveSessionTitle"))$("#liveSessionTitle").textContent=liveTitleForSnapshot(isContractSession(session), session.title, displaySemantics.title); } }));
   }
   function renderOpenList(docs){
     const el = $("#openList"); if(!el) return;

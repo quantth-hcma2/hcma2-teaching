@@ -53,6 +53,24 @@ export function presentationRenderState(session) {
 }
 
 /**
+ * Gate 1B.2C-P1: decides the title teacherLiveControl's live snapshot listener should display,
+ * on every session snapshot. `displaySemantics` is resolved exactly once, when the screen loads
+ * (session-reader.mjs's resolveSessionSemantics) — this function does not re-resolve it and
+ * takes no Firestore facade, it only picks between two already-known values:
+ *
+ * - Contract session: ALWAYS the already-resolved effective title (`resolvedContractTitle`),
+ *   even though the snapshot's own root `session.title` keeps arriving on every update — the
+ *   root value is frozen-at-activation and must never be shown, silently or otherwise.
+ * - Legacy session: the FRESH `freshLegacyTitle` from this exact snapshot, so a Gate 1A edit
+ *   made while the screen is open is reflected immediately, exactly as it always was before the
+ *   contract-bridge work — this was the bug: a stale, load-time-only value was being shown for
+ *   legacy sessions too.
+ */
+export function liveTitleForSnapshot(isContract, freshLegacyTitle, resolvedContractTitle) {
+  return isContract ? (resolvedContractTitle ?? "") : (freshLegacyTitle ?? "");
+}
+
+/**
  * Pure JSON export payload builder for exportSessionJSON in index.html. `semanticTitle` must
  * already be resolved by the caller (teacherReportView) — this function never reads
  * session.title itself. No Blob/download side effects here; index.html still owns that part.

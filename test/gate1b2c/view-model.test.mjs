@@ -4,7 +4,7 @@
 // an assumption about it. No Firestore, no DOM, no emulator needed.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { qrModalViewModel, presentationRenderState, buildInteractionJsonExport } from "../../session-view.mjs";
+import { qrModalViewModel, presentationRenderState, buildInteractionJsonExport, liveTitleForSnapshot } from "../../session-view.mjs";
 
 const OLD_TITLE = "Khởi động (cũ)";
 const NEW_TITLE = "Khởi động (đã sửa — REVISION 1)";
@@ -93,4 +93,36 @@ test("buildInteractionJsonExport: question/answer structure is preserved exactly
   assert.equal(out.cauHoi[0].cauHoi, "Câu 1?");
   assert.deepEqual(out.cauHoi[0].phuongAn, ["A", "B"]);
   assert.equal(out.cauHoi[0].cauTraLoi[0].participantId, "p1");
+});
+
+// =====================================================================================
+// LIVE TITLE (Gate 1B.2C-P1 hotfix) — teacherLiveControl's onSnapshot listener
+// =====================================================================================
+
+test("liveTitleForSnapshot: LEGACY session — a fresh snapshot's title (e.g. after a Gate 1A edit while the screen is open) is displayed immediately, not the load-time value", () => {
+  const initialTitle = "A";
+  const freshSnapshotTitle = "B"; // simulates a Gate 1A edit landing while teacherLiveControl stays open
+  const displayed = liveTitleForSnapshot(/* isContract */ false, freshSnapshotTitle, /* resolvedContractTitle (unused for legacy) */ initialTitle);
+  assert.equal(displayed, "B", "must follow the fresh snapshot title, this was exactly the regression");
+});
+
+test("liveTitleForSnapshot: CONTRACT session — the resolved effective title is displayed even while the raw snapshot still carries the frozen root OLD title", () => {
+  const rootTitleStillArrivingOnEverySnapshot = "OLD (frozen root value, unrelated to any revision)";
+  const resolvedEffectiveTitle = "NEW (from resolveSessionSemantics)";
+  const displayed = liveTitleForSnapshot(/* isContract */ true, rootTitleStillArrivingOnEverySnapshot, resolvedEffectiveTitle);
+  assert.equal(displayed, "NEW (from resolveSessionSemantics)");
+  assert.notEqual(displayed, rootTitleStillArrivingOnEverySnapshot, "must never silently fall back to the raw root title for a contract session");
+});
+
+test("liveTitleForSnapshot: contract session — even across multiple simulated snapshots, the resolved title never drifts to whatever the root happens to say", () => {
+  const resolvedEffectiveTitle = "Khởi động (đã sửa — REVISION 1)";
+  const snapshotsSeen = ["Khởi động (cũ)", "Khởi động (cũ)", "Khởi động (cũ)"]; // root never changes, by design
+  for (const rootTitle of snapshotsSeen) {
+    assert.equal(liveTitleForSnapshot(true, rootTitle, resolvedEffectiveTitle), resolvedEffectiveTitle);
+  }
+});
+
+test("liveTitleForSnapshot: missing values do not throw and default to empty string rather than 'undefined'", () => {
+  assert.equal(liveTitleForSnapshot(false, undefined, "irrelevant"), "");
+  assert.equal(liveTitleForSnapshot(true, "irrelevant", undefined), "");
 });

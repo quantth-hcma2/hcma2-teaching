@@ -238,11 +238,36 @@ service cloud.firestore {
       // Học viên/anonymous KHÔNG được liệt kê session (chống liệt kê toàn bộ hệ thống).
       allow list: if isOwnerOrAdmin(resource.data.ownerId);
 
+      // GATE 1B.2A: create is allowlisted to exactly the fields the create wizard writes today
+      // (finalizeWizard() in index.html) — closes the path for a modified/stale client to create
+      // a session with contract metadata (editContractVersion/configRevision/currentConfigId/
+      // lastOperationId/contractActivatedAt) already set, bypassing activation entirely.
       allow create: if isActiveTeacher() &&
-        request.resource.data.ownerId == request.auth.uid;
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.keys().hasOnly([
+          'ownerId','classId','className','title','description','status',
+          'accessToken','shortCode','showResults','allowMultipleResponses','anonymous',
+          'showResponderCount','startedAt','closedAt','createdAt','updatedAt',
+          'questionCount','responseCount','activeQuestionId','activeQuestionStartedAt',
+          'sessionGroupId','roundNumber'
+        ]);
 
+      // GATE 1B.2A: update is allowlisted by DIFF (affectedKeys), not by the full document's
+      // keys() — so a legacy document carrying any older/unknown field keeps updating normally
+      // as long as that field's value isn't touched. ownerId stays immutable (both the explicit
+      // check below and its absence from this list). Any field not in this list — including
+      // editContractVersion/configRevision/currentConfigId/lastOperationId/contractActivatedAt,
+      // any brand-new arbitrary field, or any change to an existing-but-unlisted field — is
+      // denied. This is the exact set of fields any current legitimate write path in index.html
+      // (Gate 1A edit, open/close/reopen/archive, switchQuestion, edit-time, toggle-results,
+      // live-aggregate recompute, trash/restore) ever changes on this document today.
       allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
-        request.resource.data.ownerId == resource.data.ownerId;
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title','description','status','startedAt','closedAt',
+          'activeQuestionId','activeQuestionStartedAt','showResults',
+          'responseCount','liveAggregate','deletedAt','deletedBy','updatedAt'
+        ]);
 
       allow delete: if isOwnerOrAdmin(resource.data.ownerId);
 
@@ -433,17 +458,37 @@ service cloud.firestore {
       allow list: if isAdmin() ||
         (isActiveTeacher() && resource.data.ownerId == request.auth.uid);
 
+      // GATE 1B.2A: create is allowlisted to exactly the fields openGroupCreateForm() writes
+      // today — closes the path for a modified/stale client to create an activity with contract
+      // metadata (editContractVersion/configRevision/currentConfigId/lastOperationId/
+      // contractActivatedAt) already set, bypassing activation entirely.
       allow create: if isActiveTeacher() &&
         request.resource.data.ownerId == request.auth.uid &&
         request.resource.data.groupCount >= 2 &&
         request.resource.data.groupCount <= 12 &&
-        request.resource.data.status == 'draft';
+        request.resource.data.status == 'draft' &&
+        request.resource.data.keys().hasOnly([
+          'ownerId','classId','className','title','instructions','groupCount',
+          'durationSec','allowText','allowPhoto','allowFile','joinCode','status',
+          'startedAt','createdAt','updatedAt'
+        ]);
 
+      // GATE 1B.2A: update is allowlisted by DIFF (affectedKeys), not by the full document's
+      // keys() — a legacy document carrying any older/unknown field keeps updating normally as
+      // long as that field's value isn't touched. ownerId stays immutable (both the explicit
+      // check below and its absence from this list). Any field not in this list — including
+      // editContractVersion/configRevision/currentConfigId/lastOperationId/contractActivatedAt,
+      // any brand-new arbitrary field, or any change to an existing-but-unlisted field — is
+      // denied. This is the exact set of fields any current legitimate write path in index.html
+      // (Gate 1A edit, open, close, restart/pause timer) ever changes on this document today.
       allow update: if (
           isAdmin() ||
           (isActiveTeacher() && resource.data.ownerId == request.auth.uid)
         ) &&
-        request.resource.data.ownerId == resource.data.ownerId;
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title','instructions','status','startedAt','pausedRemainingSec','updatedAt'
+        ]);
 
       allow delete: if isAdmin() ||
         (isActiveTeacher() && resource.data.ownerId == request.auth.uid);

@@ -107,6 +107,57 @@ service cloud.firestore {
       return cfg.questions[order];
     }
 
+    // GATE 1B.3-C1R: a real revision-apply batch touches 3 documents at once (configVersions
+    // create + editHistory create + session root update), and the FULL Rules file has multiple
+    // OR'd allow-statements per path — the cumulative expression count Firestore evaluates
+    // across that whole batch is a real, separate constraint from per-call get()/getAfter()
+    // caching (confirmed empirically: the session root apply_config branch alone, written with
+    // 5+ separate getAfter() expressions, pushed a real 3-document batch over Firestore's
+    // per-request expression-evaluation ceiling — "Unable to evaluate the expression as the
+    // maximum of 1000 expressions to evaluate has been reached"). Consolidating each cross-
+    // document proof into one function call with one `let`-bound read, instead of many separate
+    // getAfter() expressions inline in the allow-statement, is what actually keeps a 3-document
+    // batch under that ceiling.
+    function sessionsApplyTargetOk(sessionId, configId, expectedRevision, expectedParentConfigId, expectedQuestionCount) {
+      let cfg = getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(configId)).data;
+      return cfg.revision == expectedRevision &&
+        cfg.parentConfigId == expectedParentConfigId &&
+        cfg.kind == 'interaction' &&
+        cfg.roundId == configId &&
+        cfg.questions.size() == expectedQuestionCount;
+    }
+
+    function sessionsApplyHistoryOk(sessionId, operationId, expectedRevision, expectedConfigId, actorUid) {
+      let h = getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(operationId)).data;
+      return h.operationType == 'apply_config' &&
+        h.resultingRevision == expectedRevision &&
+        h.resultingConfigId == expectedConfigId &&
+        h.actorUid == actorUid;
+    }
+
+    // GATE 1B.3-C1R: same consolidation as the two helpers above, applied to the pre-existing
+    // (Gate 1B.2B) activation branch's own 9 unconsolidated getAfter() expressions — a real
+    // revision-1 apply batch and an activation batch both write to the same 3 collections
+    // (session root + configVersions + editHistory), so this pre-existing branch's own
+    // complexity is part of the SAME per-request expression budget any batch touching the
+    // session root must fit within, not a separate concern.
+    function sessionsActivationTargetOk(sessionId, configId) {
+      let cfg = getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(configId)).data;
+      return cfg.revision == 0 &&
+        cfg.parentConfigId == null &&
+        cfg.kind == 'activation_baseline' &&
+        cfg.source == 'legacy_snapshot' &&
+        cfg.activatedFromLegacy == true;
+    }
+
+    function sessionsActivationHistoryOk(sessionId, operationId, expectedConfigId, actorUid) {
+      let h = getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(operationId)).data;
+      return h.operationType == 'activate_contract' &&
+        h.resultingRevision == 0 &&
+        h.resultingConfigId == expectedConfigId &&
+        h.actorUid == actorUid;
+    }
+
     // FIX 4: kiểm tra câu hỏi vẫn còn trong thời hạn trả lời (nếu có đặt timeLimit>0),
     // dựa trên session.activeQuestionStartedAt (Timestamp server ghi khi giảng viên
     // kích hoạt câu hỏi) cộng với question.timeLimit (giây), so với request.time
@@ -309,15 +360,8 @@ service cloud.firestore {
         request.resource.data.configRevision == 0 &&
         request.resource.data.contractActivatedAt == request.time &&
         request.resource.data.updatedAt == request.time &&
-        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.revision == 0 &&
-        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.parentConfigId == null &&
-        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.kind == 'activation_baseline' &&
-        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.source == 'legacy_snapshot' &&
-        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.activatedFromLegacy == true &&
-        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.operationType == 'activate_contract' &&
-        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingRevision == 0 &&
-        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingConfigId == request.resource.data.currentConfigId &&
-        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.actorUid == request.auth.uid;
+        sessionsActivationTargetOk(sessionId, request.resource.data.currentConfigId) &&
+        sessionsActivationHistoryOk(sessionId, request.resource.data.lastOperationId, request.resource.data.currentConfigId, request.auth.uid);
 
       // GATE 1B.2B: generic config-revision update (apply_config foundation). CLOSED-FIRST,
       // absolute — never permitted while status == 'open' (Gate 1A-style edit_info is the
@@ -328,35 +372,33 @@ service cloud.firestore {
         resource.data.status == 'closed' &&
         request.resource.data.ownerId == resource.data.ownerId &&
         request.resource.data.status == resource.data.status &&
-        // GATE 1B.3-C1: extended to permit the frozen derived/runtime reset fields alongside the
-        // unchanged Gate 1B.2B fields. Each reset field is OPTIONAL here (so the still-unmodified
-        // Gate 1B.2B writer's title/description-only apply, which never touches these, keeps
-        // working exactly as before) but its VALUE is constrained to the one frozen reset value
-        // whenever it IS touched — never a semantic root mirror. title/description/settings
-        // remain deliberately absent from this list; that is the enforcement against semantic
-        // root mirroring, not a separate check.
+        // GATE 1B.3-C1R: every real apply_config for the Interaction (sessions) family is now
+        // required to be a COMPLETE revision — the frozen derived/runtime reset fields are
+        // MANDATORY (hasAll, not merely permitted), and the new config it points at must be
+        // proven to be a genuine full Interaction manifest (kind=='interaction', roundId==
+        // currentConfigId, and questionCount matching its own declared question count) — closing
+        // both the "partial revision" gap and the "stale runtime pointer after a real revision"
+        // gap found in review. This is a hard requirement going forward for THIS family only;
+        // groupActivities/knowledgeSessions' apply_config branches are untouched. A modified
+        // client can no longer create a revision N+1 for sessions while leaving activeQuestionId/
+        // activeQuestionStartedAt/responseCount/liveAggregate pointing at the retired round, and
+        // can no longer create a revision N+1 carrying only the old title/description shape.
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'configRevision','currentConfigId','lastOperationId','updatedAt',
           'questionCount','activeQuestionId','activeQuestionStartedAt','responseCount','liveAggregate'
         ]) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasAll([
+          'questionCount','activeQuestionId','activeQuestionStartedAt','responseCount','liveAggregate'
+        ]) &&
         request.resource.data.configRevision == resource.data.configRevision + 1 &&
         request.resource.data.updatedAt == request.time &&
-        (!('questionCount' in request.resource.data.diff(resource.data).affectedKeys()) ||
-          (request.resource.data.questionCount is int && request.resource.data.questionCount >= 0)) &&
-        (!('activeQuestionId' in request.resource.data.diff(resource.data).affectedKeys()) ||
-          request.resource.data.activeQuestionId == null) &&
-        (!('activeQuestionStartedAt' in request.resource.data.diff(resource.data).affectedKeys()) ||
-          request.resource.data.activeQuestionStartedAt == null) &&
-        (!('responseCount' in request.resource.data.diff(resource.data).affectedKeys()) ||
-          request.resource.data.responseCount == 0) &&
-        (!('liveAggregate' in request.resource.data.diff(resource.data).affectedKeys()) ||
-          request.resource.data.liveAggregate == null) &&
-        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.revision == request.resource.data.configRevision &&
-        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.parentConfigId == resource.data.currentConfigId &&
-        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.operationType == 'apply_config' &&
-        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingRevision == request.resource.data.configRevision &&
-        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingConfigId == request.resource.data.currentConfigId &&
-        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.actorUid == request.auth.uid;
+        request.resource.data.activeQuestionId == null &&
+        request.resource.data.activeQuestionStartedAt == null &&
+        request.resource.data.responseCount == 0 &&
+        request.resource.data.liveAggregate == null &&
+        request.resource.data.questionCount is int &&
+        sessionsApplyTargetOk(sessionId, request.resource.data.currentConfigId, request.resource.data.configRevision, resource.data.currentConfigId, request.resource.data.questionCount) &&
+        sessionsApplyHistoryOk(sessionId, request.resource.data.lastOperationId, request.resource.data.configRevision, request.resource.data.currentConfigId, request.auth.uid);
 
       // GATE 1B.2B (fix, post-review): contract non-config lifecycle/runtime updates. An
       // activated session must remain fully operable — open/close/reopen, active-question
@@ -400,14 +442,29 @@ service cloud.firestore {
           request.resource.data.active == true &&
           // GATE 1B.3-C1: extended to admit the frozen revision >=1 Interaction manifest shape
           // (roundId/allowMultipleResponses/anonymous/showResponderCount/questions) alongside
-          // the unchanged revision-0 activation_baseline shape. hasOnly() is permissive-by-
-          // omission — a revision-0 doc simply never carries the new keys, and is validated
-          // exactly as before; nothing here requires their presence.
+          // the unchanged revision-0 activation_baseline shape. hasOnly() only bounds what MAY be
+          // present — see the GATE 1B.3-C1R check immediately below for what MUST be present.
           request.resource.data.keys().hasOnly([
             'revision','parentConfigId','kind','source','createdAt','createdBy',
             'activatedFromLegacy','active','title','description',
             'roundId','allowMultipleResponses','anonymous','showResponderCount','questions'
           ]) &&
+          // GATE 1B.3-C1R: a document claiming kind=='interaction' — i.e. any REAL revision >=1
+          // for the Interaction (sessions) family, produced by activateContract()'s 'legacy
+          // v-snapshot -> activation_baseline' path never applies here — must carry the COMPLETE
+          // frozen manifest shape. This is what closes the old writer's partial title/description-
+          // only apply_config path: contract-writer.mjs's applyConfigRevision() sets kind to
+          // cfg.readerKind ('interaction' for this family) unconditionally, so its old, unmodified
+          // partial shape now fails this hasAll() check and is correctly denied — not because the
+          // writer changed, but because a real Interaction revision now requires more than it
+          // knows how to produce. Revision 0 (kind=='activation_baseline') is completely
+          // unaffected by this check and remains exactly as it always was.
+          (request.resource.data.kind != 'interaction' || (
+            request.resource.data.keys().hasAll([
+              'roundId','allowMultipleResponses','anonymous','showResponderCount','questions'
+            ]) &&
+            request.resource.data.roundId == configId
+          )) &&
           // GATE 1B.3-C1: bound the embedded questions[] array's overall size, when present — a
           // pure in-memory check over data already part of this write (no additional document
           // reads). Firestore Rules' CEL dialect does not support a list-comprehension macro

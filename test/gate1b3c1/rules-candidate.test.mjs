@@ -715,7 +715,185 @@ test("no PII field name appears in the snapshot allowlist (structural check of t
 });
 
 // =====================================================================================
-// 9. ACCEPTED RESIDUAL-RISK CONTRACT — documented, not a test failure
+// 10. FIRST-TRANSITION FULL SCALE PROOF (GATE 1B.3-C1X.1)
+// =====================================================================================
+// GATE 1B.3-C1X's own scale matrix (its report Section G) tested "session root update +
+// configVersions create + editHistory create + N Contract question creates" — it omitted the
+// legacyTransitionSnapshot/snapshot create from the batch entirely, so the true maximum
+// first-transition write shape (revision 0 -> revision 1, which uniquely also creates the
+// snapshot) was never actually scale-tested. The real maximum is 1 root update + 1
+// configVersion create + 1 editHistory create + 1 legacyTransitionSnapshot create + N Contract
+// question creates — 104 writes at N=100, all in ONE atomic batch. This section closes that
+// gap using the exact final GATE 1B.3-C1X candidate Rules (unchanged by this gate — see the
+// report below), emulator only.
+
+function buildFirstTransitionBatch(a, { sessionId = "s1", configId = "cfgRev1", parentConfigId = "cfgRev0", operationId = "op-1", n, includeSnapshot = true, snapshotOverrides = {} } = {}) {
+  const entries = Array.from({ length: n }, (_, i) => manifestEntry({ configId, order: i }));
+  const legacyQ = { questionId: "legacyQ1", roundId: parentConfigId, order: 0, type: "single", question: "Câu cũ?", description: "", required: true, chartType: "bar", timeLimit: 0, allowChangeAnswer: false, scaleMin: null, scaleMax: null, options: [] };
+  const batch = writeBatch(a);
+  batch.set(doc(a, "sessions", sessionId, "configVersions", configId), {
+    revision: 1, parentConfigId, roundId: configId, kind: "interaction", source: "apply_config",
+    createdAt: serverTimestamp(), createdBy: "teacher-a", active: true,
+    title: "Tiêu đề v1", description: "Mô tả v1", allowMultipleResponses: false, anonymous: true,
+    showResponderCount: true, questions: entries
+  });
+  batch.set(doc(a, "sessions", sessionId, "editHistory", operationId), {
+    operationId, actorUid: "teacher-a", operationType: "apply_config", baseRevision: 0,
+    resultingRevision: 1, previousConfigId: parentConfigId, resultingConfigId: configId,
+    changedFields: ["questions"], createdAt: serverTimestamp(), lifecycleBefore: "closed", lifecycleAfter: "closed"
+  });
+  if (includeSnapshot) {
+    batch.set(doc(a, "sessions", sessionId, "legacyTransitionSnapshot", "snapshot"), {
+      kind: "legacy_transition_snapshot", basis: "editor_confirmed", appliedAt: serverTimestamp(),
+      capturedDuringOperationId: operationId, parentConfigId, legacyQuestions: [legacyQ],
+      ...snapshotOverrides
+    });
+  }
+  batch.update(doc(a, "sessions", sessionId), {
+    configRevision: 1, currentConfigId: configId, lastOperationId: operationId, updatedAt: serverTimestamp(),
+    questionCount: n, activeQuestionId: null, activeQuestionStartedAt: null, responseCount: 0, liveAggregate: null
+  });
+  for (const entry of entries) {
+    batch.set(doc(a, "questions", entry.questionId), operationalDocFromEntry({ sessionId, ownerId: "teacher-a", configId, revision: 1, entry }));
+  }
+  return { batch, entries };
+}
+
+for (const n of [1, 10, 50, 100]) {
+  test(`GATE 1B.3-C1X.1 — first transition at N=${n}: full atomic batch (root + configVersion + editHistory + legacyTransitionSnapshot + ${n} Contract question create${n === 1 ? "" : "s"}) succeeds`, async () => {
+    const { parentConfigId } = await setupFirstTransitionFixture();
+    const a = db(teacherCtx("teacher-a"));
+    const { batch, entries } = buildFirstTransitionBatch(a, { parentConfigId, n });
+    await assertSucceeds(batch.commit());
+    const root = (await getDoc(doc(a, "sessions", "s1"))).data();
+    assert.equal(root.configRevision, 1);
+    assert.equal(root.currentConfigId, "cfgRev1");
+    assert.equal(root.questionCount, n);
+    assert.equal(root.activeQuestionId, null);
+    assert.equal(root.responseCount, 0);
+    const snap = (await getDoc(doc(a, "sessions", "s1", "legacyTransitionSnapshot", "snapshot"))).data();
+    assert.equal(snap.kind, "legacy_transition_snapshot");
+    assert.equal(snap.basis, "editor_confirmed");
+    assert.equal(snap.parentConfigId, parentConfigId);
+    const firstQ = (await getDoc(doc(a, "questions", entries[0].questionId))).data();
+    assert.equal(firstQ.order, 0);
+    const lastQ = (await getDoc(doc(a, "questions", entries[n - 1].questionId))).data();
+    assert.equal(lastQ.order, n - 1);
+  });
+}
+
+test("GATE 1B.3-C1X.1 — steady state: revision 1 -> revision 2 at N=100 does NOT create another snapshot, and passes with root + configVersion + editHistory + 100 Contract question creates", async () => {
+  await seedUsers();
+  const { configId: cfg1 } = await seedRevision1Session("s1");
+  await seedWithRulesDisabled(async (d) => {
+    await setDoc(doc(d, "sessions", "s1", "legacyTransitionSnapshot", "snapshot"), {
+      kind: "legacy_transition_snapshot", basis: "editor_confirmed", appliedAt: new Date(),
+      capturedDuringOperationId: "op-rev1", parentConfigId: "cfgRev0", legacyQuestions: []
+    });
+  });
+  const a = db(teacherCtx("teacher-a"));
+  const cfg2 = "cfgRev2";
+  const entries2 = Array.from({ length: 100 }, (_, i) => manifestEntry({ configId: cfg2, order: i }));
+  const batch = writeBatch(a);
+  batch.set(doc(a, "sessions", "s1", "configVersions", cfg2), {
+    revision: 2, parentConfigId: cfg1, roundId: cfg2, kind: "interaction", source: "apply_config",
+    createdAt: serverTimestamp(), createdBy: "teacher-a", active: true,
+    title: "Tiêu đề v2", description: "Mô tả v2", allowMultipleResponses: false, anonymous: true,
+    showResponderCount: true, questions: entries2
+  });
+  batch.set(doc(a, "sessions", "s1", "editHistory", "op-2"), {
+    operationId: "op-2", actorUid: "teacher-a", operationType: "apply_config", baseRevision: 1,
+    resultingRevision: 2, previousConfigId: cfg1, resultingConfigId: cfg2, changedFields: ["questions"],
+    createdAt: serverTimestamp(), lifecycleBefore: "closed", lifecycleAfter: "closed"
+  });
+  batch.update(doc(a, "sessions", "s1"), {
+    configRevision: 2, currentConfigId: cfg2, lastOperationId: "op-2", updatedAt: serverTimestamp(),
+    questionCount: 100, activeQuestionId: null, activeQuestionStartedAt: null, responseCount: 0, liveAggregate: null
+  });
+  for (const entry of entries2) {
+    batch.set(doc(a, "questions", entry.questionId), operationalDocFromEntry({ sessionId: "s1", ownerId: "teacher-a", configId: cfg2, revision: 2, entry }));
+  }
+  await assertSucceeds(batch.commit());
+  const root = (await getDoc(doc(a, "sessions", "s1"))).data();
+  assert.equal(root.configRevision, 2);
+  assert.equal(root.questionCount, 100);
+  // the ORIGINAL first-transition snapshot must be untouched — still points at op-rev1, not op-2
+  const snap = (await getDoc(doc(a, "sessions", "s1", "legacyTransitionSnapshot", "snapshot"))).data();
+  assert.equal(snap.capturedDuringOperationId, "op-rev1");
+});
+
+test("GATE 1B.3-C1X.1 — steady state: attempting a second snapshot create bundled into an otherwise-valid revision 1 -> revision 2 (N=100) batch DENIES the whole batch atomically", async () => {
+  await seedUsers();
+  const { configId: cfg1 } = await seedRevision1Session("s1");
+  await seedWithRulesDisabled(async (d) => {
+    await setDoc(doc(d, "sessions", "s1", "legacyTransitionSnapshot", "snapshot"), {
+      kind: "legacy_transition_snapshot", basis: "editor_confirmed", appliedAt: new Date(),
+      capturedDuringOperationId: "op-rev1", parentConfigId: "cfgRev0", legacyQuestions: []
+    });
+  });
+  const a = db(teacherCtx("teacher-a"));
+  const cfg2 = "cfgRev2";
+  const entries2 = Array.from({ length: 100 }, (_, i) => manifestEntry({ configId: cfg2, order: i }));
+  const batch = writeBatch(a);
+  batch.set(doc(a, "sessions", "s1", "configVersions", cfg2), {
+    revision: 2, parentConfigId: cfg1, roundId: cfg2, kind: "interaction", source: "apply_config",
+    createdAt: serverTimestamp(), createdBy: "teacher-a", active: true,
+    title: "Tiêu đề v2", description: "Mô tả v2", allowMultipleResponses: false, anonymous: true,
+    showResponderCount: true, questions: entries2
+  });
+  batch.set(doc(a, "sessions", "s1", "editHistory", "op-2"), {
+    operationId: "op-2", actorUid: "teacher-a", operationType: "apply_config", baseRevision: 1,
+    resultingRevision: 2, previousConfigId: cfg1, resultingConfigId: cfg2, changedFields: ["questions"],
+    createdAt: serverTimestamp(), lifecycleBefore: "closed", lifecycleAfter: "closed"
+  });
+  // Attempted second snapshot — the literal path already has a document, so this evaluates as an
+  // update (no update rule exists on this path -> default-deny), which must fail the whole batch.
+  batch.set(doc(a, "sessions", "s1", "legacyTransitionSnapshot", "snapshot"), {
+    kind: "legacy_transition_snapshot", basis: "editor_confirmed", appliedAt: serverTimestamp(),
+    capturedDuringOperationId: "op-2", parentConfigId: cfg1, legacyQuestions: []
+  });
+  batch.update(doc(a, "sessions", "s1"), {
+    configRevision: 2, currentConfigId: cfg2, lastOperationId: "op-2", updatedAt: serverTimestamp(),
+    questionCount: 100, activeQuestionId: null, activeQuestionStartedAt: null, responseCount: 0, liveAggregate: null
+  });
+  for (const entry of entries2) {
+    batch.set(doc(a, "questions", entry.questionId), operationalDocFromEntry({ sessionId: "s1", ownerId: "teacher-a", configId: cfg2, revision: 2, entry }));
+  }
+  await assertFails(batch.commit());
+  // Atomicity: root must remain at revision 1, none of the revision-2 siblings exist.
+  await seedWithRulesDisabled(async (d) => {
+    const root = (await getDoc(doc(d, "sessions", "s1"))).data();
+    assert.equal(root.configRevision, 1);
+    assert.equal((await getDoc(doc(d, "sessions", "s1", "configVersions", cfg2))).exists(), false);
+    assert.equal((await getDoc(doc(d, "sessions", "s1", "editHistory", "op-2"))).exists(), false);
+    assert.equal((await getDoc(doc(d, "questions", entries2[0].questionId))).exists(), false);
+  });
+});
+
+for (const [label, overrides] of [
+  ["wrong basis", { basis: "commit_time_verified" }],
+  ["wrong parentConfigId", { parentConfigId: "not-the-real-parent" }]
+]) {
+  test(`GATE 1B.3-C1X.1 — snapshot failure atomicity at N=100: an otherwise-valid first-transition batch with an invalid snapshot (${label}) fails atomically, leaving root at revision 0 and creating none of the sibling/question documents`, async () => {
+    const { parentConfigId } = await setupFirstTransitionFixture();
+    const a = db(teacherCtx("teacher-a"));
+    const { batch, entries } = buildFirstTransitionBatch(a, { parentConfigId, n: 100, snapshotOverrides: overrides });
+    await assertFails(batch.commit());
+    await seedWithRulesDisabled(async (d) => {
+      const root = (await getDoc(doc(d, "sessions", "s1"))).data();
+      assert.equal(root.configRevision, 0);
+      assert.equal(root.currentConfigId, parentConfigId);
+      assert.equal((await getDoc(doc(d, "sessions", "s1", "configVersions", "cfgRev1"))).exists(), false);
+      assert.equal((await getDoc(doc(d, "sessions", "s1", "editHistory", "op-1"))).exists(), false);
+      assert.equal((await getDoc(doc(d, "sessions", "s1", "legacyTransitionSnapshot", "snapshot"))).exists(), false);
+      assert.equal((await getDoc(doc(d, "questions", entries[0].questionId))).exists(), false);
+      assert.equal((await getDoc(doc(d, "questions", entries[99].questionId))).exists(), false);
+    });
+  });
+}
+
+// =====================================================================================
+// 11. ACCEPTED RESIDUAL-RISK CONTRACT — documented, not a test failure
 // =====================================================================================
 
 test("ACCEPTED APPLICATION-INTEGRITY RESIDUAL — NOT A PARTICIPANT AUTHORIZATION BYPASS: a manifest may theoretically declare an entry whose operational document is absent, and Rules cannot prove reverse completeness at this scale — but a participant can never submit against that missing question", async () => {

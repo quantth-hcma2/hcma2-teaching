@@ -6,10 +6,12 @@ ui-debug.log
 # Generated at test time as a verified byte-for-byte copy of ../../firestore.rules.production-candidate
 # (firebase emulators:start refuses a rules path outside its project directory) — see
 # test/gate1b1/run-emulator-tests.mjs, test/gate1b2a/run-emulator-tests.mjs,
-# test/gate1b2b/run-emulator-tests.mjs, test/gate1b2c/run-emulator-tests.mjs and
-# test/gate1b3c1/run-emulator-tests.mjs. Never hand-edit; never the source of truth.
+# test/gate1b2b/run-emulator-tests.mjs, test/gate1b2c/run-emulator-tests.mjs,
+# test/gate1b3c1/run-emulator-tests.mjs and test/gate1b3c2/run-emulator-tests.mjs. Never
+# hand-edit; never the source of truth.
 test/gate1b1/firestore.rules
 test/gate1b2a/firestore.rules
 test/gate1b2b/firestore.rules
 test/gate1b2c/firestore.rules
 test/gate1b3c1/firestore.rules
+test/gate1b3c2/firestore.rules

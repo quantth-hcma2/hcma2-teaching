@@ -63,7 +63,7 @@ export function effectiveLifecycleState(sessionData) {
   return sessionData.status || "unknown";
 }
 
-function utf8ByteLength(value) {
+export function utf8ByteLength(value) {
   return new TextEncoder().encode(JSON.stringify(value)).length;
 }
 
@@ -204,6 +204,47 @@ export async function resolveSessionSemantics(dbFacade, sessionPath, sessionData
     throw new ReaderError("CONTRACT_RESOLUTION_INCONSISTENT", "Không thể xác định cấu hình hiệu lực cho phiên đã kích hoạt hợp đồng.");
   }
   return { source: "contract", configId: effective.configId, title: effective.config.title ?? "", description: effective.config.description ?? "" };
+}
+
+/**
+ * GATE 1B.3-C2: resolves the full effective Interaction (sessions) semantic config a real
+ * editor/player screen needs — behavioral settings, ordered questions, embedded options,
+ * revision, configId, roundId — not just title/description (see resolveSessionSemantics above
+ * for that narrower, pre-existing use). Honest about revision 0: the activation_baseline
+ * manifest never snapshotted any questions (contract-writer.mjs's activateContract() only ever
+ * captures title/description), so `questions` is returned as null there — NEVER fabricated —
+ * and the caller is expected to fall back to reading the live, still-mutable legacy `questions`
+ * collection directly (exactly as it would for a session with no contract at all), per the
+ * frozen Gate 1B.3-B3.1 "pre-rev1 legacy compatibility" contract. Only a real revision >=1
+ * manifest (kind=="interaction") ever returns an embedded questions[] array, and that array is
+ * the immutable, versioned one — never mutable legacy data relabeled as versioned history.
+ */
+export async function resolveInteractionConfig(dbFacade, sessionPath, sessionData) {
+  if (!isContractSession(sessionData)) {
+    return {
+      source: "legacy", configId: "legacy-v0", revision: null, roundId: null,
+      title: sessionData.title ?? "", description: sessionData.description ?? "", questions: null
+    };
+  }
+  const effective = await resolveEffectiveConfig(dbFacade, sessionPath, sessionData, "interaction");
+  if (effective.legacy) {
+    // isContractSession() was true above, so this must not happen — fail closed rather than
+    // silently treat an inconsistent contract session as plain legacy.
+    throw new ReaderError("CONTRACT_RESOLUTION_INCONSISTENT", "Không thể xác định cấu hình hiệu lực cho phiên đã kích hoạt hợp đồng.");
+  }
+  const cfg = effective.config;
+  if (cfg.kind === "activation_baseline") {
+    return {
+      source: "contract-baseline", configId: effective.configId, revision: 0, roundId: null,
+      title: cfg.title ?? "", description: cfg.description ?? "", questions: null
+    };
+  }
+  return {
+    source: "contract-revision", configId: effective.configId, revision: cfg.revision, roundId: cfg.roundId,
+    title: cfg.title ?? "", description: cfg.description ?? "",
+    allowMultipleResponses: !!cfg.allowMultipleResponses, anonymous: !!cfg.anonymous, showResponderCount: !!cfg.showResponderCount,
+    questions: Array.isArray(cfg.questions) ? cfg.questions : []
+  };
 }
 
 /**

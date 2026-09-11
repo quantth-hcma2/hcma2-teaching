@@ -2,7 +2,7 @@
   "name": "hcma2-teaching",
   "private": true,
   "type": "module",
-  "description": "Static GitHub Pages frontend. This package.json exists only to run the Gate 1B.1 / 1B.2A / 1B.2B / 1B.2C / 1B.3-C1 test suites (test/gate1b1, test/gate1b2a, test/gate1b2b, test/gate1b2c, test/gate1b3c1) — it is not a build step for index.html, which stays a single deployable static file.",
+  "description": "Static GitHub Pages frontend. This package.json exists only to run the Gate 1B.1 / 1B.2A / 1B.2B / 1B.2C / 1B.3-C1 / 1B.3-C2 test suites (test/gate1b1, test/gate1b2a, test/gate1b2b, test/gate1b2c, test/gate1b3c1, test/gate1b3c2) — it is not a build step for index.html, which stays a single deployable static file.",
   "scripts": {
     "test:pure": "node --test test/gate1b1/golden-legacy.test.mjs test/gate1b1/versioned-fixtures.test.mjs test/gate1b1/pii-canary.test.mjs",
     "test:emulator": "node test/gate1b1/run-emulator-tests.mjs",
@@ -11,7 +11,8 @@
     "test:gate1b2b": "node test/gate1b2b/run-emulator-tests.mjs",
     "test:gate1b2c:pure": "node --test test/gate1b2c/semantics-resolution.test.mjs test/gate1b2c/view-model.test.mjs",
     "test:gate1b2c": "npm run test:gate1b2c:pure && node test/gate1b2c/run-emulator-tests.mjs",
-    "test:gate1b3c1": "node test/gate1b3c1/run-emulator-tests.mjs"
+    "test:gate1b3c1": "node test/gate1b3c1/run-emulator-tests.mjs",
+    "test:gate1b3c2": "node test/gate1b3c2/run-emulator-tests.mjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^3.0.4"

@@ -77,7 +77,14 @@ function isNonEmptyString(v, maxLen) {
  */
 export function validateManifestShape(manifest, kind) {
   if (!manifest || typeof manifest !== "object") return { ok: false, reason: "MANIFEST_MISSING" };
-  if (manifest.kind && kind && manifest.kind !== kind) return { ok: false, reason: "KIND_MISMATCH", detail: { expected: kind, actual: manifest.kind } };
+  // GATE 1B.2B: an activation-baseline manifest carries kind:"activation_baseline" (locked by
+  // the Gate 1B.2B contract-writer design, see contract-writer.mjs) — this is orthogonal to,
+  // not a family-shape mismatch against, the interaction/group/knowledge `kind` parameter this
+  // function otherwise checks. Only a manifest that claims to BE one of the three known family
+  // shapes but doesn't match the requested one is a real KIND_MISMATCH.
+  if (manifest.kind && kind && manifest.kind !== kind && manifest.kind !== "activation_baseline") {
+    return { ok: false, reason: "KIND_MISMATCH", detail: { expected: kind, actual: manifest.kind } };
+  }
   const size = utf8ByteLength(manifest);
   if (size > LIMITS.manifestBytes) return { ok: false, reason: "MANIFEST_TOO_LARGE", detail: { bytes: size, limit: LIMITS.manifestBytes } };
 

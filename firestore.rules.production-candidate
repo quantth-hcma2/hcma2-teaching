@@ -261,7 +261,14 @@ service cloud.firestore {
       // denied. This is the exact set of fields any current legitimate write path in index.html
       // (Gate 1A edit, open/close/reopen/archive, switchQuestion, edit-time, toggle-results,
       // live-aggregate recompute, trash/restore) ever changes on this document today.
+      // GATE 1B.2B: legacy branch now additionally requires the session to NOT already be
+      // contract-activated (!('configRevision' in resource.data)). Once activated, this branch
+      // can never match again — a stale/old client attempting its old blind legacy-shaped
+      // update against an activated session has no other branch to fall into either (see the
+      // two branches below), so it fails closed server-side, not just via client-side
+      // assertLegacyWritable(). Before activation this is byte-identical to Gate 1B.2A.
       allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        !('configRevision' in resource.data) &&
         request.resource.data.ownerId == resource.data.ownerId &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'title','description','status','startedAt','closedAt',
@@ -269,7 +276,98 @@ service cloud.firestore {
           'responseCount','liveAggregate','deletedAt','deletedBy','updatedAt'
         ]);
 
+      // GATE 1B.2B: contract activation (legacy -> configRevision 0). One-way: the
+      // !('configRevision' in resource.data) precondition means this branch can never match a
+      // second time on the same document. Only from CLOSED, never-trashed state. Never touches
+      // status. Requires the sibling configVersions (the activation-baseline manifest) and
+      // editHistory (the activate_contract audit entry) documents to exist, with matching
+      // revision/actor, in the SAME commit (getAfter()) — a client cannot set editContractVersion/
+      // configRevision/currentConfigId/lastOperationId/contractActivatedAt without also
+      // atomically producing both sibling documents correctly.
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        !('configRevision' in resource.data) &&
+        resource.data.status == 'closed' &&
+        (!('deletedAt' in resource.data) || resource.data.deletedAt == null) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'editContractVersion','configRevision','currentConfigId','lastOperationId',
+          'contractActivatedAt','updatedAt'
+        ]) &&
+        request.resource.data.editContractVersion == 1 &&
+        request.resource.data.configRevision == 0 &&
+        request.resource.data.contractActivatedAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.revision == 0 &&
+        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.parentConfigId == null &&
+        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.kind == 'activation_baseline' &&
+        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.source == 'legacy_snapshot' &&
+        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.activatedFromLegacy == true &&
+        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.operationType == 'activate_contract' &&
+        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingRevision == 0 &&
+        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingConfigId == request.resource.data.currentConfigId &&
+        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.actorUid == request.auth.uid;
+
+      // GATE 1B.2B: generic config-revision update (apply_config foundation). CLOSED-FIRST,
+      // absolute — never permitted while status == 'open' (Gate 1A-style edit_info is the
+      // separate legacy branch above and is not gated by this). Exactly +1, never a jump.
+      // Same sibling-document atomicity proof as activation, anchored via lastOperationId.
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        ('configRevision' in resource.data) &&
+        resource.data.status == 'closed' &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'configRevision','currentConfigId','lastOperationId','updatedAt'
+        ]) &&
+        request.resource.data.configRevision == resource.data.configRevision + 1 &&
+        request.resource.data.updatedAt == request.time &&
+        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.revision == request.resource.data.configRevision &&
+        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.parentConfigId == resource.data.currentConfigId &&
+        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.operationType == 'apply_config' &&
+        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingRevision == request.resource.data.configRevision &&
+        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingConfigId == request.resource.data.currentConfigId &&
+        getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.actorUid == request.auth.uid;
+
       allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+
+      // ---------------- GATE 1B.2B: CONTRACT VERSIONS (immutable) ----------------
+      match /configVersions/{configId} {
+        allow get, list: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId);
+        // The getAfter() check on the parent session closes the loop the other direction from
+        // the root update rules above: a version doc can only be created if, in the SAME
+        // commit, the session root ends up pointing at it via currentConfigId — a client cannot
+        // create an orphan/unlinked configVersions doc standalone, even if every field looks
+        // individually well-formed.
+        allow create: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId) &&
+          request.resource.data.createdBy == request.auth.uid &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.revision is int && request.resource.data.revision >= 0 &&
+          request.resource.data.active == true &&
+          request.resource.data.keys().hasOnly([
+            'revision','parentConfigId','kind','source','createdAt','createdBy',
+            'activatedFromLegacy','active','title','description'
+          ]) &&
+          getAfter(/databases/$(database)/documents/sessions/$(sessionId)).data.currentConfigId == configId;
+        // No update/delete rule at all -> immutable by omission (default-deny).
+      }
+
+      // ---------------- GATE 1B.2B: EDIT HISTORY (append-only) ----------------
+      match /editHistory/{operationId} {
+        allow get, list: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId);
+        // Same closing-the-loop reasoning as configVersions above, anchored via lastOperationId.
+        allow create: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId) &&
+          getAfter(/databases/$(database)/documents/sessions/$(sessionId)).data.lastOperationId == operationId &&
+          request.resource.data.operationId == operationId &&
+          request.resource.data.actorUid == request.auth.uid &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.keys().hasOnly([
+            'operationId','actorUid','operationType','baseRevision','resultingRevision',
+            'previousConfigId','resultingConfigId','changedFields','createdAt',
+            'lifecycleBefore','lifecycleAfter'
+          ]);
+        // No update/delete rule at all -> append-only by omission (default-deny).
+      }
 
       // ---------------- RESPONSES (subcollection) ----------------
       match /responses/{responseId} {
@@ -481,17 +579,108 @@ service cloud.firestore {
       // any brand-new arbitrary field, or any change to an existing-but-unlisted field — is
       // denied. This is the exact set of fields any current legitimate write path in index.html
       // (Gate 1A edit, open, close, restart/pause timer) ever changes on this document today.
+      // GATE 1B.2B: legacy branch now additionally requires the activity to NOT already be
+      // contract-activated — see the identical reasoning on the sessions family above.
       allow update: if (
           isAdmin() ||
           (isActiveTeacher() && resource.data.ownerId == request.auth.uid)
         ) &&
+        !('configRevision' in resource.data) &&
         request.resource.data.ownerId == resource.data.ownerId &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'title','instructions','status','startedAt','pausedRemainingSec','updatedAt'
         ]);
 
+      // GATE 1B.2B: contract activation — see sessions family above for full reasoning.
+      // groupActivities has no trash stage, so lifecycle-safety here is CLOSED-only, no
+      // deletedAt check needed (the field doesn't exist for this family).
+      allow update: if (
+          isAdmin() ||
+          (isActiveTeacher() && resource.data.ownerId == request.auth.uid)
+        ) &&
+        !('configRevision' in resource.data) &&
+        resource.data.status == 'closed' &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'editContractVersion','configRevision','currentConfigId','lastOperationId',
+          'contractActivatedAt','updatedAt'
+        ]) &&
+        request.resource.data.editContractVersion == 1 &&
+        request.resource.data.configRevision == 0 &&
+        request.resource.data.contractActivatedAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/configVersions/$(request.resource.data.currentConfigId)).data.revision == 0 &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/configVersions/$(request.resource.data.currentConfigId)).data.parentConfigId == null &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/configVersions/$(request.resource.data.currentConfigId)).data.kind == 'activation_baseline' &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/configVersions/$(request.resource.data.currentConfigId)).data.source == 'legacy_snapshot' &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/configVersions/$(request.resource.data.currentConfigId)).data.activatedFromLegacy == true &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.operationType == 'activate_contract' &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingRevision == 0 &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingConfigId == request.resource.data.currentConfigId &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.actorUid == request.auth.uid;
+
+      // GATE 1B.2B: generic config-revision update (apply_config foundation). CLOSED-FIRST.
+      allow update: if (
+          isAdmin() ||
+          (isActiveTeacher() && resource.data.ownerId == request.auth.uid)
+        ) &&
+        ('configRevision' in resource.data) &&
+        resource.data.status == 'closed' &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'configRevision','currentConfigId','lastOperationId','updatedAt'
+        ]) &&
+        request.resource.data.configRevision == resource.data.configRevision + 1 &&
+        request.resource.data.updatedAt == request.time &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/configVersions/$(request.resource.data.currentConfigId)).data.revision == request.resource.data.configRevision &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/configVersions/$(request.resource.data.currentConfigId)).data.parentConfigId == resource.data.currentConfigId &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.operationType == 'apply_config' &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingRevision == request.resource.data.configRevision &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingConfigId == request.resource.data.currentConfigId &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.actorUid == request.auth.uid;
+
       allow delete: if isAdmin() ||
         (isActiveTeacher() && resource.data.ownerId == request.auth.uid);
+
+      // ---------------- GATE 1B.2B: CONTRACT VERSIONS (immutable) ----------------
+      match /configVersions/{configId} {
+        allow get, list: if isAdmin() ||
+          (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+        allow create: if (
+            isAdmin() ||
+            (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid)
+          ) &&
+          request.resource.data.createdBy == request.auth.uid &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.revision is int && request.resource.data.revision >= 0 &&
+          request.resource.data.active == true &&
+          request.resource.data.keys().hasOnly([
+            'revision','parentConfigId','kind','source','createdAt','createdBy',
+            'activatedFromLegacy','active','title','instructions'
+          ]) &&
+          getAfter(/databases/$(database)/documents/groupActivities/$(activityId)).data.currentConfigId == configId;
+      }
+
+      // ---------------- GATE 1B.2B: EDIT HISTORY (append-only) ----------------
+      match /editHistory/{operationId} {
+        allow get, list: if isAdmin() ||
+          (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+        allow create: if (
+            isAdmin() ||
+            (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid)
+          ) &&
+          getAfter(/databases/$(database)/documents/groupActivities/$(activityId)).data.lastOperationId == operationId &&
+          request.resource.data.operationId == operationId &&
+          request.resource.data.actorUid == request.auth.uid &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.keys().hasOnly([
+            'operationId','actorUid','operationType','baseRevision','resultingRevision',
+            'previousConfigId','resultingConfigId','changedFields','createdAt',
+            'lifecycleBefore','lifecycleAfter'
+          ]);
+      }
 
       match /topics/{groupId} {
         allow read: if isSignedIn();
@@ -698,7 +887,10 @@ service cloud.firestore {
       // này nếu đã có từ lúc tạo. Nhưng affectedKeys().hasOnly() (field ĐƯỢC PHÉP THAY ĐỔI
       // GIÁ TRỊ) KHÔNG thêm 3 field mới — cấu hình Participant Profile bất biến sau khi tạo
       // phiên, theo đúng yêu cầu Gate 3B (ưu tiên an toàn, chưa cần chỉnh sửa sau khi tạo).
+      // GATE 1B.2B: legacy branch now additionally requires the session to NOT already be
+      // contract-activated — see the identical reasoning on the sessions family above.
       allow update: if isOwnerActiveTeacher(resource.data.ownerId) &&
+        !('configRevision' in resource.data) &&
         request.resource.data.keys().hasOnly([
           'title', 'joinCode', 'ownerId', 'status', 'minimumPerParticipant',
           'targetSubmissions', 'createdAt', 'updatedAt',
@@ -738,7 +930,10 @@ service cloud.firestore {
       // Admin có thể khôi phục cho teacher, đưa phiên vào Admin Trash hoặc restore.
       // Các khóa định danh và định mức tối thiểu vẫn bất biến.
       // GATE 3B: cùng nguyên tắc bất biến như nhánh teacher ở trên.
+      // GATE 1B.2B: legacy branch now additionally requires the session to NOT already be
+      // contract-activated — see the identical reasoning on the sessions family above.
       allow update: if isAdmin() &&
+        !('configRevision' in resource.data) &&
         request.resource.data.keys().hasOnly([
           'title', 'joinCode', 'ownerId', 'status', 'minimumPerParticipant',
           'targetSubmissions', 'createdAt', 'updatedAt',
@@ -765,8 +960,91 @@ service cloud.firestore {
           request.resource.data.adminDeletedBy == null ||
           request.resource.data.adminDeletedBy == request.auth.uid);
 
+      // GATE 1B.2B: contract activation — see sessions family above for full reasoning.
+      // knowledgeSessions has no 'draft' state (created directly as 'open'); the safe state to
+      // activate from is CLOSED, not-trashed (teacherDeletedAt/adminDeletedAt both absent/null).
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        !('configRevision' in resource.data) &&
+        resource.data.status == 'closed' &&
+        (!('teacherDeletedAt' in resource.data) || resource.data.teacherDeletedAt == null) &&
+        (!('adminDeletedAt' in resource.data) || resource.data.adminDeletedAt == null) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'editContractVersion','configRevision','currentConfigId','lastOperationId',
+          'contractActivatedAt','updatedAt'
+        ]) &&
+        request.resource.data.editContractVersion == 1 &&
+        request.resource.data.configRevision == 0 &&
+        request.resource.data.contractActivatedAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.revision == 0 &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.parentConfigId == null &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.kind == 'activation_baseline' &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.source == 'legacy_snapshot' &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.activatedFromLegacy == true &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.operationType == 'activate_contract' &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingRevision == 0 &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingConfigId == request.resource.data.currentConfigId &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.actorUid == request.auth.uid;
+
+      // GATE 1B.2B: generic config-revision update (apply_config foundation). CLOSED-FIRST.
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        ('configRevision' in resource.data) &&
+        resource.data.status == 'closed' &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'configRevision','currentConfigId','lastOperationId','updatedAt'
+        ]) &&
+        request.resource.data.configRevision == resource.data.configRevision + 1 &&
+        request.resource.data.updatedAt == request.time &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.revision == request.resource.data.configRevision &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.parentConfigId == resource.data.currentConfigId &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.operationType == 'apply_config' &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingRevision == request.resource.data.configRevision &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingConfigId == request.resource.data.currentConfigId &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.actorUid == request.auth.uid;
+
       // Xóa vật lý chỉ qua Cloud Function admin-delete-session.
       allow delete: if false;
+
+      // ---------------- GATE 1B.2B: CONTRACT VERSIONS (immutable) ----------------
+      // Manifest payload here is schema/config only (title/targetSubmissions/minimumPerParticipant/
+      // classOptions/participantFields) — participantFields is the ON/REQUIRED policy schema, never
+      // participant PII values. No participant document is ever read to build this, and no PII
+      // field name is in the allowlist below.
+      match /configVersions/{configId} {
+        allow get, list: if isOwnerOrAdmin(get(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.ownerId);
+        allow create: if isOwnerOrAdmin(get(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.ownerId) &&
+          request.resource.data.createdBy == request.auth.uid &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.revision is int && request.resource.data.revision >= 0 &&
+          request.resource.data.active == true &&
+          request.resource.data.keys().hasOnly([
+            'revision','parentConfigId','kind','source','createdAt','createdBy',
+            'activatedFromLegacy','active','title','targetSubmissions','minimumPerParticipant',
+            'classOptions','participantFields'
+          ]) &&
+          !request.resource.data.keys().hasAny(['fullName','className','email','phone']) &&
+          getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.currentConfigId == configId;
+      }
+
+      // ---------------- GATE 1B.2B: EDIT HISTORY (append-only) ----------------
+      match /editHistory/{operationId} {
+        allow get, list: if isOwnerOrAdmin(get(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.ownerId);
+        allow create: if isOwnerOrAdmin(get(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.ownerId) &&
+          getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.lastOperationId == operationId &&
+          request.resource.data.operationId == operationId &&
+          request.resource.data.actorUid == request.auth.uid &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.keys().hasOnly([
+            'operationId','actorUid','operationType','baseRevision','resultingRevision',
+            'previousConfigId','resultingConfigId','changedFields','createdAt',
+            'lifecycleBefore','lifecycleAfter'
+          ]) &&
+          !request.resource.data.keys().hasAny(['fullName','className','email','phone']);
+      }
 
       match /submissions/{submissionId} {
         // Owner/Admin xem dashboard/export. Anonymous chỉ được đọc/list bản ghi của mình;

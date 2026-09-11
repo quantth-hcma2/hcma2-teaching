@@ -1,0 +1,9 @@
+node_modules/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+.firebase/
+# Generated at test time as a verified byte-for-byte copy of ../../firestore.rules.production-candidate
+# (firebase emulators:start refuses a rules path outside its project directory) — see
+# test/gate1b1/run-emulator-tests.mjs. Never hand-edit; never the source of truth.
+test/gate1b1/firestore.rules

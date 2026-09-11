@@ -480,6 +480,14 @@ import {
 import {
   getStorage, ref as storageRef, uploadBytes, getDownloadURL, deleteObject
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
+// Gate 1B.1 — reader-only. No document in this shape exists in production yet; see
+// docs/READER-CONTRACT.md. This import is additive: every legacy session (i.e. every real
+// session today) has no editContractVersion field, so isContractSession() is false for all of
+// them and none of the code below changes legacy behavior. The richer reader/UI layer
+// (session-reader.mjs, session-reader-ui.mjs) is implemented and tested (see test/gate1b1/)
+// but is not yet call-sited beyond this marker check — there is no real contract data for it
+// to read yet, and wiring it into the live render paths without that is Gate 1B.2 scope.
+import { isContractSession, assertLegacyWritable } from "./session-reader.mjs";
 
 /* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
 const firebaseConfig = {
@@ -730,6 +738,9 @@ function checkSessionInfoAccess(data){
     throw sessionInfoError("Bạn không có quyền sửa phiên này.");
   if(data.deletedAt || data.teacherDeletedAt || data.adminDeletedAt || data.adminDeleting)
     throw sessionInfoError("Phiên đang trong thùng rác hoặc đang xóa. Hãy khôi phục trước khi sửa.");
+  // Gate 1B.1: Gate 1A's editor only knows the legacy shape; refuse rather than blind-write
+  // onto a session that has moved to the versioned contract (see docs/READER-CONTRACT.md §6).
+  try{ assertLegacyWritable(data); }catch(e){ throw sessionInfoError(e.message); }
 }
 async function loadSessionInfo(kind,id){
   if(!SESSION_INFO_FIELDS[kind]) throw sessionInfoError("Loại phiên không hợp lệ.");
@@ -1546,6 +1557,8 @@ async function groupLive(c,id,isAdminView){
   const a={id,...snap.data()};
   const canManage=isAdminView || a.ownerId===STATE.user.uid;
   if(!canManage){c.innerHTML=`<div class="empty-state"><div class="ic">🔒</div>Bạn không có quyền mở hoạt động này.</div>`;return;}
+  // Gate 1B.1: fail closed on contract sessions — no versioned-group writer/renderer exists yet.
+  if(isContractSession(a)){c.innerHTML=`<div class="empty-state"><div class="ic">⚠️</div>Phiên này dùng cấu hình phiên bản mới; giao diện hiện tại chưa hỗ trợ.</div>`;return;}
   const join=groupJoinLink(a.joinCode);
   c.innerHTML=`<div class="group-head">
     <div><button class="btn btn-sm btn-ghost" id="gBack">← QUAY LẠI</button><h2 id="gLiveTitle" style="margin-bottom:4px">${esc(a.title||"Thảo luận nhóm")}</h2>
@@ -3223,6 +3236,8 @@ async function teacherLiveControl(c, sessionId){
   let session = sessionSnap.data();
   if(session.ownerId !== STATE.user.uid){ c.innerHTML = `<div class="empty-state"><div class="ic">⛔</div>Bạn không có quyền truy cập phiên này.</div>`; return; }
   if(session.deletedAt){ c.innerHTML = `<div class="empty-state"><div class="ic">🗑️</div>Phiên này đang ở trong Thùng rác. Hãy khôi phục phiên trước khi điều khiển.</div>`; return; }
+  // Gate 1B.1: fail closed on contract sessions — no versioned-interaction writer/renderer exists yet.
+  if(isContractSession(session)){ c.innerHTML = `<div class="empty-state"><div class="ic">⚠️</div>Phiên này dùng cấu hình phiên bản mới; giao diện hiện tại chưa hỗ trợ.</div>`; return; }
 
   let questions = [];
   try{
@@ -4450,6 +4465,11 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
   if(!ownerCheckSnap.exists()){ $("#knDash").innerHTML='<div class="card">Không tìm thấy phiên.</div>'; return; }
   if(!isAdminView && ownerCheckSnap.data().ownerId!==openerUid){
     $("#knDash").innerHTML='<div class="empty-state"><div class="ic">⛔</div>Bạn không có quyền truy cập phiên này.</div>';
+    return;
+  }
+  // Gate 1B.1: fail closed on contract sessions — no versioned-knowledge writer/renderer exists yet.
+  if(isContractSession(ownerCheckSnap.data())){
+    $("#knDash").innerHTML='<div class="empty-state"><div class="ic">⚠️</div>Phiên này dùng cấu hình phiên bản mới; giao diện hiện tại chưa hỗ trợ.</div>';
     return;
   }
   let recentUnsub=null;

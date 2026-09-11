@@ -487,7 +487,7 @@ import {
 // (session-reader.mjs, session-reader-ui.mjs) is implemented and tested (see test/gate1b1/)
 // but is not yet call-sited beyond this marker check — there is no real contract data for it
 // to read yet, and wiring it into the live render paths without that is Gate 1B.2 scope.
-import { isContractSession, assertLegacyWritable } from "./session-reader.mjs";
+import { isContractSession, assertLegacyWritable, resolveSessionSemantics, makeFirestoreDbFacade } from "./session-reader.mjs";
 
 /* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
 const firebaseConfig = {
@@ -3236,8 +3236,22 @@ async function teacherLiveControl(c, sessionId){
   let session = sessionSnap.data();
   if(session.ownerId !== STATE.user.uid){ c.innerHTML = `<div class="empty-state"><div class="ic">⛔</div>Bạn không có quyền truy cập phiên này.</div>`; return; }
   if(session.deletedAt){ c.innerHTML = `<div class="empty-state"><div class="ic">🗑️</div>Phiên này đang ở trong Thùng rác. Hãy khôi phục phiên trước khi điều khiển.</div>`; return; }
-  // Gate 1B.1: fail closed on contract sessions — no versioned-interaction writer/renderer exists yet.
-  if(isContractSession(session)){ c.innerHTML = `<div class="empty-state"><div class="ic">⚠️</div>Phiên này dùng cấu hình phiên bản mới; giao diện hiện tại chưa hỗ trợ.</div>`; return; }
+  // Gate 1B.2C: an activated contract session now renders the normal lifecycle/runtime screen
+  // (every control it wires below writes only the Class A lifecycle/runtime fields the deployed
+  // Rules already allow post-activation — see docs/GATE-1B2-AUDIT-PLAN.md). Semantic display
+  // values must come from the active versioned manifest, not the (frozen-at-activation) root
+  // title/description, so resolve those once up front and fail closed if that resolution itself
+  // fails — never silently fall back to the root fields for a contract session.
+  let displaySemantics = { title: session.title, description: session.description };
+  if(isContractSession(session)){
+    try{
+      const dbFacade = makeFirestoreDbFacade(db, { doc, getDoc, collection, getDocs, query, where });
+      displaySemantics = await resolveSessionSemantics(dbFacade, `sessions/${sessionId}`, session, "interaction");
+    }catch(e){
+      c.innerHTML = `<div class="empty-state"><div class="ic">⚠️</div>Không thể tải cấu hình hợp đồng hiệu lực cho phiên này. Vui lòng tải lại trang hoặc liên hệ hỗ trợ.</div>`;
+      return;
+    }
+  }
 
   let questions = [];
   try{
@@ -3275,9 +3289,10 @@ async function teacherLiveControl(c, sessionId){
   track(()=>{window.removeEventListener("online",updateHealthUI);window.removeEventListener("offline",updateHealthUI);});
 
   function renderShell(){
+    const isContract = isContractSession(session);
     c.innerHTML = `
     <div class="flex-between no-print">
-      <h2 id="liveSessionTitle" style="margin:0;">${esc(session.title)}</h2>
+      <h2 id="liveSessionTitle" style="margin:0;">${esc(displaySemantics.title)}</h2>
       ${sessionStatusBadge(session.status)}
     </div>
     <div class="flex gap-8 mt-8 no-print" style="flex-wrap:wrap;">
@@ -3288,8 +3303,12 @@ async function teacherLiveControl(c, sessionId){
       <button class="btn btn-outline" id="btnPresent" ${session.status==="draft"?"disabled":""}>HIỂN THỊ TRÌNH CHIẾU</button>
       ${session.status!=="archived" ? `<button class="btn btn-outline" id="btnEditTime">⏱ ĐỔI THỜI GIAN</button>` : ""}
       <button class="btn ${session.showResults==='live'?'btn-warn':'btn-outline'}" id="btnToggleResults">${session.showResults==='live'?"ẨN KẾT QUẢ":"HIỂN THỊ KẾT QUẢ"}</button>
-      <button class="btn btn-outline" id="btnSessionInfo">SỬA PHIÊN</button><button class="btn btn-ghost" id="btnBackDash">← Về tổng quan</button>
+      ${isContract
+        ? `<button class="btn btn-outline" id="btnSessionInfo" disabled title="Phiên này đã kích hoạt hợp đồng phiên bản mới; sửa nội dung phiên bản (title/description) chưa được hỗ trợ trong gate này.">SỬA PHIÊN (chưa hỗ trợ)</button>`
+        : `<button class="btn btn-outline" id="btnSessionInfo">SỬA PHIÊN</button>`}
+      <button class="btn btn-ghost" id="btnBackDash">← Về tổng quan</button>
     </div>
+    ${isContract ? `<p class="small mut no-print mt-8">⚠️ Phiên này đã kích hoạt hợp đồng phiên bản mới. Sửa tên/mô tả phiên (nội dung phiên bản) chưa được hỗ trợ — vui lòng chờ cập nhật tiếp theo.</p>` : ""}
     <div class="card mt-14 no-print"><div class="health-grid">
       <div class="health-item"><div><span class="health-dot" id="healthNetDot"></span><b>Internet</b></div><div class="small mut" id="healthNet">Đang kiểm tra…</div></div>
       <div class="health-item"><div><span class="health-dot" id="healthRtDot"></span><b>Firebase Realtime</b></div><div class="small mut" id="healthRt">Đang kết nối…</div></div>
@@ -3313,7 +3332,7 @@ async function teacherLiveControl(c, sessionId){
         <div class="card mt-14"><div class="chart-box"><canvas id="liveChart"></canvas></div><div id="liveChartSummary"></div></div>
       </div>
     </div>`;
-    $("#btnSessionInfo").onclick=()=>openSessionInfoEditor("sessions",sessionId);
+    if(!isContract) $("#btnSessionInfo").onclick=()=>openSessionInfoEditor("sessions",sessionId);
     $("#btnBackDash").onclick = ()=>{ window.location.hash=""; STATE.teacherNav="overview"; teacherRoute(); };
     $$(".qcount [data-q]").forEach(b=>b.onclick=()=>switchQuestion(Number(b.dataset.q)));
     if($("#btnPrevQ")) $("#btnPrevQ").onclick = ()=>switchQuestion(curIndex-1);
@@ -3382,7 +3401,10 @@ async function teacherLiveControl(c, sessionId){
       }
     }, (err)=>{ toast(mapError(err),"err"); }));
     // vẫn theo dõi thay đổi trạng thái session (đóng/mở từ nơi khác)
-    track(onSnapshot(sessionRef, (snap)=>{ if(snap.exists()){ session = snap.data(); if($("#liveSessionTitle"))$("#liveSessionTitle").textContent=session.title||""; } }));
+    // Gate 1B.2C: title is intentionally re-read from displaySemantics (resolved once above),
+    // never from the live snapshot's raw session.title — the root field is frozen-at-activation
+    // for a contract session and must not reappear as a "live" value here.
+    track(onSnapshot(sessionRef, (snap)=>{ if(snap.exists()){ session = snap.data(); if($("#liveSessionTitle"))$("#liveSessionTitle").textContent=displaySemantics.title||""; } }));
   }
   function renderOpenList(docs){
     const el = $("#openList"); if(!el) return;
@@ -3726,6 +3748,15 @@ async function teacherReportView(c, sessionId){
     if(!sSnap.exists() || sSnap.data().ownerId!==STATE.user.uid){ c.innerHTML = `<div class="empty-state"><div class="ic">⛔</div>Không tìm thấy hoặc không có quyền xem báo cáo này.</div>`; return; }
     const session = sSnap.data();
     if(session.deletedAt){ c.innerHTML = `<div class="empty-state"><div class="ic">🗑️</div>Phiên này đang ở trong Thùng rác. Hãy khôi phục phiên trước khi xem báo cáo.</div>`; return; }
+    // Gate 1B.2C: report/export must show the active versioned manifest for a contract session,
+    // not the frozen-at-activation root title/description. Left unguarded on purpose — a thrown
+    // error here is caught by this function's own try/catch below and rendered via errorBlock(),
+    // which fails closed instead of silently falling back to the root fields.
+    let displaySemantics = { title: session.title, description: session.description };
+    if(isContractSession(session)){
+      const dbFacade = makeFirestoreDbFacade(db, { doc, getDoc, collection, getDocs, query, where });
+      displaySemantics = await resolveSessionSemantics(dbFacade, `sessions/${sessionId}`, session, "interaction");
+    }
     const classSnap = session.classId ? await getDoc(doc(db,"classes",session.classId)) : null;
     const className = classSnap && classSnap.exists() ? classSnap.data().name : "—";
     const classSize = classSnap && classSnap.exists() ? Number(classSnap.data().studentCount||0) : 0;
@@ -3755,7 +3786,7 @@ async function teacherReportView(c, sessionId){
       <p><b>Giảng viên:</b> ${esc(STATE.profile.displayName||STATE.profile.email)}</p>
       <p><b>Lớp:</b> ${esc(className)}</p>
       <p><b>Ngày:</b> ${fmtDate(session.createdAt)}</p>
-      <p><b>Hoạt động:</b> ${esc(session.title)}</p>
+      <p><b>Hoạt động:</b> ${esc(displaySemantics.title)}</p>
       <p><b>Người tham gia:</b> ${participantSet.size} học viên${classSize>0?` / ${classSize} (${Math.round(participantSet.size/classSize*1000)/10}%)`:""} · <b>Tổng lượt trả lời:</b> ${allResponses.length}</p>
     </div>
     ${questionBlocks.map(b=>`
@@ -3776,7 +3807,7 @@ async function teacherReportView(c, sessionId){
     $("#btnBackRep").onclick = ()=>{ window.history.length>1 ? window.location.hash="" : (window.location.hash=""); STATE.teacherNav="reports"; teacherRoute(); };
     $("#btnPrint").onclick = ()=>window.print();
     $("#btnCsv").onclick = ()=>exportSessionCSV(session, className, questionBlocks);
-    $("#btnJson").onclick = ()=>exportSessionJSON(session, className, questionBlocks);
+    $("#btnJson").onclick = ()=>exportSessionJSON(session, className, questionBlocks, displaySemantics.title);
     questionBlocks.forEach(b=>{
       if(b.q.chartType!=="list" && b.q.type!=="open"){
         const canvas = document.getElementById("repChart"+b.idx);
@@ -3806,9 +3837,13 @@ function exportSessionCSV(session, className, questionBlocks){
   const csv = "﻿" + rows.map(r=>r.map(csvEscape).join(",")).join("\n");
   downloadBlob(`bao-cao-${session.shortCode||"session"}.csv`, csv, "text/csv;charset=utf-8;");
 }
-function exportSessionJSON(session, className, questionBlocks){
+function exportSessionJSON(session, className, questionBlocks, semanticTitle){
+  // Gate 1B.2C: semanticTitle is always passed by the one caller (teacherReportView), already
+  // resolved via displaySemantics (root title for legacy, active versioned manifest for a
+  // contract session) — deliberately no `|| session.title` fallback here, so a contract
+  // session can never silently export the frozen root value.
   const out = {
-    hoatDong: session.title, lop: className, ngayTao: session.createdAt&&session.createdAt.toDate?session.createdAt.toDate().toISOString():null,
+    hoatDong: semanticTitle, lop: className, ngayTao: session.createdAt&&session.createdAt.toDate?session.createdAt.toDate().toISOString():null,
     cauHoi: questionBlocks.map(b=>({
       cauHoi: b.q.question, loai: b.q.type,
       phuongAn: b.options.map(o=>o.text),

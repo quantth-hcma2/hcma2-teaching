@@ -183,6 +183,30 @@ export async function resolveEffectiveConfig(dbFacade, sessionPath, sessionData,
 }
 
 /**
+ * Gate 1B.2C: resolves the teacher-facing display semantics (title, description) a UI screen
+ * or export should show — the session's own legacy fields for a non-contract session, or the
+ * ACTIVE versioned manifest for a contract session. Root `title`/`description` are frozen at
+ * whatever they were at (or before) activation and are never rewritten by `applyConfigRevision`
+ * — reading them directly is only correct at revision 0 and silently goes stale from revision 1
+ * onward. Callers that display or export semantic session fields must go through this instead
+ * of reading `sessionData.title`/`sessionData.description` directly for a contract session.
+ * Fails closed: any resolution error (broken ancestry, invalid manifest, unsupported contract
+ * version) propagates to the caller rather than silently falling back to root fields.
+ */
+export async function resolveSessionSemantics(dbFacade, sessionPath, sessionData, kind) {
+  if (!isContractSession(sessionData)) {
+    return { source: "legacy", title: sessionData.title ?? "", description: sessionData.description ?? "" };
+  }
+  const effective = await resolveEffectiveConfig(dbFacade, sessionPath, sessionData, kind);
+  if (effective.legacy) {
+    // isContractSession() was true above, so resolveEffectiveConfig() must not report legacy —
+    // fail closed rather than trust root fields if this invariant is ever violated.
+    throw new ReaderError("CONTRACT_RESOLUTION_INCONSISTENT", "Không thể xác định cấu hình hiệu lực cho phiên đã kích hoạt hợp đồng.");
+  }
+  return { source: "contract", configId: effective.configId, title: effective.config.title ?? "", description: effective.config.description ?? "" };
+}
+
+/**
  * Builds an interaction report grouped by round, without ever mixing question/option IDs
  * across rounds. For a legacy session (no contract marker) this is a straight pass-through of
  * the current single-round `questions`/`options` shape, wrapped in one synthetic round so

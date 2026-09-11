@@ -96,6 +96,17 @@ service cloud.firestore {
       return getAfter(/databases/$(database)/documents/questions/$(questionId)).data;
     }
 
+    // GATE 1B.3-C1: the one manifest-entry lookup every Contract question `create` check
+    // needs, factored into one place so every field comparison below reads as "the manifest
+    // entry says X" without repeating the getAfter() path. Firestore Rules caches repeated
+    // get()/getAfter() calls to the SAME document within one rule evaluation, so calling this
+    // function many times (once per field compared) still counts as the ONE document access
+    // it represents — not one per call.
+    function contractManifestEntryAfter(sessionId, configId, order) {
+      let cfg = getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(configId)).data;
+      return cfg.questions[order];
+    }
+
     // FIX 4: kiểm tra câu hỏi vẫn còn trong thời hạn trả lời (nếu có đặt timeLimit>0),
     // dựa trên session.activeQuestionStartedAt (Timestamp server ghi khi giảng viên
     // kích hoạt câu hỏi) cộng với question.timeLimit (giây), so với request.time
@@ -317,11 +328,29 @@ service cloud.firestore {
         resource.data.status == 'closed' &&
         request.resource.data.ownerId == resource.data.ownerId &&
         request.resource.data.status == resource.data.status &&
+        // GATE 1B.3-C1: extended to permit the frozen derived/runtime reset fields alongside the
+        // unchanged Gate 1B.2B fields. Each reset field is OPTIONAL here (so the still-unmodified
+        // Gate 1B.2B writer's title/description-only apply, which never touches these, keeps
+        // working exactly as before) but its VALUE is constrained to the one frozen reset value
+        // whenever it IS touched — never a semantic root mirror. title/description/settings
+        // remain deliberately absent from this list; that is the enforcement against semantic
+        // root mirroring, not a separate check.
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'configRevision','currentConfigId','lastOperationId','updatedAt'
+          'configRevision','currentConfigId','lastOperationId','updatedAt',
+          'questionCount','activeQuestionId','activeQuestionStartedAt','responseCount','liveAggregate'
         ]) &&
         request.resource.data.configRevision == resource.data.configRevision + 1 &&
         request.resource.data.updatedAt == request.time &&
+        (!('questionCount' in request.resource.data.diff(resource.data).affectedKeys()) ||
+          (request.resource.data.questionCount is int && request.resource.data.questionCount >= 0)) &&
+        (!('activeQuestionId' in request.resource.data.diff(resource.data).affectedKeys()) ||
+          request.resource.data.activeQuestionId == null) &&
+        (!('activeQuestionStartedAt' in request.resource.data.diff(resource.data).affectedKeys()) ||
+          request.resource.data.activeQuestionStartedAt == null) &&
+        (!('responseCount' in request.resource.data.diff(resource.data).affectedKeys()) ||
+          request.resource.data.responseCount == 0) &&
+        (!('liveAggregate' in request.resource.data.diff(resource.data).affectedKeys()) ||
+          request.resource.data.liveAggregate == null) &&
         getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.revision == request.resource.data.configRevision &&
         getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.parentConfigId == resource.data.currentConfigId &&
         getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.operationType == 'apply_config' &&
@@ -369,10 +398,28 @@ service cloud.firestore {
           request.resource.data.createdAt == request.time &&
           request.resource.data.revision is int && request.resource.data.revision >= 0 &&
           request.resource.data.active == true &&
+          // GATE 1B.3-C1: extended to admit the frozen revision >=1 Interaction manifest shape
+          // (roundId/allowMultipleResponses/anonymous/showResponderCount/questions) alongside
+          // the unchanged revision-0 activation_baseline shape. hasOnly() is permissive-by-
+          // omission — a revision-0 doc simply never carries the new keys, and is validated
+          // exactly as before; nothing here requires their presence.
           request.resource.data.keys().hasOnly([
             'revision','parentConfigId','kind','source','createdAt','createdBy',
-            'activatedFromLegacy','active','title','description'
+            'activatedFromLegacy','active','title','description',
+            'roundId','allowMultipleResponses','anonymous','showResponderCount','questions'
           ]) &&
+          // GATE 1B.3-C1: bound the embedded questions[] array's overall size, when present — a
+          // pure in-memory check over data already part of this write (no additional document
+          // reads). Firestore Rules' CEL dialect does not support a list-comprehension macro
+          // (no .all()/.exists() over a list — confirmed empirically against the emulator, not
+          // assumed), so per-entry structural validation of each question/option map inside this
+          // array cannot be expressed as a Rules-level loop. That per-entry proof is instead
+          // where it actually matters and IS enforceable: the questions/{questionId} create rule
+          // below performs the real, per-document integrity check (identity, position, semantic
+          // content, embedded options) for every question that is actually created — this
+          // top-level size bound is defense in depth on the manifest document's own shape, not a
+          // substitute for that per-document proof.
+          (!('questions' in request.resource.data) || request.resource.data.questions.size() <= 100) &&
           getAfter(/databases/$(database)/documents/sessions/$(sessionId)).data.currentConfigId == configId;
         // No update/delete rule at all -> immutable by omission (default-deny).
       }
@@ -396,6 +443,46 @@ service cloud.firestore {
             'lifecycleBefore','lifecycleAfter'
           ]);
         // No update/delete rule at all -> append-only by omission (default-deny).
+      }
+
+      // ---------------- GATE 1B.3-C1: LEGACY TRANSITION SNAPSHOT (singleton, create-only) ----------------
+      // Frozen in Gate 1B.3-B2/B3.1: an honest, editor-confirmed (NOT commit-time-reverified)
+      // compatibility bridge captured exactly once, only during the FIRST revision-1 apply, so
+      // legacy question IDs referenced by historical responses stay resolvable without ever
+      // rewriting revision 0 or claiming precision the system cannot prove. A literal (non-
+      // wildcard) path segment is used for the document ID — this is what actually guarantees
+      // "only ID snapshot, never a second one": any write to any OTHER document ID under this
+      // collection matches no rule at all (default-deny), and a second write attempt to THIS
+      // exact path is evaluated as an update (no update rule exists here -> default-deny too).
+      match /legacyTransitionSnapshot/snapshot {
+        allow get: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId);
+        // No list rule -> list denied by omission, same policy as configVersions/editHistory.
+        allow create: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId) &&
+          request.resource.data.keys().hasOnly([
+            'kind','basis','appliedAt','capturedDuringOperationId','parentConfigId','legacyQuestions'
+          ]) &&
+          request.resource.data.kind == 'legacy_transition_snapshot' &&
+          request.resource.data.basis == 'editor_confirmed' &&
+          request.resource.data.appliedAt == request.time &&
+          // Only ever bridges away from the activation baseline this session was really
+          // activated with — proven against the PRE-write session state (get(), not getAfter()),
+          // so this can only be created during the one transition FROM revision 0.
+          request.resource.data.parentConfigId == get(/databases/$(database)/documents/sessions/$(sessionId)).data.currentConfigId &&
+          get(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.parentConfigId)).data.kind == 'activation_baseline' &&
+          // Must correspond to the exact same apply operation that is, in this same commit,
+          // moving the session to revision 1 (never revision 2+) — closes the loop the same way
+          // configVersions/editHistory already do, anchored via editHistory instead of the root.
+          getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.capturedDuringOperationId)).data.operationType == 'apply_config' &&
+          getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.capturedDuringOperationId)).data.resultingRevision == 1 &&
+          // GATE 1B.3-C1: same size-only bound as configVersions above, for the same reason —
+          // Firestore Rules' CEL dialect has no list-comprehension macro to validate each
+          // legacyQuestions[] entry's own shape (confirmed empirically). This document is an
+          // editor-confirmed compatibility bridge, not a Rules-enforced integrity boundary the
+          // way the questions/{questionId} create rule is (see its comment) — deeper validation
+          // of its contents remains client-side, consistent with its "editor_confirmed" basis.
+          request.resource.data.legacyQuestions.size() <= 100;
+        // No update/delete rule at all -> immutable by omission. No PII field name appears
+        // anywhere in the allowlist above.
       }
 
       // ---------------- RESPONSES (subcollection) ----------------
@@ -505,18 +592,89 @@ service cloud.firestore {
       // nên phải dùng sessionDataAfter() (FIX A) — nếu dùng get() thông thường, session mới
       // sẽ chưa "tồn tại" theo góc nhìn của get() tại thời điểm đánh giá rule, khiến việc
       // đọc field .ownerId của nó lỗi và toàn bộ batch bị từ chối oan.
+      // GATE 1B.3-C1: scoped to !('configId' in request.resource.data) — without this, a
+      // document carrying a configId (and therefore claiming to be Contract-versioned) could be
+      // created via THIS unconstrained legacy branch instead of the integrity-proof branch below
+      // it, since Firestore Rules `allow` statements are OR'd (any one passing grants the
+      // write) — the legacy branch's lack of manifest-awareness would otherwise silently bypass
+      // the whole point of the Contract question proof.
       allow create: if isActiveTeacher() &&
+        !('configId' in request.resource.data) &&
         request.resource.data.ownerId == request.auth.uid &&
         sessionDataAfter(request.resource.data.sessionId).ownerId == request.auth.uid;
+
+      // GATE 1B.3-C1: Contract-versioned question create — the one-way integrity proof frozen
+      // in Gate 1B.3-B/B2/B3.1. Rules prove here that EVERY operational question document that
+      // is created maps to an exact manifest entry (identity, position, semantic content,
+      // embedded options) — this is a create-time, per-document proof, cheap and bounded (one
+      // getAfter() on the parent configVersions doc per question create, cached across the many
+      // field comparisons below, not one per comparison).
+      //
+      // ACCEPTED APPLICATION-INTEGRITY RESIDUAL — NOT A PARTICIPANT AUTHORIZATION BYPASS:
+      // Rules do NOT, and structurally cannot at up to 100 questions per revision, prove the
+      // REVERSE direction — that every entry declared in a manifest's questions[] array has a
+      // corresponding document. Proving that would require looping over the manifest array and
+      // performing up to 100 existence checks within one Rules evaluation, which exceeds
+      // Firestore's documented per-evaluation get()/exists() call budget by an order of
+      // magnitude. This gap does NOT permit a participant to submit against a nonexistent or
+      // undeclared question: response creation independently requires questionData(questionId)
+      // to resolve via get(), and activeQuestionId can only ever be set by the session owner's
+      // own client to a value of its choosing — a manifest entry with no backing document can
+      // never become answerable. The only actor who could intentionally create this specific
+      // inconsistency is an authenticated teacher/admin bypassing the official writer against
+      // their OWN session — never a participant, never cross-tenant. The reverse-direction
+      // completeness guarantee belongs to the official writer's post-commit verification
+      // (Gate 1B.3-C2) and the reopen integrity guard (Gate 1B.3-D), not to Rules.
+      allow create: if
+        isActiveTeacher() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        sessionDataAfter(request.resource.data.sessionId).ownerId == request.auth.uid &&
+        request.resource.data.keys().hasOnly([
+          'sessionId','ownerId','configId','revision','order','type','question','description',
+          'required','chartType','timeLimit','allowChangeAnswer','scaleMin','scaleMax','options',
+          'createdAt','createdBy'
+        ]) &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.createdAt == request.time &&
+        // Order bounds are validated BEFORE any array indexing below, so a malformed/out-of-
+        // range order can never reach contractManifestEntryAfter() in an unsafe way.
+        request.resource.data.order is int && request.resource.data.order >= 0 &&
+        request.resource.data.configId == sessionDataAfter(request.resource.data.sessionId).currentConfigId &&
+        request.resource.data.revision == sessionDataAfter(request.resource.data.sessionId).configRevision &&
+        questionId == request.resource.data.configId + '_q' + string(request.resource.data.order) &&
+        request.resource.data.order < getAfter(/databases/$(database)/documents/sessions/$(request.resource.data.sessionId)/configVersions/$(request.resource.data.configId)).data.questions.size() &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).questionId == questionId &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).roundId == request.resource.data.configId &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).order == request.resource.data.order &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).type == request.resource.data.type &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).question == request.resource.data.question &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).description == request.resource.data.description &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).required == request.resource.data.required &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).chartType == request.resource.data.chartType &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).timeLimit == request.resource.data.timeLimit &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).allowChangeAnswer == request.resource.data.allowChangeAnswer &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).scaleMin == request.resource.data.scaleMin &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).scaleMax == request.resource.data.scaleMax &&
+        request.resource.data.options.size() <= 20 &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).options == request.resource.data.options;
 
       // UPDATE/DELETE: câu hỏi đã tồn tại từ trước (không nằm trong batch tạo mới), nên
       // chỉ cần dựa vào resource.data (dữ liệu hiện có của chính document) — không cần
       // đọc chéo sang session nữa.
+      // GATE 1B.3-C1: any question carrying Contract version identity (a `configId` field) is
+      // immutable forever, including the current revision — no update, no delete, ever. This
+      // extends the legacy branch below with a precondition rather than adding a separate
+      // "immutable" rule, mirroring exactly the !('configRevision' in resource.data) pattern
+      // already used on the session root to distinguish legacy from Contract behavior. A
+      // Contract-versioned question therefore falls through to no matching update/delete rule
+      // at all — default-deny, immutable by omission, identical philosophy to configVersions
+      // and editHistory.
       allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        !('configId' in resource.data) &&
         request.resource.data.ownerId == resource.data.ownerId &&
         request.resource.data.sessionId == resource.data.sessionId;
 
-      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId) && !('configId' in resource.data);
 
       // ---------------- OPTIONS (subcollection) ----------------
       match /options/{optionId} {
@@ -532,11 +690,17 @@ service cloud.firestore {
         // CREATE: option luôn được tạo trong CÙNG batch atomic với chính câu hỏi cha của
         // nó (finalizeWizard()) — giống hệt lý do ở "questions create" — nên phải dùng
         // questionDataAfter() (FIX A) để thấy được câu hỏi cha ngay sau khi batch áp dụng.
-        allow create: if isOwnerOrAdmin(questionDataAfter(questionId).ownerId);
+        // GATE 1B.3-C1: a Contract-versioned question (configId-bearing) uses embedded options
+        // only — it must never acquire a mutable option subdocument that could diverge from its
+        // manifest, so create/update/delete are all denied whenever the parent carries a
+        // configId. Legacy (configId-less) questions are completely unaffected.
+        allow create: if isOwnerOrAdmin(questionDataAfter(questionId).ownerId) &&
+          !('configId' in questionDataAfter(questionId));
 
         // UPDATE/DELETE: nếu có sửa/xóa một option đã tồn tại độc lập (ngoài batch tạo
         // mới), câu hỏi cha chắc chắn đã tồn tại từ trước — dùng get() như cũ.
-        allow update, delete: if isOwnerOrAdmin(questionData(questionId).ownerId);
+        allow update, delete: if isOwnerOrAdmin(questionData(questionId).ownerId) &&
+          !('configId' in questionData(questionId));
       }
     }
 

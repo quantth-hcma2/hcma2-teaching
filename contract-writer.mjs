@@ -57,8 +57,26 @@ function pickManifest(data, fields) {
   return manifest;
 }
 
+// GATE 1B.3-C2R item B fix: the original single-level `JSON.stringify(x, Object.keys(x).sort())`
+// trick only sorts TOP-level keys — for nested structures (an interaction manifest's questions
+// array of objects, each with its own key set) JSON.stringify reapplies that SAME top-level key
+// allowlist at every nested level too, silently dropping any nested key absent from the
+// top-level object (which, in practice, is nearly all of them) before the two sides are ever
+// compared. Confirmed empirically: two `legacyQuestions` arrays with genuinely different content
+// serialized identically as `[{}]`. This canonicalizes recursively (sorted keys at every level,
+// arrays compared element-by-element) so equality is real structural equality, not an artifact
+// of which key names happen to coincide between a container and its own nested children.
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const k of Object.keys(value).sort()) out[k] = canonicalize(value[k]);
+    return out;
+  }
+  return value;
+}
 function stableEqual(a, b) {
-  return JSON.stringify(a, Object.keys(a || {}).sort()) === JSON.stringify(b, Object.keys(b || {}).sort());
+  return JSON.stringify(canonicalize(a)) === JSON.stringify(canonicalize(b));
 }
 
 /**
@@ -378,12 +396,21 @@ export async function applyInteractionRevision({ db, firestore, sessionId, actor
     // (and, on a first transition, the legacy snapshot) can throw on malformed caller input, and
     // must not preempt LIFECYCLE_NOT_SAFE / STALE_REVISION for a request that was always going
     // to be rejected on those grounds regardless of payload shape.
-    function buildForThisAttempt() {
+    //
+    // `treatAsFirstTransition` is an explicit parameter, NOT always the outer `isFirstTransition`
+    // closure value — GATE 1B.3-C2R item B fix: on a REPLAY, the session's CURRENT config has
+    // already moved past activation_baseline (the original commit did that), so recomputing
+    // "was this a first transition" from currentConfigData at retry time would always say NO,
+    // silently skipping the legacy-snapshot-payload comparison below even when the retry
+    // resupplies different legacyQuestions. Whether a given operationId's own result WAS a first
+    // transition is a fact about that operationId (prior.baseRevision === 0), not about the
+    // session's present-day state — the replay branch passes that fact in explicitly instead.
+    function buildForThisAttempt(treatAsFirstTransition) {
       const manifestBody = buildInteractionManifest({ configId, actorUid, currentConfigData, changes: intendedChanges });
       const shape = validateManifestShape({ kind: "interaction", ...manifestBody }, "interaction");
       if (!shape.ok) throw new ContractWriterError("MANIFEST_INVALID", "Cấu hình mới không hợp lệ.", shape);
       let snapshotBody = null;
-      if (isFirstTransition) {
+      if (treatAsFirstTransition) {
         snapshotBody = buildLegacySnapshotPayload({
           parentConfigId: data.currentConfigId, operationId, legacyQuestions: intendedChanges.legacyQuestions
         });
@@ -396,26 +423,32 @@ export async function applyInteractionRevision({ db, firestore, sessionId, actor
       if (prior.operationType !== "apply_config") {
         throw new ContractWriterError("OPERATION_ID_PAYLOAD_MISMATCH", "operationId đã dùng cho một loại thao tác khác.");
       }
-      const { manifestBody, snapshotBody } = buildForThisAttempt();
+      const priorWasFirstTransition = prior.baseRevision === 0;
+      const { manifestBody, snapshotBody } = buildForThisAttempt(priorWasFirstTransition);
       const priorConfigSnap = await tx.get(doc(db, family, sessionId, "configVersions", prior.resultingConfigId));
       const priorConfigData = priorConfigSnap.exists() ? priorConfigSnap.data() : null;
       let configMatches = !!priorConfigData &&
         stableEqual(semanticManifestForCompare(priorConfigData), semanticManifestForCompare(manifestBody));
-      if (configMatches && isFirstTransition) {
+      if (configMatches && priorWasFirstTransition) {
         const priorSnapSnap = await tx.get(snapshotRef);
         const priorLegacyQuestions = priorSnapSnap.exists() ? priorSnapSnap.data().legacyQuestions : null;
-        configMatches = stableEqual(priorLegacyQuestions, snapshotBody.legacyQuestions);
+        configMatches = !!snapshotBody && stableEqual(priorLegacyQuestions, snapshotBody.legacyQuestions);
       }
       if (!configMatches) {
         throw new ContractWriterError("OPERATION_ID_PAYLOAD_MISMATCH", "Nội dung thay đổi khác với lần thử trước cùng operationId.");
       }
-      return { replay: true, resultingRevision: prior.resultingRevision, resultingConfigId: prior.resultingConfigId, resultingQuestions: manifestBody.questions, isFirstTransition };
+      // GATE 1B.3-C2R item A: `manifestBody.questions` was built against THIS call's own
+      // freshly-generated (never persisted) configId — using it here would ask the post-commit
+      // verification pass below to look for questions at the wrong path. The ACTUAL committed
+      // question identities live in priorConfigData.questions (the real, already-written
+      // manifest this operationId produced) — that is what must be re-verified on a replay.
+      return { replay: true, resultingRevision: prior.resultingRevision, resultingConfigId: prior.resultingConfigId, resultingQuestions: priorConfigData.questions, isFirstTransition: priorWasFirstTransition };
     }
 
     if (data.status !== "closed") throw new ContractWriterError("LIFECYCLE_NOT_SAFE", "Phiên phải CLOSED mới được Apply cấu hình.");
     if (data.configRevision !== expectedRevision) throw new ContractWriterError("STALE_REVISION", "Cấu hình đã bị thay đổi ở nơi khác. Hãy tải lại.");
 
-    const { manifestBody, snapshotBody } = buildForThisAttempt();
+    const { manifestBody, snapshotBody } = buildForThisAttempt(isFirstTransition);
     const now = serverTimestamp();
     const nextRevision = expectedRevision + 1;
     tx.set(newConfigRef, { ...manifestBody, revision: nextRevision, parentConfigId: data.currentConfigId, createdAt: now });
@@ -446,15 +479,18 @@ export async function applyInteractionRevision({ db, firestore, sessionId, actor
     return { replay: false, resultingRevision: nextRevision, resultingConfigId: configId, resultingQuestions: manifestBody.questions, isFirstTransition };
   });
 
-  // GATE 1B.3-C2 item 8: post-commit completeness verification lives in the writer, not
-  // duplicated in a future UI. Only a real write needs re-proving — a replay returns the
-  // already-committed (and, when it was first written, already-verified) result untouched.
-  if (!result.replay) {
-    await verifyRevisionIntegrity({
-      db, firestore, sessionId, configId: result.resultingConfigId, revision: result.resultingRevision,
-      expectedQuestions: result.resultingQuestions
-    });
-  }
+  // GATE 1B.3-C2 item 8 / GATE 1B.3-C2R item A: post-commit completeness verification lives in
+  // the writer, not duplicated in a future UI — and it must run on EVERY successful return,
+  // replay included. A prior revision's operational question documents are ordinary mutable-
+  // by-nobody-but-Rules Firestore documents; nothing prevents out-of-band tampering (or a
+  // reused emulator/test fixture) between the original commit and a later idempotent retry, so
+  // "already verified once, when it was first written" is not a standing guarantee a caller can
+  // rely on at replay time. A replay must re-earn the same completeness proof a fresh write
+  // does before it is allowed to report success.
+  await verifyRevisionIntegrity({
+    db, firestore, sessionId, configId: result.resultingConfigId, revision: result.resultingRevision,
+    expectedQuestions: result.resultingQuestions
+  });
   return result;
 }
 

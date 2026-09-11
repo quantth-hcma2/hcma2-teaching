@@ -403,6 +403,89 @@ test("DENY: same operationId + different semantic payload is OPERATION_ID_PAYLOA
 });
 
 // =====================================================================================
+// GATE 1B.3-C2R item A — idempotent replay must re-earn the same completeness proof a fresh
+// write does, not skip it because "it was already proven once at commit time". Between the
+// original commit and a later retry, the operational question documents are ordinary Firestore
+// documents nothing prevents from being tampered with out-of-band.
+// =====================================================================================
+
+test("DENY (GATE 1B.3-C2R item A): replaying a matching operationId after an operational question was deleted out-of-band fails REVISION_INTEGRITY_VERIFICATION_FAILED, never a successful replay", async () => {
+  const w = await activateSession("s1");
+  const changes = { title: "T", description: "D", questions: [authoredQuestion(), authoredQuestion({ question: "Q2" })], legacyQuestions: [] };
+  const r1 = await applyInteractionRevision({ ...w, sessionId: "s1", actorUid: "teacher-a", operationId: "op-1", expectedRevision: 0, changes });
+  const victimId = `${r1.resultingConfigId}_q1`;
+  await seedWithRulesDisabled(async (d) => { await deleteDoc(doc(d, "questions", victimId)); });
+  await assert.rejects(
+    applyInteractionRevision({ ...w, sessionId: "s1", actorUid: "teacher-a", operationId: "op-1", expectedRevision: 0, changes }),
+    (e) => {
+      assert.ok(e instanceof ContractWriterError);
+      assert.equal(e.code, "REVISION_INTEGRITY_VERIFICATION_FAILED");
+      assert.equal(e.details.reason, "MISSING");
+      assert.equal(e.details.questionId, victimId);
+      return true;
+    }
+  );
+  // no compensating write / repair: root and history stay exactly where the original commit
+  // left them, and the operationId's history entry is not touched by the failed replay attempt.
+  const root = await getRootDoc(w, "s1");
+  assert.equal(root.configRevision, 1);
+  assert.equal(root.currentConfigId, r1.resultingConfigId);
+  // still deleted, no repair attempted — checked with Rules disabled since an authenticated
+  // read of a genuinely-absent Contract question surfaces as permission-denied, not "not found"
+  // (see verifyRevisionIntegrity's own comment on this same Rules quirk).
+  let victimExists = true;
+  await seedWithRulesDisabled(async (d) => { victimExists = (await getDoc(doc(d, "questions", victimId))).exists(); });
+  assert.equal(victimExists, false);
+});
+
+test("DENY (GATE 1B.3-C2R item A): replaying a matching operationId after an operational question was mutated out-of-band also fails REVISION_INTEGRITY_VERIFICATION_FAILED", async () => {
+  const w = await activateSession("s1");
+  const changes = { title: "T", description: "D", questions: [authoredQuestion()], legacyQuestions: [] };
+  const r1 = await applyInteractionRevision({ ...w, sessionId: "s1", actorUid: "teacher-a", operationId: "op-1", expectedRevision: 0, changes });
+  const victimId = `${r1.resultingConfigId}_q0`;
+  await seedWithRulesDisabled(async (d) => { await updateDoc(doc(d, "questions", victimId), { question: "Đã bị sửa ngoài luồng" }); });
+  await rejectsWithCode(
+    applyInteractionRevision({ ...w, sessionId: "s1", actorUid: "teacher-a", operationId: "op-1", expectedRevision: 0, changes }),
+    "REVISION_INTEGRITY_VERIFICATION_FAILED"
+  );
+});
+
+// =====================================================================================
+// GATE 1B.3-C2R item B — the first-transition snapshot's legacyQuestions payload is part of
+// the operation's semantic content for idempotency purposes: a retry with the identical
+// revision-1 manifest but a DIFFERENT legacy snapshot payload must never be treated as the same
+// operation. On revision >=1 -> later revisions, legacyQuestions is irrelevant to comparison —
+// it can never cause a second snapshot to be created or updated regardless of what a caller
+// resupplies (already covered by the "never touches the existing snapshot" test above; this
+// section proves the FIRST-transition comparison specifically).
+// =====================================================================================
+
+test("DENY (GATE 1B.3-C2R item B): same operationId + identical revision-1 manifest but a DIFFERENT legacy snapshot payload is OPERATION_ID_PAYLOAD_MISMATCH, not a successful replay", async () => {
+  const w = await activateSession("s1");
+  const changes = { title: "T", description: "D", questions: [authoredQuestion()] };
+  await applyInteractionRevision({
+    ...w, sessionId: "s1", actorUid: "teacher-a", operationId: "op-1", expectedRevision: 0,
+    changes: { ...changes, legacyQuestions: [legacyQuestionEntry({ question: "Payload A" })] }
+  });
+  await rejectsWithCode(applyInteractionRevision({
+    ...w, sessionId: "s1", actorUid: "teacher-a", operationId: "op-1", expectedRevision: 0,
+    changes: { ...changes, legacyQuestions: [legacyQuestionEntry({ question: "Payload B — different" })] }
+  }), "OPERATION_ID_PAYLOAD_MISMATCH");
+  // no second snapshot, no corruption of the original one
+  const snap = await getSnapshotDoc(w, "s1");
+  assert.equal(snap.legacyQuestions[0].question, "Payload A");
+});
+
+test("PASS (GATE 1B.3-C2R item B): same operationId + identical revision-1 manifest AND identical legacy snapshot payload replays cleanly", async () => {
+  const w = await activateSession("s1");
+  const changes = { title: "T", description: "D", questions: [authoredQuestion()], legacyQuestions: [legacyQuestionEntry({ question: "Same payload" })] };
+  const r1 = await applyInteractionRevision({ ...w, sessionId: "s1", actorUid: "teacher-a", operationId: "op-1", expectedRevision: 0, changes });
+  const r2 = await applyInteractionRevision({ ...w, sessionId: "s1", actorUid: "teacher-a", operationId: "op-1", expectedRevision: 0, changes });
+  assert.equal(r2.replay, true);
+  assert.equal(r2.resultingConfigId, r1.resultingConfigId);
+});
+
+// =====================================================================================
 // 5. LIFECYCLE / STALE-REVISION DENY
 // =====================================================================================
 
@@ -661,6 +744,103 @@ test("PASS: reader reports plain legacy (no contract at all) honestly, distinct 
   const cfg = await resolveInteractionConfig(dbFacade, "sessions/s1", sessionData);
   assert.equal(cfg.source, "legacy");
   assert.equal(cfg.questions, null);
+});
+
+// =====================================================================================
+// GATE 1B.3-C2R item C — three-state reader historical honesty, proven explicitly.
+//
+// State 1 (pure legacy, never activated): resolveInteractionConfig() returns source:"legacy"
+// and questions:null — it never reads or embeds the live questions collection itself. A caller
+// that wants "current questions" for this state reads the live, still-mutable questions
+// collection directly (exactly as every pre-Gate-1B consumer already does) and the "legacy"
+// source tag is what tells that caller this data is current/unversioned, never an immutable
+// snapshot.
+//
+// State 2 (contract revision-0 activation baseline): resolveInteractionConfig() returns
+// source:"contract-baseline", questions:null — same reasoning, but additionally proven here
+// against a session whose activation_baseline config genuinely has no `questions` field at all
+// (per activateContract()'s own frozen manifestFields, title/description only), even when live,
+// still-mutable legacy question documents happen to still physically exist for this session:
+// they must never be silently read and presented as "the revision-0 question snapshot".
+//
+// State 3 (contract revision >=1): resolveInteractionConfig() sources questions ONLY from the
+// immutable configVersions/{currentConfigId} document. Proven here against a session that has
+// BOTH a real revision-1 manifest AND leftover live legacy question documents (same sessionId,
+// predating activation) still sitting in the mutable `questions` collection — the resolved
+// config's `questions` must be exactly the manifest's own embedded array, with no trace of the
+// leftover legacy documents' content, and the reader must not substitute or merge in
+// legacyTransitionSnapshot content as if it were "the current config" either (that snapshot is
+// a separate, explicitly-named pre-revision-1 compatibility artifact, not part of what
+// resolveInteractionConfig reports as the CURRENT effective config).
+// =====================================================================================
+
+test("STATE 1 (GATE 1B.3-C2R item C): pure legacy session — reader never embeds live legacy question docs, tags them as current/unversioned by omission", async () => {
+  await seedUsers();
+  await seedSession("s1");
+  await seedWithRulesDisabled(async (d) => {
+    await setDoc(doc(d, "questions", "legacy-q-live-1"), {
+      sessionId: "s1", ownerId: "teacher-a", order: 0, type: "single", question: "Câu hỏi đang sống",
+      description: "", required: true, chartType: "bar", timeLimit: 0, allowChangeAnswer: false,
+      scaleMin: null, scaleMax: null, createdAt: new Date(), updatedAt: new Date()
+    });
+  });
+  const w = writerFor(teacherCtx("teacher-a"));
+  const dbFacade = makeFirestoreDbFacade(w.db, firestoreFns);
+  const sessionData = await getRootDoc(w, "s1");
+  const cfg = await resolveInteractionConfig(dbFacade, "sessions/s1", sessionData);
+  assert.equal(cfg.source, "legacy");
+  assert.equal(cfg.revision, null);
+  assert.equal(cfg.questions, null, "must never silently embed the live legacy questions collection as if it were versioned");
+});
+
+test("STATE 2 (GATE 1B.3-C2R item C): revision-0 activation baseline — reader never fabricates a question snapshot, even when live legacy question docs still exist for this session", async () => {
+  const w = await activateSession("s1"); // seeds no legacy question docs itself; add one explicitly below
+  await seedWithRulesDisabled(async (d) => {
+    await setDoc(doc(d, "questions", "legacy-q-live-1"), {
+      sessionId: "s1", ownerId: "teacher-a", order: 0, type: "single", question: "Câu hỏi cũ vẫn còn sống",
+      description: "", required: true, chartType: "bar", timeLimit: 0, allowChangeAnswer: false,
+      scaleMin: null, scaleMax: null, createdAt: new Date(), updatedAt: new Date()
+    });
+  });
+  const dbFacade = makeFirestoreDbFacade(w.db, firestoreFns);
+  const sessionData = await getRootDoc(w, "s1");
+  const cfg = await resolveInteractionConfig(dbFacade, "sessions/s1", sessionData);
+  assert.equal(cfg.source, "contract-baseline");
+  assert.equal(cfg.revision, 0);
+  assert.equal(cfg.questions, null, "revision-0 config genuinely has no questions field; must never be filled in from the live legacy collection and presented as a historical snapshot");
+});
+
+test("STATE 3 (GATE 1B.3-C2R item C): revision >=1 — current semantics come ONLY from the immutable configVersions doc, never from leftover live legacy question docs or a silent legacyTransitionSnapshot substitution", async () => {
+  const w = await activateSession("s1");
+  // A leftover live legacy question doc for this same session, predating activation — must
+  // never leak into the resolved CURRENT config once a real revision exists.
+  await seedWithRulesDisabled(async (d) => {
+    await setDoc(doc(d, "questions", "legacy-q-live-1"), {
+      sessionId: "s1", ownerId: "teacher-a", order: 0, type: "single", question: "Câu hỏi cũ còn sót lại",
+      description: "", required: true, chartType: "bar", timeLimit: 0, allowChangeAnswer: false,
+      scaleMin: null, scaleMax: null, createdAt: new Date(), updatedAt: new Date()
+    });
+  });
+  const legacySnapshotQuestion = legacyQuestionEntry({ question: "CHỈ thuộc về legacyTransitionSnapshot, không phải cấu hình hiện hành" });
+  const result = await applyInteractionRevision({
+    ...w, sessionId: "s1", actorUid: "teacher-a", operationId: "op-1", expectedRevision: 0,
+    changes: { title: "T1", description: "D1", questions: [authoredQuestion({ question: "Câu hỏi rev1 thật" })], legacyQuestions: [legacySnapshotQuestion] }
+  });
+  const dbFacade = makeFirestoreDbFacade(w.db, firestoreFns);
+  const sessionData = await getRootDoc(w, "s1");
+  const cfg = await resolveInteractionConfig(dbFacade, "sessions/s1", sessionData);
+  assert.equal(cfg.source, "contract-revision");
+  assert.equal(cfg.revision, 1);
+  assert.equal(cfg.questions.length, 1);
+  assert.equal(cfg.questions[0].question, "Câu hỏi rev1 thật");
+  const questionTexts = cfg.questions.map((q) => q.question);
+  assert.ok(!questionTexts.includes("Câu hỏi cũ còn sót lại"), "the leftover live legacy document must never appear in the resolved current config");
+  assert.ok(!questionTexts.includes(legacySnapshotQuestion.question), "legacyTransitionSnapshot content must never be substituted in as if it were the current config");
+  // the snapshot itself is untouched and separately readable, exactly where it belongs — it is
+  // simply not part of what resolveInteractionConfig() reports as the CURRENT effective config.
+  const snap = await getSnapshotDoc(w, "s1");
+  assert.equal(snap.legacyQuestions[0].question, legacySnapshotQuestion.question);
+  assert.notEqual(result.resultingConfigId, undefined);
 });
 
 // =====================================================================================

@@ -383,11 +383,23 @@ service cloud.firestore {
         // client can no longer create a revision N+1 for sessions while leaving activeQuestionId/
         // activeQuestionStartedAt/responseCount/liveAggregate pointing at the retired round, and
         // can no longer create a revision N+1 carrying only the old title/description shape.
+        // GATE 1B.3-C1X: root-caused the "maximum of 1000 expressions" ceiling to this exact
+        // spot, empirically, via a bisected diagnostic (not guessed): calling
+        // .diff(resource.data) a SECOND time for a separate hasAll() check — even reused via a
+        // single let-bound helper function — was consistently what tipped this 3-document batch
+        // (session root + configVersions create + editHistory create) over Firestore's
+        // per-request Rules expression-evaluation budget. hasAll() here is not actually needed
+        // for the security invariant: the scalar value checks below (activeQuestionId == null,
+        // etc.) are evaluated against request.resource.data — the FINAL MERGED document state
+        // for this write, not just the fields this specific update() call touched — so a client
+        // that tries to OMIT one of these fields from its update payload still has that field's
+        // final value checked against the required reset value. If the prior value wasn't
+        // already correct, the write is denied exactly as before (verified: a write that leaves
+        // a stale non-null activeQuestionId/non-zero responseCount by omitting them from the
+        // payload is still denied). hasOnly() (a single .diff() call, unchanged) still bounds
+        // which fields may be touched at all.
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'configRevision','currentConfigId','lastOperationId','updatedAt',
-          'questionCount','activeQuestionId','activeQuestionStartedAt','responseCount','liveAggregate'
-        ]) &&
-        request.resource.data.diff(resource.data).affectedKeys().hasAll([
           'questionCount','activeQuestionId','activeQuestionStartedAt','responseCount','liveAggregate'
         ]) &&
         request.resource.data.configRevision == resource.data.configRevision + 1 &&

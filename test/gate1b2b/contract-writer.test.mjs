@@ -191,25 +191,52 @@ test("atomicity: a rejected activation (lifecycle unsafe) leaves zero partial st
 // REVISION / APPLY_CONFIG
 // =====================================================================================
 
-test("revision: baseline 0, apply 0->1", async () => {
+test("revision: baseline 0, apply 0->1 via the OLD partial (title/description-only) shape — SUPERSEDED by Gate 1B.3-C1X for the sessions/Interaction family: the old, unmodified applyConfigRevision() no longer produces a shape the hardened Rules accept", async () => {
+  // Gate 1B.2B originally proved this exact call succeeds. Gate 1B.3's frozen data contract
+  // (closed in Gate 1B.3-C1R/C1X) requires every REAL revision >=1 for Interaction to carry the
+  // complete versioned manifest (kind=='interaction' with roundId/allowMultipleResponses/
+  // anonymous/showResponderCount/questions) AND the session root to carry the mandatory
+  // derived/runtime reset fields (questionCount/activeQuestionId/activeQuestionStartedAt/
+  // responseCount/liveAggregate) on every apply. contract-writer.mjs's applyConfigRevision() is
+  // unchanged and knows how to produce neither — this is intentional: extending it is Gate
+  // 1B.3-C2's job, not something to route around here. This is not a regression: it is the
+  // Rules correctly rejecting a write shape Gate 1B.3 declares incomplete for this family.
+  // groupActivities/knowledgeSessions are untouched and still succeed with this exact old shape
+  // — see "groupActivities: activation PASS..." and "knowledgeSessions: activation PASS..."
+  // elsewhere in this file, both still green.
   await seedUsers(); await seedSession("s1");
   const w = writerFor(teacherCtx("teacher-a"));
   const activation = await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-1" });
   assert.equal(activation.resultingRevision, 0);
-  const applied = await applyConfigRevision({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-2", expectedRevision: 0, changes: { title: "Tên mới sau Apply" } });
-  assert.equal(applied.resultingRevision, 1);
+  await assert.rejects(
+    () => applyConfigRevision({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-2", expectedRevision: 0, changes: { title: "Tên mới sau Apply" } })
+  );
   const rootSnap = await getDoc(doc(w.db, "sessions", "s1"));
-  assert.equal(rootSnap.data().configRevision, 1);
-  const newConfig = await getDoc(doc(w.db, "sessions", "s1", "configVersions", applied.resultingConfigId));
-  assert.equal(newConfig.data().title, "Tên mới sau Apply");
-  assert.equal(newConfig.data().parentConfigId, activation.resultingConfigId);
+  assert.equal(rootSnap.data().configRevision, 0, "the denied attempt must leave configRevision untouched");
 });
 
-test("revision: stale expectedRevision DENY", async () => {
-  await seedUsers(); await seedSession("s1");
+test("revision: stale expectedRevision DENY — setup now seeds the revision-1 starting state directly (rules-disabled), since the old writer can no longer legitimately produce it for this family; the STALE_REVISION invariant itself is unrelated to Gate 1B.3 and is proven unchanged", async () => {
+  await seedUsers(); await seedSession("s1", { status: "closed" });
   const w = writerFor(teacherCtx("teacher-a"));
-  await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-1" });
-  await applyConfigRevision({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-2", expectedRevision: 0, changes: { title: "V1" } });
+  const activation = await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-1" });
+  // Seed "already at revision 1" directly — matches the frozen Gate 1B.3 full manifest shape —
+  // rather than via applyConfigRevision(), which can no longer produce it for this family.
+  await seedWithRulesDisabled(async (d) => {
+    await setDoc(doc(d, "sessions", "s1", "configVersions", "cfgRev1"), {
+      revision: 1, parentConfigId: activation.resultingConfigId, roundId: "cfgRev1", kind: "interaction",
+      source: "apply_config", createdAt: new Date(), createdBy: "teacher-a", active: true,
+      title: "V1", description: "", allowMultipleResponses: false, anonymous: true, showResponderCount: true, questions: []
+    });
+    await updateDoc(doc(d, "sessions", "s1"), {
+      configRevision: 1, currentConfigId: "cfgRev1", lastOperationId: "op-2", updatedAt: new Date(),
+      questionCount: 0, activeQuestionId: null, activeQuestionStartedAt: null, responseCount: 0, liveAggregate: null
+    });
+  });
+  // The writer's own client-side check (data.configRevision !== expectedRevision) throws
+  // STALE_REVISION before ever attempting a Firestore write — this is a pure contract-writer.mjs
+  // invariant, entirely unaffected by the Rules hardening; still exercised via the old
+  // title-only `changes` shape deliberately, to prove the STALE_REVISION check itself doesn't
+  // depend on the new manifest shape at all.
   await assert.rejects(
     () => applyConfigRevision({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-3", expectedRevision: 0, changes: { title: "V2-stale" } }),
     (e) => { assert.equal(e.code, "STALE_REVISION"); return true; }
@@ -435,7 +462,14 @@ test("editHistory read policy: writer code path confirmation — activateContrac
 // RACE (two concurrent "tabs")
 // =====================================================================================
 
-test("race: two concurrent apply_config at revision 0 — exactly one wins revision 1, other gets a conflict, no lost update", async () => {
+test("race: two concurrent apply_config at revision 0 via the OLD writer — SUPERSEDED by Gate 1B.3-C1X: both attempts now fail, because the shape itself (not the race) is what Rules reject for this family; real race-safety coverage for the full shape is deferred to Gate 1B.3-C2 once a conforming writer exists", async () => {
+  // The underlying race-safety GUARANTEE (Firestore transactions prevent a lost update under
+  // concurrent contention) is a platform property, not something this Rules file implements —
+  // it was never actually under test here beyond "both attempts hit the same transaction
+  // machinery", which is unaffected by Gate 1B.3. What Gate 1B.3-C1R/C1X changes is that BOTH
+  // concurrent attempts, using the old title-only shape, are now correctly denied regardless of
+  // timing, since the shape itself is rejected before the "who won the race" question is even
+  // reached.
   await seedUsers(); await seedSession("s1");
   const w = writerFor(teacherCtx("teacher-a"));
   await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-1" });
@@ -444,13 +478,11 @@ test("race: two concurrent apply_config at revision 0 — exactly one wins revis
   const attemptB = applyConfigRevision({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-race-b", expectedRevision: 0, changes: { title: "Từ tab B" } });
 
   const results = await Promise.allSettled([attemptA, attemptB]);
-  const fulfilled = results.filter(r => r.status === "fulfilled");
   const rejected = results.filter(r => r.status === "rejected");
-  assert.equal(fulfilled.length, 1, "exactly one of the two concurrent attempts must win");
-  assert.equal(rejected.length, 1, "the other must fail (Firestore transaction contention / stale revision), never silently both succeed");
+  assert.equal(rejected.length, 2, "both attempts must fail — the old partial shape is rejected regardless of which one Firestore would otherwise have let win");
 
   const rootSnap = await getDoc(doc(w.db, "sessions", "s1"));
-  assert.equal(rootSnap.data().configRevision, 1, "no lost update — exactly one revision bump happened");
+  assert.equal(rootSnap.data().configRevision, 0, "neither attempt may bump configRevision");
 });
 
 // =====================================================================================
@@ -466,19 +498,18 @@ test("idempotency: retry same operationId + same payload replays without creatin
   assert.equal(retry.resultingConfigId, first.resultingConfigId);
 });
 
-test("idempotency: retry same operationId + different payload DENY (source data changed between attempts)", async () => {
+test("idempotency: retry same operationId + different payload via the OLD writer — SUPERSEDED by Gate 1B.3-C1X for the sessions family: the FIRST call no longer succeeds either, so OPERATION_ID_PAYLOAD_MISMATCH is never reached; both attempts fail on shape, not on mismatch. Payload-mismatch coverage for this family is deferred to Gate 1B.3-C2's conforming writer — groupActivities/knowledgeSessions are untouched and unaffected.", async () => {
   await seedUsers(); await seedSession("s1");
   const w = writerFor(teacherCtx("teacher-a"));
   await activateContract({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-1" });
-  // Simulate: activation's history exists for op-1, but retry with a manually-forged different
-  // resultingConfigId scenario is exercised via apply_config's payload-mismatch path instead,
-  // since activation's own snapshot is deterministic from session state. Cover apply_config:
-  const applied = await applyConfigRevision({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-2", expectedRevision: 0, changes: { title: "A" } });
-  assert.equal(applied.resultingRevision, 1);
   await assert.rejects(
-    () => applyConfigRevision({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-2", expectedRevision: 0, changes: { title: "B-different" } }),
-    (e) => { assert.equal(e.code, "OPERATION_ID_PAYLOAD_MISMATCH"); return true; }
+    () => applyConfigRevision({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-2", expectedRevision: 0, changes: { title: "A" } })
   );
+  await assert.rejects(
+    () => applyConfigRevision({ ...w, family: "sessions", sessionId: "s1", actorUid: "teacher-a", operationId: "op-2", expectedRevision: 0, changes: { title: "B-different" } })
+  );
+  const rootSnap = await getDoc(doc(w.db, "sessions", "s1"));
+  assert.equal(rootSnap.data().configRevision, 0, "neither attempt may bump configRevision");
 });
 
 test("idempotency: simulated client-timeout-after-commit retry does not create a duplicate version/history", async () => {

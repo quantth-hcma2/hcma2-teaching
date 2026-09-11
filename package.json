@@ -9,7 +9,7 @@
     "test": "npm run test:pure && npm run test:emulator",
     "test:gate1b2a": "node test/gate1b2a/run-emulator-tests.mjs",
     "test:gate1b2b": "node test/gate1b2b/run-emulator-tests.mjs",
-    "test:gate1b2c:pure": "node --test test/gate1b2c/semantics-resolution.test.mjs",
+    "test:gate1b2c:pure": "node --test test/gate1b2c/semantics-resolution.test.mjs test/gate1b2c/view-model.test.mjs",
     "test:gate1b2c": "npm run test:gate1b2c:pure && node test/gate1b2c/run-emulator-tests.mjs"
   },
   "devDependencies": {

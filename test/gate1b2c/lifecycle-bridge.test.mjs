@@ -19,6 +19,7 @@ import { doc, setDoc, updateDoc, getDoc, serverTimestamp } from "firebase/firest
 import * as firestoreFns from "firebase/firestore";
 import { activateContract } from "../../contract-writer.mjs";
 import { resolveSessionSemantics, assertLegacyWritable, isContractSession, makeFirestoreDbFacade, ReaderError } from "../../session-reader.mjs";
+import { qrModalViewModel, presentationRenderState, buildInteractionJsonExport } from "../../session-view.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const rulesPath = path.join(here, "..", "..", "firestore.rules.production-candidate");
@@ -281,4 +282,79 @@ test("regression: legacy (non-activated) session — full lifecycle continues to
   const result = await resolveSessionSemantics(dbFacade, "sessions/s1", root, "interaction");
   assert.equal(result.source, "legacy");
   assert.equal(result.title, "Đổi tên qua Gate 1A");
+});
+
+// =====================================================================================
+// GATE 1B.2C-T — END-TO-END CONSUMER CHAIN: real Firestore revision-1 fixture ->
+// resolveSessionSemantics() -> the exact view-model functions showQrModal/teacherReportView's
+// export path call. This is the direct proof that the CONSUMERS use the resolved value, not
+// just that resolveSessionSemantics() itself is correct in isolation.
+// =====================================================================================
+
+test("end-to-end: QR modal view-model reflects the REAL emulator-resolved revision-1 title, never the stale root title teacherLiveControl would have shown before this fix", async () => {
+  await seedUsers();
+  await seedWithRulesDisabled(async (d) => {
+    await setDoc(doc(d, "sessions", "s1"), legacySessionFixture({
+      title: "Khởi động (cũ)", description: "Mô tả cũ", shortCode: "QRC001",
+      editContractVersion: 1, configRevision: 1, currentConfigId: "cfg1",
+      lastOperationId: "op-rev1", contractActivatedAt: new Date()
+    }));
+    await setDoc(doc(d, "sessions", "s1", "configVersions", "cfg0"), {
+      revision: 0, kind: "activation_baseline", source: "legacy_snapshot", parentConfigId: null,
+      activatedFromLegacy: true, active: true, createdAt: new Date(), createdBy: "teacher-a",
+      title: "Khởi động (cũ)", description: "Mô tả cũ"
+    });
+    await setDoc(doc(d, "sessions", "s1", "configVersions", "cfg1"), {
+      revision: 1, kind: "interaction", source: "apply_config", parentConfigId: "cfg0",
+      active: true, createdAt: new Date(), createdBy: "teacher-a",
+      title: "Khởi động (đã sửa — REVISION 1)", description: "Mô tả MỚI sau apply_config"
+    });
+  });
+  const a = db(teacherCtx("teacher-a"));
+  const root = (await getDoc(doc(a, "sessions", "s1"))).data();
+  // Exactly what teacherLiveControl does before wiring the QR button's onclick.
+  const dbFacade = makeFirestoreDbFacade(a, firestoreFns);
+  const displaySemantics = await resolveSessionSemantics(dbFacade, "sessions/s1", root, "interaction");
+  // Exactly what showQrModal(session, sessionId, displaySemantics.title) does internally.
+  const qrVm = qrModalViewModel(root, displaySemantics.title);
+  assert.equal(qrVm.title, "Khởi động (đã sửa — REVISION 1)");
+  assert.notEqual(qrVm.title, root.title, "must differ from the session's own stale root title");
+});
+
+test("end-to-end: JSON export payload reflects the REAL emulator-resolved revision-1 title, never the stale root title", async () => {
+  await seedUsers();
+  await seedWithRulesDisabled(async (d) => {
+    await setDoc(doc(d, "sessions", "s1"), legacySessionFixture({
+      title: "Khởi động (cũ)", description: "Mô tả cũ",
+      editContractVersion: 1, configRevision: 1, currentConfigId: "cfg1",
+      lastOperationId: "op-rev1", contractActivatedAt: new Date()
+    }));
+    await setDoc(doc(d, "sessions", "s1", "configVersions", "cfg0"), {
+      revision: 0, kind: "activation_baseline", source: "legacy_snapshot", parentConfigId: null,
+      activatedFromLegacy: true, active: true, createdAt: new Date(), createdBy: "teacher-a",
+      title: "Khởi động (cũ)", description: "Mô tả cũ"
+    });
+    await setDoc(doc(d, "sessions", "s1", "configVersions", "cfg1"), {
+      revision: 1, kind: "interaction", source: "apply_config", parentConfigId: "cfg0",
+      active: true, createdAt: new Date(), createdBy: "teacher-a",
+      title: "Khởi động (đã sửa — REVISION 1)", description: "Mô tả MỚI sau apply_config"
+    });
+  });
+  const a = db(teacherCtx("teacher-a"));
+  const root = (await getDoc(doc(a, "sessions", "s1"))).data();
+  // Exactly what teacherReportView does before wiring the JSON export button.
+  const dbFacade = makeFirestoreDbFacade(a, firestoreFns);
+  const displaySemantics = await resolveSessionSemantics(dbFacade, "sessions/s1", root, "interaction");
+  // Exactly what exportSessionJSON(session, className, questionBlocks, displaySemantics.title) does internally.
+  const jsonPayload = buildInteractionJsonExport(root, "K77.A01", [], displaySemantics.title);
+  assert.equal(jsonPayload.hoatDong, "Khởi động (đã sửa — REVISION 1)");
+  assert.notEqual(jsonPayload.hoatDong, root.title, "must differ from the session's own stale root title");
+});
+
+test("end-to-end: a REAL activated (revision 0) contract session's Presentation render state is contract-unsupported, never displays any title (old or new)", async () => {
+  await seedUsers(); await seedSession("s1", { title: "Khởi động", status: "closed" }); await seedQuestion("s1", "q1");
+  const { root } = await activateAndFetch("s1");
+  const state = presentationRenderState(root);
+  assert.equal(state.mode, "contract-unsupported");
+  assert.equal("title" in state, false);
 });

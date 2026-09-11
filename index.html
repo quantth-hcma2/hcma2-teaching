@@ -488,6 +488,7 @@ import {
 // but is not yet call-sited beyond this marker check — there is no real contract data for it
 // to read yet, and wiring it into the live render paths without that is Gate 1B.2 scope.
 import { isContractSession, assertLegacyWritable, resolveSessionSemantics, makeFirestoreDbFacade } from "./session-reader.mjs";
+import { qrModalViewModel, presentationRenderState, buildInteractionJsonExport } from "./session-view.mjs";
 
 /* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
 const firebaseConfig = {
@@ -3194,13 +3195,17 @@ function studentJoinUrl(session, sessionId){
   // sessionTokens/{token} (không được LIST) mới suy ra được sessionId thật.
   return `${APP_BASE_URL}?mode=student&t=${encodeURIComponent(session.accessToken)}`;
 }
-function showQrModal(session, sessionId){
+function showQrModal(session, sessionId, displayTitle){
+  // Gate 1B.2C-T: displayTitle is always caller-resolved (teacherLiveControl already resolved
+  // displaySemantics before this is reachable) — never read session.title directly here, or a
+  // contract session's QR modal would silently show the frozen root title again.
   const url = studentJoinUrl(session, sessionId);
+  const vm = qrModalViewModel(session, displayTitle);
   openModal(`
     <h3>Mã QR tham gia</h3>
-    <p class="mut">Học viên quét mã hoặc truy cập liên kết bên dưới để tham gia "${esc(session.title)}".</p>
+    <p class="mut">Học viên quét mã hoặc truy cập liên kết bên dưới để tham gia "${esc(vm.title)}".</p>
     <div style="text-align:center;padding:14px;background:#fff;border-radius:12px;" id="qrHolder"></div>
-    <p style="text-align:center;font-size:24px;font-weight:800;letter-spacing:2px;margin:10px 0;">${esc(session.shortCode)}</p>
+    <p style="text-align:center;font-size:24px;font-weight:800;letter-spacing:2px;margin:10px 0;">${esc(vm.shortCode)}</p>
     <p class="hint" style="text-align:center;">Mã tham gia dự phòng (nếu không quét được QR)</p>
     <div class="field"><input type="text" id="qrLinkText" readonly value="${esc(url)}"></div>
     <div class="flex gap-8" style="justify-content:center;flex-wrap:wrap;">
@@ -3341,7 +3346,7 @@ async function teacherLiveControl(c, sessionId){
     if($("#btnCloseSession")) $("#btnCloseSession").onclick = closeSession;
     if($("#btnReopenSession")) $("#btnReopenSession").onclick = reopenSession;
     if($("#btnArchiveSession")) $("#btnArchiveSession").onclick = archiveSession;
-    if($("#btnShowQr")) $("#btnShowQr").onclick = ()=>showQrModal(session, sessionId);
+    if($("#btnShowQr")) $("#btnShowQr").onclick = ()=>showQrModal(session, sessionId, displaySemantics.title);
     if($("#btnPresent")) $("#btnPresent").onclick = ()=>window.open(`${APP_BASE_URL}?mode=presentation&sid=${encodeURIComponent(sessionId)}`, "_blank");
     if($("#btnEditTime")) $("#btnEditTime").onclick = editSessionTime;
     if($("#btnToggleResults")) $("#btnToggleResults").onclick = toggleResults;
@@ -3838,18 +3843,13 @@ function exportSessionCSV(session, className, questionBlocks){
   downloadBlob(`bao-cao-${session.shortCode||"session"}.csv`, csv, "text/csv;charset=utf-8;");
 }
 function exportSessionJSON(session, className, questionBlocks, semanticTitle){
-  // Gate 1B.2C: semanticTitle is always passed by the one caller (teacherReportView), already
+  // Gate 1B.2C-T: semanticTitle is always passed by the one caller (teacherReportView), already
   // resolved via displaySemantics (root title for legacy, active versioned manifest for a
   // contract session) — deliberately no `|| session.title` fallback here, so a contract
-  // session can never silently export the frozen root value.
-  const out = {
-    hoatDong: semanticTitle, lop: className, ngayTao: session.createdAt&&session.createdAt.toDate?session.createdAt.toDate().toISOString():null,
-    cauHoi: questionBlocks.map(b=>({
-      cauHoi: b.q.question, loai: b.q.type,
-      phuongAn: b.options.map(o=>o.text),
-      cauTraLoi: b.docs.map(d=>({participantId:d.participantId, answer:d.answer, selectedOptions:d.selectedOptions, submittedAt: d.submittedAt&&d.submittedAt.toDate?d.submittedAt.toDate().toISOString():null}))
-    }))
-  };
+  // session can never silently export the frozen root value. Payload construction itself lives
+  // in buildInteractionJsonExport() (session-view.mjs), a pure function with no Blob/download
+  // side effects, so it is directly unit-testable.
+  const out = buildInteractionJsonExport(session, className, questionBlocks, semanticTitle);
   downloadBlob(`bao-cao-${session.shortCode||"session"}.json`, JSON.stringify(out,null,2), "application/json");
 }
 
@@ -4176,9 +4176,16 @@ function watchPresentation(sid){
   track(onSnapshot(sref, async (snap)=>{
     if(!snap.exists()){ $("#presRoot").innerHTML = `<div class="qtext">⚠️ Không tìm thấy phiên.</div>`; return; }
     const session = snap.data();
-    if(session.status==="draft" || session.status==="ready"){ renderPresWaiting(session, sid); return; }
-    if(session.status==="closed" || session.status==="archived"){ renderPresEnded(session); return; }
-    if(!session.activeQuestionId){ renderPresWaiting(session, sid); return; }
+    // Gate 1B.2C-T: presentationRenderState() decides the mode BEFORE any status/question
+    // branching — for a contract session this is always "contract-unsupported", since this
+    // view runs under the anonymous publicAuth identity and cannot legitimately read the
+    // active versioned manifest (see session-view.mjs for the full reasoning). This guarantees
+    // the stale root title is never shown, and none of the legacy render paths below ever run
+    // with contract-session data.
+    const renderState = presentationRenderState(session);
+    if(renderState.mode==="contract-unsupported"){ renderPresContractUnsupported(); return; }
+    if(renderState.mode==="waiting"){ renderPresWaiting(session, sid); return; }
+    if(renderState.mode==="ended"){ renderPresEnded(session); return; }
     if(session.activeQuestionId !== lastQid){
       lastQid = session.activeQuestionId;
       try{
@@ -4259,6 +4266,10 @@ function wirePresentationQrPopup(session, sid){
   };
 }
 
+function renderPresContractUnsupported(){
+  $("#presRoot").innerHTML = `${presTopBar()}<div class="qtext">⚠️ CHƯA HỖ TRỢ</div><div class="meta">Phiên này đã kích hoạt hợp đồng phiên bản mới. Trình chiếu cho phiên đã kích hoạt hợp đồng chưa được hỗ trợ.</div>`;
+  wirePresFs();
+}
 function renderPresWaiting(session, sid){
   $("#presRoot").innerHTML = `${presTopBar()}
     <div class="meta">${esc(session.className||"")} · ${esc(session.title)}</div>

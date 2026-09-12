@@ -1048,18 +1048,23 @@ service cloud.firestore {
       // has something to write to before Stage 3 (a later gate) ever tightens the read rules
       // above to depend on it. See the Gate 2A-AUTH-DESIGN report for full reasoning.
       match /members/{uid} {
-        // The member themselves (needed by the future frontend to detect an idempotent rejoin
-        // without ever hitting the immutable-update deny below), or the owning teacher/admin
-        // (needed to look up a specific, already-known uid before a legitimate reassignment/
-        // delete correction) can read one membership document. No `list` is declared here at
-        // all — deliberately: nothing in this stage or the documented Stage-2 contract needs a
-        // roster query, so omitting it means any list attempt falls through to the outer
-        // `match /{document=**} { allow read, write: if false }` catch-all — an explicit,
-        // unambiguous deny, not an accidental gap.
+        // The member themselves (needed by the frontend to detect an idempotent rejoin without
+        // ever hitting the immutable-update deny below), or the owning teacher/admin (needed to
+        // look up a specific, already-known uid before a legitimate reassignment/delete
+        // correction) can read one membership document.
         allow get: if isSignedIn() &&
           (request.auth.uid == uid ||
            isAdmin() ||
            (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid));
+
+        // GATE 2A-AUTH-I2-CORRECTION: additive owner/admin roster capability — NOT Stage-3
+        // student authorization tightening. The lecturer/admin membership-correction UI needs
+        // to enumerate an activity's memberships (student uids are opaque and unknowable in
+        // advance); a student still gets no `list` at all, matching the get-only shape above —
+        // any student list attempt still falls through to the outer
+        // `match /{document=**} { allow read, write: if false }` catch-all.
+        allow list: if isAdmin() ||
+          (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
 
         // Join-code proof (Gate 2A-AUTH-DESIGN, Task A): Rules cannot see that the caller
         // resolved a join code at some earlier moment — that is not a provable server-side fact.

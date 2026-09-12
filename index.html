@@ -1850,7 +1850,7 @@ async function groupLive(c,id,isAdminView){
         <div style="flex:1;min-width:220px"><label>Liên kết tham gia</label><input value="${esc(join)}" readonly><button class="btn btn-sm btn-outline mt-8" id="gCopy">SAO CHÉP LINK</button></div>
       </div>
     </div>
-    <div class="card"><h3>Chủ đề từng nhóm</h3><div id="gTopics"></div><button class="btn btn-outline mt-8" id="gSaveTopics">SỬA NHIỆM VỤ</button></div>
+    <div class="card"><h3>Chủ đề từng nhóm</h3><div id="gTopics"></div><button class="btn btn-outline mt-8" id="gSaveTopics">SỬA NHIỆM VỤ</button> <button class="btn btn-outline mt-8" id="gManageMembers">QUẢN LÝ NHÓM HỌC VIÊN</button></div>
   </div>
   <div class="flex-between mt-20"><h3 style="margin:0">Bảng ý kiến nhóm — Realtime</h3><span class="small mut" id="gRespCount"></span></div>
   <div id="gPanels" class="group-live-grid"></div>
@@ -1909,6 +1909,7 @@ async function groupLive(c,id,isAdminView){
       `<div class="field" style="margin-bottom:8px"><label>Nhóm ${i}</label><div style="white-space:pre-wrap">${esc(topics[String(i)]?.topic||"Chưa có nhiệm vụ")}</div></div>`).join("");
   }
   $("#gSaveTopics").onclick=()=>openSessionInfoEditor("groupActivities",id);
+  $("#gManageMembers").onclick=()=>openGroupMembersManager(id,current.groupCount||6);
   function renderPanels(){
     let total=0;
     $("#gPanels").innerHTML=Array.from({length:current.groupCount||6},(_,k)=>k+1).map(i=>{
@@ -1990,6 +1991,45 @@ async function groupLive(c,id,isAdminView){
   renderTopics();renderPanels();updateTimer();
 }
 
+// GATE 2A-AUTH-I2-CORRECTION: owner/admin-only roster + narrow field-only group correction.
+// Reads via the new additive members `list` Rule (owner/admin only — students still get no
+// list at all); writes via a single-field updateDoc(), never a full document rewrite, so
+// joinCode/joinedAt stay exactly as Rules require regardless of what this UI sends. No PII is
+// displayed or stored — the label is derived purely from the opaque uid.
+async function openGroupMembersManager(activityId,groupCount){
+  const host=openModal(`<h3>Quản lý nhóm học viên</h3><p class="mut">Xem và điều chỉnh nhóm của học viên đã tham gia hoạt động này.</p><div id="gmmList"><div class="mut small">Đang tải…</div></div><div class="flex-between mt-14"><button class="btn btn-ghost" id="gmmClose">ĐÓNG</button></div>`,true);
+  host.querySelector("#gmmClose").onclick=closeModal;
+  const list=host.querySelector("#gmmList");
+  try{
+    const snap=await getDocs(collection(db,GROUP_COLLECTION,activityId,"members"));
+    if(snap.empty){list.innerHTML=`<div class="mut small">Chưa có học viên nào tham gia.</div>`;return;}
+    const rows=snap.docs.map(d=>({uid:d.id,...d.data()})).sort((x,y)=>(x.group||0)-(y.group||0));
+    list.innerHTML=rows.map(r=>{
+      const label="Học viên ••••"+String(r.uid).slice(-4).toUpperCase();
+      return `<div class="flex-between mt-8" data-gmm-row="${esc(r.uid)}"><div>${esc(label)}</div><div class="flex gap-8" style="align-items:center"><select data-gmm-select>${Array.from({length:groupCount||6},(_,k)=>`<option value="${k+1}" ${r.group===k+1?"selected":""}>Nhóm ${k+1}</option>`).join("")}</select><button class="btn btn-sm btn-outline" data-gmm-save>LƯU</button></div></div>`;
+    }).join("");
+    list.querySelectorAll("[data-gmm-row]").forEach(row=>{
+      const uid=row.dataset.gmmRow, rec=rows.find(r=>r.uid===uid), saveBtn=row.querySelector("[data-gmm-save]"), sel=row.querySelector("[data-gmm-select]");
+      let busy=false;
+      saveBtn.onclick=async()=>{
+        if(busy)return;
+        const newGroup=Number(sel.value)||0;
+        if(newGroup===rec.group){toast("Không có thay đổi.","warn");return;}
+        if(!confirm(`Chuyển học viên từ Nhóm ${rec.group} sang Nhóm ${newGroup}?`))return;
+        busy=true; saveBtn.disabled=true;
+        try{
+          await updateDoc(doc(db,GROUP_COLLECTION,activityId,"members",uid),{group:newGroup});
+          rec.group=newGroup;
+          toast("Đã chuyển nhóm học viên.","ok");
+        }catch(e){toast(mapError(e),"err");}
+        finally{busy=false; saveBtn.disabled=false;}
+      };
+    });
+  }catch(e){
+    list.innerHTML=`<div class="mut small">${esc(mapError(e))}</div>`;
+  }
+}
+
 function openImageViewerSimple(src){
   openModal(`<div style="text-align:center"><img src="${src}" style="max-width:85vw;max-height:75vh;border-radius:10px"><div class="mt-12"><button class="btn btn-outline" id="imgClose">ĐÓNG</button></div></div>`,true);
   $("#imgClose").onclick=closeModal;
@@ -2047,9 +2087,7 @@ async function renderGroupStudentEntry(){
       <div class="group-student-card"><h3>Ý kiến đã gửi của nhóm</h3><div id="gsMyNotes"><div class="mut small">${membershipGroup?"Đang tải…":"Chọn nhóm để xem."}</div></div></div>
     </div>`;
 
-    const unsubA=onSnapshot(doc(publicDb,GROUP_COLLECTION,id),s=>{if(s.exists()){a={id,...s.data()};$("#gsLiveTitle").textContent="👥 "+(a.title||"Thảo luận nhóm");$("#gsLiveInstructions").textContent=a.instructions||"";updateStudentState();}});
-    track(unsubA);
-    let currentTopic=null, notes=[], joinBusy=false;
+    let currentTopic=null, notes=[], joinBusy=false, unsubTopic=null, unsubNotes=null, membershipListenerAttached=false, wasOpen=true;
 
     function updateTopicDisplay(){
       const t=currentTopic?.topic||""; const el=$("#gsTopic");
@@ -2064,19 +2102,60 @@ async function renderGroupStudentEntry(){
       $("#gsStatus").textContent=a.status==="open"?"Phòng đang mở — có thể gửi kết quả.":a.status==="closed"?"Phòng đã đóng.":"Phòng chưa mở.";
       $("#gsSubmitCard").classList.toggle("hidden",!membershipGroup || a.status!=="open");
     }
-    // GATE 2A-AUTH-I2: the only place notes/topics listeners for a student are attached —
-    // always AFTER membershipGroup is confirmed (own group only, per the frozen Stage-2
-    // contract), never before. Teacher/admin's own groupLive() listeners are untouched.
-    function attachScopedListeners(group){
-      track(onSnapshot(doc(publicDb,GROUP_COLLECTION,id,"topics",String(group)),s=>{currentTopic=s.exists()?s.data():null;updateTopicDisplay();}));
-      track(onSnapshot(query(collection(publicDb,GROUP_COLLECTION,id,"notes"),where("group","==",group)),s=>{notes=s.docs.map(d=>({id:d.id,...d.data()}));renderMyNotes();}));
+    // GATE 2A-AUTH-I2-CORRECTION: unsubscribe-then-reattach, never additive — calling this a
+    // second time (an authorized lecturer reassignment) tears down the PREVIOUS group's
+    // listeners and clears their already-rendered content BEFORE the new group's listeners are
+    // attached, so old and new group data are never visible concurrently (Task F).
+    function detachScopedListeners(){
+      if(unsubTopic){unsubTopic();unsubTopic=null;}
+      if(unsubNotes){unsubNotes();unsubNotes=null;}
+      currentTopic=null; notes=[];
+      updateTopicDisplay(); renderMyNotes();
     }
+    function attachScopedListeners(group){
+      detachScopedListeners();
+      unsubTopic=onSnapshot(doc(publicDb,GROUP_COLLECTION,id,"topics",String(group)),s=>{currentTopic=s.exists()?s.data():null;updateTopicDisplay();});
+      unsubNotes=onSnapshot(query(collection(publicDb,GROUP_COLLECTION,id,"notes"),where("group","==",group)),s=>{notes=s.docs.map(d=>({id:d.id,...d.data()}));renderMyNotes();});
+    }
+    track(()=>{if(unsubTopic)unsubTopic();if(unsubNotes)unsubNotes();});
     function revealParticipation(group){
       membershipGroup=group;
       $("#gsGroup").value=String(group); $("#gsGroup").disabled=true;
       attachScopedListeners(group);
       updateStudentState(); updateTopicDisplay(); renderMyNotes();
+      // GATE 2A-AUTH-I2-CORRECTION: subscribed exactly once (guarded), the first time this
+      // student has a confirmed group — reacts to an authorized lecturer/admin reassignment of
+      // membership.group by re-running this same function, which naturally tears down the old
+      // group's listeners and attaches the new group's (Task E). A malformed/missing record is
+      // ignored defensively rather than crashing the live view.
+      if(!membershipListenerAttached){
+        membershipListenerAttached=true;
+        track(onSnapshot(doc(publicDb,GROUP_COLLECTION,id,"members",publicAuth.currentUser.uid),s=>{
+          if(!s.exists())return;
+          let newGroup;
+          try{newGroup=validStoredGroup(s.data(),a.groupCount);}catch(e){return;}
+          if(newGroup===membershipGroup)return;
+          const msg=$("#gsJoinMsg"); if(msg) msg.textContent=`Giảng viên đã chuyển bạn sang Nhóm ${newGroup}.`;
+          revealParticipation(newGroup);
+        }));
+      }
     }
+    // GATE 2A-AUTH-I2-CORRECTION (Task G): a tiny, well-tested extension of the entry-time
+    // closed-activity guard (I2-FIX) — if the lecturer closes the room while this student's page
+    // is already open, the already-attached notes/topics listeners are now torn down and their
+    // content cleared live, matching the same "student must not continue accessing content"
+    // intent, without touching Rules or any server-side boundary (still frontend-only; the
+    // documented known risk is only that this reacts to the CLIENT's own live activity-doc
+    // listener, not a server-enforced guarantee — Stage 3 remains the real boundary).
+    const unsubA=onSnapshot(doc(publicDb,GROUP_COLLECTION,id),s=>{
+      if(!s.exists())return;
+      a={id,...s.data()};
+      $("#gsLiveTitle").textContent="👥 "+(a.title||"Thảo luận nhóm");
+      $("#gsLiveInstructions").textContent=a.instructions||"";
+      if(wasOpen && a.status!=="open"){wasOpen=false;detachScopedListeners();}
+      updateStudentState();
+    });
+    track(unsubA);
 
     if(membershipGroup){
       revealParticipation(membershipGroup);

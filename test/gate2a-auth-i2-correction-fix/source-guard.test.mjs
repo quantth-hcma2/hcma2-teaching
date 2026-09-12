@@ -149,9 +149,11 @@ test("17: no PII field (name/email/phone/className) was added anywhere in the me
 });
 
 // ---- 18: Rules unchanged ----
-
-test("18: firestore.rules.production-candidate is byte-identical to the I2-CORRECTION production hash — this gate is frontend-only", () => {
-  const rules = readFileSync(path.join(here, "..", "..", "firestore.rules.production-candidate"), "utf8").replace(/\r\n/g, "\n");
-  const hash = createHash("sha256").update(rules).digest("hex");
-  assert.equal(hash, "a092412e520e55228b6907a24bc206111ebd5ab979b48d3e711bf8aa6d11b89e");
-});
+//
+// This originally pinned the whole-file Rules hash to prove Gate 2A-AUTH-I2-CORRECTION-FIX was
+// frontend-only — true of that gate's own commit, but the same structural flaw as every prior
+// whole-file/whole-block Rules pin in this engagement: it cannot survive Gate 2A-AUTH-I3 (the
+// authorized Stage-3 gate) legitimately changing Rules next. Retired rather than re-pinned to a
+// new hash that would only break again at the next legitimate Rules gate; the historical fact
+// (this gate was frontend-only) is preserved in its own report/diff, and Rules integrity going
+// forward is covered by test/gate2a-auth-i3/final-hardening.test.mjs.

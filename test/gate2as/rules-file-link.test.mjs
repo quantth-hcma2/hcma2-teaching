@@ -46,6 +46,15 @@ const openGroupFixture = {
 async function seedOpenGroup(id, overrides) {
   await seedWithRulesDisabled(async (d) => { await setDoc(doc(d, "groupActivities", id), { ...openGroupFixture, ...overrides }); });
 }
+// GATE 2A-AUTH-I3 realignment: notes/photos/files create AND read now additionally require the
+// caller to have an own membership record whose group matches — a requirement that didn't exist
+// when this file was originally written (Gate 2A-S predates Gate 2A-AUTH-I1/I2/I3 entirely).
+// This does not change what Gate 2A-S itself is testing (the file-link scheme barrier); it just
+// satisfies the now-mandatory precondition so each test isolates the ONE thing it names, rather
+// than failing on an unrelated, confounding reason.
+async function seedMembership(activityId, uid, group) {
+  await seedWithRulesDisabled(async (d) => { await setDoc(doc(d, "groupActivities", activityId, "members", uid), { group, joinedAt: new Date(), joinCode: openGroupFixture.joinCode }); });
+}
 
 function fileDoc(overrides) {
   return { group: 1, participantId: "student-1", createdAt: serverTimestamp(), ...overrides };
@@ -56,19 +65,19 @@ function fileDoc(overrides) {
 // =====================================================================================
 
 test("files.link — ALLOW: https:// link", async () => {
-  await seedUsers(); await seedOpenGroup("g1");
+  await seedUsers(); await seedOpenGroup("g1"); await seedMembership("g1", "student-1", 1);
   const d = db(studentCtx("student-1"));
   await assertSucceeds(addDoc(collection(d, "groupActivities", "g1", "files"), fileDoc({ name: "Liên kết nhóm", link: "https://example.com/doc" })));
 });
 
 test("files.link — ALLOW: http:// link", async () => {
-  await seedUsers(); await seedOpenGroup("g1");
+  await seedUsers(); await seedOpenGroup("g1"); await seedMembership("g1", "student-1", 1);
   const d = db(studentCtx("student-1"));
   await assertSucceeds(addDoc(collection(d, "groupActivities", "g1", "files"), fileDoc({ name: "Liên kết nhóm", link: "http://example.com/doc" })));
 });
 
 test("files — REGRESSION ALLOW: unaffected Storage-backed url/storagePath branch still passes", async () => {
-  await seedUsers(); await seedOpenGroup("g1");
+  await seedUsers(); await seedOpenGroup("g1"); await seedMembership("g1", "student-1", 1);
   const d = db(studentCtx("student-1"));
   await assertSucceeds(addDoc(collection(d, "groupActivities", "g1", "files"), fileDoc({
     name: "bai.pdf", url: "https://firebasestorage.googleapis.com/v0/b/x/o/bai.pdf", storagePath: "groupActivities/g1/files/student-1/1_bai.pdf", size: 1000, contentType: "application/pdf"
@@ -94,20 +103,20 @@ const denyLinks = {
 
 for (const [label, link] of Object.entries(denyLinks)) {
   test(`files.link — DENY: ${label}`, async () => {
-    await seedUsers(); await seedOpenGroup("g1");
+    await seedUsers(); await seedOpenGroup("g1"); await seedMembership("g1", "student-1", 1);
     const d = db(studentCtx("student-1"));
     await assertFails(addDoc(collection(d, "groupActivities", "g1", "files"), fileDoc({ name: "x", link })));
   });
 }
 
 test("files.link — DENY: still rejects oversized value (>2000 chars) [pre-existing constraint, regression]", async () => {
-  await seedUsers(); await seedOpenGroup("g1");
+  await seedUsers(); await seedOpenGroup("g1"); await seedMembership("g1", "student-1", 1);
   const d = db(studentCtx("student-1"));
   await assertFails(addDoc(collection(d, "groupActivities", "g1", "files"), fileDoc({ name: "x", link: "https://example.com/" + "a".repeat(2000) })));
 });
 
 test("files.link — DENY: still rejects wrong type (number) [pre-existing constraint, regression]", async () => {
-  await seedUsers(); await seedOpenGroup("g1");
+  await seedUsers(); await seedOpenGroup("g1"); await seedMembership("g1", "student-1", 1);
   const d = db(studentCtx("student-1"));
   await assertFails(addDoc(collection(d, "groupActivities", "g1", "files"), fileDoc({ name: "x", link: 12345 })));
 });
@@ -120,7 +129,7 @@ test("files.link — DENY: still rejects wrong type (number) [pre-existing const
 // =====================================================================================
 
 test("files — LEGACY: a historical doc with an unsafe link (seeded with Rules disabled, simulating pre-Gate-2A-S data) remains readable, is never modified or deleted by this gate", async () => {
-  await seedUsers(); await seedOpenGroup("g1");
+  await seedUsers(); await seedOpenGroup("g1"); await seedMembership("g1", "student-1", 1);
   await seedWithRulesDisabled(async (d) => {
     await setDoc(doc(d, "groupActivities", "g1", "files", "legacy-bad-1"), fileDoc({ name: "old", link: "javascript:alert(1)" }));
   });
@@ -134,7 +143,7 @@ test("files — LEGACY: a historical doc with an unsafe link (seeded with Rules 
 // =====================================================================================
 
 test("notes — REGRESSION ALLOW: unrelated Group write path untouched by this gate", async () => {
-  await seedUsers(); await seedOpenGroup("g1");
+  await seedUsers(); await seedOpenGroup("g1"); await seedMembership("g1", "student-1", 1);
   const d = db(studentCtx("student-1"));
   await assertSucceeds(addDoc(collection(d, "groupActivities", "g1", "notes"), { group: 1, text: "Ý kiến của tôi", participantId: "student-1", createdAt: serverTimestamp() }));
 });

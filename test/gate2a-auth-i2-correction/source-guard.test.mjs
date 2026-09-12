@@ -92,19 +92,13 @@ test("J8: no PII field was added to the membership create/update allowlists in R
   assert.match(block, /hasOnly\(\['group'\]\)/, "the update allowlist must remain exactly group only");
 });
 
-test("J9: topics/notes/photos/files Rules were NOT Stage-3-tightened in this gate — only the members{} block changed", () => {
-  const repoRoot = path.join(here, "..", "..");
-  const BASELINE_COMMIT = "289183dee639e8a847d0dc010945687fb958af81"; // AUTH-I2 production HEAD
-  const baseline = execSync(`git show ${BASELINE_COMMIT}:firestore.rules.production-candidate`, { cwd: repoRoot, encoding: "utf8" }).replace(/\r\n/g, "\n");
-  const candidate = readFileSync(path.join(here, "..", "..", "firestore.rules.production-candidate"), "utf8").replace(/\r\n/g, "\n");
-  for (const collectionName of ["topics", "notes", "photos", "files"]) {
-    const pattern = new RegExp(`match /${collectionName}/\\{[a-zA-Z]+\\} \\{[\\s\\S]*?\\n {6}\\}`);
-    const baselineBlock = baseline.match(pattern);
-    const candidateBlock = candidate.match(pattern);
-    assert.ok(baselineBlock && candidateBlock, `could not locate ${collectionName}{} block in one of the two files`);
-    assert.equal(candidateBlock[0], baselineBlock[0], `${collectionName}{} Rules block must be byte-identical to the AUTH-I2 production baseline — this gate must not touch Stage-3 read/write policy`);
-  }
-});
+// J9 originally asserted "topics/notes/photos/files byte-identical to the AUTH-I2 baseline —
+// not Stage-3-tightened here." That was correct for THIS gate (Gate 2A-AUTH-I2-CORRECTION
+// really only added the members{} `list` clause) but is now, by design, exactly what Gate
+// 2A-AUTH-I3 (the actual Stage-3 gate) changes — re-asserting it here would be asserting a
+// now-intentionally-false claim. The historical fact (I2-CORRECTION itself didn't touch these)
+// is preserved in that gate's own diff/report; the CURRENT shape of topics/notes/photos/files is
+// covered by test/gate2a-auth-i3/final-hardening.test.mjs instead.
 
 // ---- Task E/F structural proofs (student live reassignment) ----
 

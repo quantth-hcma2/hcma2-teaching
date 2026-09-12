@@ -806,6 +806,33 @@ service cloud.firestore {
     }
 
 
+    // ---------------- THẢO LUẬN NHÓM — GATE 2A-AUTH-I3 helpers ----------------
+    // Final Stage-3 authorization: a student may read a group's topic/notes/photos/files ONLY
+    // while the parent activity is open AND their own membership record's group matches — never
+    // based on a client-selected/self-declared group. Owner/admin bypass this entirely (their
+    // access is unconditional and survives close, matching the frozen product policy).
+    function groupActivityData(activityId) {
+      return get(/databases/$(database)/documents/groupActivities/$(activityId)).data;
+    }
+    function isGroupOwnerOrAdmin(activityId) {
+      return isAdmin() ||
+        (isActiveTeacher() && groupActivityData(activityId).ownerId == request.auth.uid);
+    }
+    function groupMembershipData(activityId) {
+      return get(/databases/$(database)/documents/groupActivities/$(activityId)/members/$(request.auth.uid)).data;
+    }
+    // True only if the caller is signed in, the activity is currently open, a membership record
+    // for the caller's own uid exists, and that membership's group equals the group being
+    // checked. `group` is always compared as the int type membership.group is stored as
+    // (Gate 2A-AUTH-I1's create rule enforces `group is int`) — callers with a string group
+    // identifier (topics' path-segment document ID) must convert before calling this.
+    function isOpenGroupMember(activityId, group) {
+      return isSignedIn() &&
+        groupActivityData(activityId).status == 'open' &&
+        exists(/databases/$(database)/documents/groupActivities/$(activityId)/members/$(request.auth.uid)) &&
+        groupMembershipData(activityId).group == group;
+    }
+
     // ---------------- THẢO LUẬN NHÓM ----------------
     // Giảng viên chỉ quản lý hoạt động của chính mình; Admin quản lý toàn bộ.
     // Học viên dùng Anonymous Auth và chỉ được gửi dữ liệu khi hoạt động đang mở.
@@ -960,7 +987,17 @@ service cloud.firestore {
       }
 
       match /topics/{groupId} {
-        allow read: if isSignedIn();
+        // GATE 2A-AUTH-I3: student read is scoped to their OWN group's topic only, and only
+        // while the activity is open. groupId is always a string path segment; membership.group
+        // is always stored as int (Gate 2A-AUTH-I1's create rule enforces this) — int(groupId)
+        // makes the conversion explicit rather than relying on any assumed coercion.
+        allow get: if isGroupOwnerOrAdmin(activityId) ||
+          isOpenGroupMember(activityId, int(groupId));
+
+        // Students never list topics — the frontend only ever getDoc()s/onSnapshot()s a single,
+        // deterministic doc for their own group. list stays owner/admin-only, matching
+        // groupLive()'s own unfiltered onSnapshot(collection(...,"topics")).
+        allow list: if isGroupOwnerOrAdmin(activityId);
 
         // Topic được tạo cùng batch với activity mới.
         allow create: if isAdmin() ||
@@ -973,12 +1010,20 @@ service cloud.firestore {
       }
 
       match /notes/{noteId} {
-        allow read: if isSignedIn();
+        // GATE 2A-AUTH-I3: student read scoped to their own membership.group; owner/admin
+        // unconditional (survives close). Empirically proven (Gate 2A-AUTH-DESIGN probe) that a
+        // student's where("group","==",membershipGroup) query is accepted by this shape, an
+        // unfiltered query is denied, and a mismatched group value is denied.
+        allow read: if isGroupOwnerOrAdmin(activityId) ||
+          isOpenGroupMember(activityId, resource.data.group);
         allow create: if isSignedIn() &&
           get(/databases/$(database)/documents/groupActivities/$(activityId)).data.status == 'open' &&
+          get(/databases/$(database)/documents/groupActivities/$(activityId)).data.allowText == true &&
           request.resource.data.participantId == request.auth.uid &&
           request.resource.data.group >= 1 &&
           request.resource.data.group <= get(/databases/$(database)/documents/groupActivities/$(activityId)).data.groupCount &&
+          exists(/databases/$(database)/documents/groupActivities/$(activityId)/members/$(request.auth.uid)) &&
+          groupMembershipData(activityId).group == request.resource.data.group &&
           request.resource.data.text is string &&
           request.resource.data.text.size() > 0 &&
           request.resource.data.text.size() <= 1500 &&
@@ -990,13 +1035,17 @@ service cloud.firestore {
       }
 
       match /photos/{photoId} {
-        allow read: if isSignedIn();
+        // GATE 2A-AUTH-I3: same scoped-read shape as notes.
+        allow read: if isGroupOwnerOrAdmin(activityId) ||
+          isOpenGroupMember(activityId, resource.data.group);
         allow create: if isSignedIn() &&
           get(/databases/$(database)/documents/groupActivities/$(activityId)).data.status == 'open' &&
           get(/databases/$(database)/documents/groupActivities/$(activityId)).data.allowPhoto == true &&
           request.resource.data.participantId == request.auth.uid &&
           request.resource.data.group >= 1 &&
           request.resource.data.group <= get(/databases/$(database)/documents/groupActivities/$(activityId)).data.groupCount &&
+          exists(/databases/$(database)/documents/groupActivities/$(activityId)/members/$(request.auth.uid)) &&
+          groupMembershipData(activityId).group == request.resource.data.group &&
           request.resource.data.url is string &&
           request.resource.data.storagePath is string &&
           request.resource.data.size is int &&
@@ -1009,15 +1058,19 @@ service cloud.firestore {
       }
 
       match /files/{fileId} {
-        allow read: if isSignedIn();
+        // GATE 2A-AUTH-I3: same scoped-read shape as notes/photos.
+        allow read: if isGroupOwnerOrAdmin(activityId) ||
+          isOpenGroupMember(activityId, resource.data.group);
         allow create: if isSignedIn() &&
           get(/databases/$(database)/documents/groupActivities/$(activityId)).data.status == 'open' &&
           get(/databases/$(database)/documents/groupActivities/$(activityId)).data.allowFile == true &&
           request.resource.data.participantId == request.auth.uid &&
           request.resource.data.group >= 1 &&
           request.resource.data.group <= get(/databases/$(database)/documents/groupActivities/$(activityId)).data.groupCount &&
+          exists(/databases/$(database)/documents/groupActivities/$(activityId)/members/$(request.auth.uid)) &&
+          groupMembershipData(activityId).group == request.resource.data.group &&
           request.resource.data.createdAt == request.time &&
-          (
+          ( // GATE 2A-S file-link XSS defense — unchanged, preserved exactly:
             (
               request.resource.data.url is string &&
               request.resource.data.storagePath is string &&
@@ -1041,12 +1094,12 @@ service cloud.firestore {
            get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
       }
 
-      // GATE 2A-AUTH-I1 (Stage 1 of 3 — purely additive): membership record proving which group
-      // a signed-in identity actually belongs to in this activity. Not yet read or written by
-      // production frontend, and not yet depended on by topics/notes/photos/files above — those
-      // keep their existing, unchanged rules in this gate. Exists solely so Stage 2 (frontend)
-      // has something to write to before Stage 3 (a later gate) ever tightens the read rules
-      // above to depend on it. See the Gate 2A-AUTH-DESIGN report for full reasoning.
+      // GATE 2A-AUTH-I1: membership record proving which group a signed-in identity actually
+      // belongs to in this activity. As of GATE 2A-AUTH-I3, topics/notes/photos/files above now
+      // depend on this collection for their scoped student read/write authorization — see
+      // isOpenGroupMember()/groupMembershipData() above. This match block's own get/list/create/
+      // update/delete policy is unchanged from Gate 2A-AUTH-I2-CORRECTION; I3 only ever reads
+      // from it, never writes to it, and never widens who may write to it.
       match /members/{uid} {
         // The member themselves (needed by the frontend to detect an idempotent rejoin without
         // ever hitting the immutable-update deny below), or the owning teacher/admin (needed to

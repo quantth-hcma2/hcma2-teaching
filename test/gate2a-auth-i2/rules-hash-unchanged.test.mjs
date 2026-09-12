@@ -1,17 +1,14 @@
-// Gate 2A-AUTH-I2 — Task M source guard, realigned by Gate 2A-AUTH-I2-CORRECTION-R1.
+// Gate 2A-AUTH-I2 — Task M source guard, realigned by Gate 2A-AUTH-I2-CORRECTION-R1, then again
+// by Gate 2A-AUTH-I3.
 //
 // The original version of this test pinned the WHOLE Rules file to a single sha256 hash,
 // correct for Gate 2A-AUTH-I2 itself (which really was frontend-only) but structurally
-// incompatible with any later, separately-authorized gate ever touching Rules again — which was
-// always going to happen eventually (Stage 3 itself will touch topics/notes/photos/files).
-// Rather than re-pin a new whole-file hash (which would just repeat the same problem one commit
-// later) or delete this test (losing real coverage), it now proves the SAME underlying security
-// intent semantically: relative to the exact AUTH-I2 production baseline, the get/create/update/
-// delete rules on groupActivities/{id}/members/{uid} are unchanged (ignoring comment wording),
-// topics/notes/photos/files are byte-identical, and the only new capability anywhere is the
-// owner/admin `list` clause Gate 2A-AUTH-I2-CORRECTION added. Any unrelated Rules change —
-// including any Stage-3-style tightening of topics/notes/photos/files, or any weakening of the
-// member get/create/update/delete policy — fails this test.
+// incompatible with any later, separately-authorized gate ever touching Rules again. R1 replaced
+// that with per-clause proofs on members{} plus a "topics/notes/photos/files byte-identical, no
+// Stage-3 tightening" check — which was itself exactly the assertion Gate 2A-AUTH-I3 (the actual
+// Stage-3 gate) was always going to make false on purpose. That check has now been retired (see
+// below); the members{} get/create/update/delete/list proofs remain, since I3 did not touch
+// membership policy at all.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -33,12 +30,6 @@ function membersBlock(text) {
   const endIdx = text.indexOf("// Mã tham gia phòng nhóm");
   assert.ok(startIdx !== -1 && endIdx !== -1 && endIdx > startIdx, "could not locate the members{} block");
   return text.slice(startIdx, endIdx);
-}
-function namedBlock(text, collectionName) {
-  const pattern = new RegExp(`match /${collectionName}/\\{[a-zA-Z]+\\} \\{[\\s\\S]*?\\n {6}\\}`);
-  const m = text.match(pattern);
-  assert.ok(m, `could not locate ${collectionName}{} block`);
-  return m[0];
 }
 // Extracts just the rule expression for one `allow <keyword>:` statement, ignoring whatever
 // comment precedes it and normalizing whitespace — so a pure comment reword (like the one Gate
@@ -90,8 +81,11 @@ test("MEMBERS list: did NOT exist in the AUTH-I2 baseline, exists now, and is ow
   assert.doesNotMatch(c, /request\.auth\.uid == uid/, "list must not be grantable to a student by uid match — students get no list at all");
 });
 
-for (const collectionName of ["topics", "notes", "photos", "files"]) {
-  test(`${collectionName.toUpperCase()}: byte-identical to the AUTH-I2 baseline — no Stage-3 tightening introduced`, () => {
-    assert.equal(namedBlock(candidate, collectionName), namedBlock(baseline, collectionName));
-  });
-}
+// The topics/notes/photos/files "byte-identical — no Stage-3 tightening" assertions that used to
+// live here were retired by GATE 2A-AUTH-I3: their entire premise (these collections must stay
+// untouched) is exactly what I3 is explicitly authorized to change, so re-asserting it would be
+// asserting a now-intentionally-false claim, not a stale-but-harmless one. The historical fact
+// this test protected — that Gate 2A-AUTH-I2 (and I2-CORRECTION) themselves never touched these
+// collections — remains true and is preserved by this file's diff history; the CURRENT shape of
+// topics/notes/photos/files is now covered by test/gate2a-auth-i3/final-hardening.test.mjs
+// instead, which is the correct successor for that invariant going forward.

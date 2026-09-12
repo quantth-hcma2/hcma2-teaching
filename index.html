@@ -2012,6 +2012,18 @@ async function renderGroupStudentEntry(){
     if(!aSnap.exists()) throw {code:"not-found"};
     let a={id,...aSnap.data()};
 
+    // GATE 2A-AUTH-I2-FIX: status is checked BEFORE membership bootstrap and BEFORE any Group
+    // content listener is even considered — a non-open activity (draft or closed) must never
+    // reach the membership getDoc, never attach notes/topics listeners, and never reveal
+    // submission UI, regardless of whether the caller already has a membership record. This is
+    // a frontend-only, defense-in-depth alignment with the final Stage-3 policy (owner/admin
+    // historical access is untouched — this function only ever governs the student path); the
+    // real security boundary is enforced server-side once a later gate tightens Rules.
+    if(a.status!=="open"){
+      appRoot().innerHTML=`<div class="group-student-wrap"><div class="center-screen"><div class="ic" style="font-size:48px">🔒</div><h2>${esc(a.title||"Thảo luận nhóm")}</h2><p class="mut">${a.status==="closed"?"Phòng đã đóng.":"Phòng chưa mở."}</p></div></div>`;
+      return;
+    }
+
     // GATE 2A-AUTH-I2: check for an existing membership BEFORE rendering the interactive
     // selector — a returning student must never be offered a "choose your group" control
     // that could imply their group is still changeable (Gate 2A-AUTH-DESIGN Task D:

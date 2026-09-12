@@ -66,7 +66,7 @@ function pickManifest(data, fields) {
 // serialized identically as `[{}]`. This canonicalizes recursively (sorted keys at every level,
 // arrays compared element-by-element) so equality is real structural equality, not an artifact
 // of which key names happen to coincide between a container and its own nested children.
-function canonicalize(value) {
+export function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value && typeof value === "object") {
     const out = {};
@@ -75,7 +75,7 @@ function canonicalize(value) {
   }
   return value;
 }
-function stableEqual(a, b) {
+export function stableEqual(a, b) {
   return JSON.stringify(canonicalize(a)) === JSON.stringify(canonicalize(b));
 }
 
@@ -289,7 +289,7 @@ function buildQuestionManifestEntry(configId, order, raw) {
 // every revision's questions are new documents, never a reuse of the prior revision's IDs, even
 // when the semantic content is byte-identical. A revision-0 (activation_baseline) parent has no
 // prior questions at all — never fabricated, carried forward as an empty array.
-function buildInteractionManifest({ configId, actorUid, currentConfigData, changes }) {
+export function buildInteractionManifest({ configId, actorUid, currentConfigData, changes }) {
   const isBaseline = currentConfigData.kind === "activation_baseline";
   const prevQuestions = isBaseline ? [] : (Array.isArray(currentConfigData.questions) ? currentConfigData.questions : []);
   const rawQuestions = "questions" in changes ? changes.questions : prevQuestions;
@@ -315,7 +315,7 @@ function buildInteractionManifest({ configId, actorUid, currentConfigData, chang
 // fresh configId (and therefore fresh questionId/roundId) on every call attempt by design, so
 // comparing those would make every retry look like a mismatch even when the semantic authoring
 // content is byte-identical.
-function semanticManifestForCompare(manifest) {
+export function semanticManifestForCompare(manifest) {
   const { questions, roundId, parentConfigId, createdAt, createdBy, active, source, kind, revision, ...rest } = manifest || {};
   return {
     ...rest,

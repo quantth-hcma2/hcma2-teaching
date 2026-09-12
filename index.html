@@ -489,6 +489,9 @@ import {
 // to read yet, and wiring it into the live render paths without that is Gate 1B.2 scope.
 import { isContractSession, assertLegacyWritable, resolveSessionSemantics, makeFirestoreDbFacade } from "./session-reader.mjs";
 import { qrModalViewModel, presentationRenderState, buildInteractionJsonExport, liveTitleForSnapshot } from "./session-view.mjs";
+// GATE 1B.3-D1: Contract Interaction semantic editor logic. Never imported by any Group
+// Discussion / Knowledge Co-creation / AI-Second-Brain code path — sessions/Interaction only.
+import { resolveEditorEntryState, saveInteractionRevision, shouldDisableLegacyTimeEdit } from "./contract-editor.mjs";
 
 /* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
 const firebaseConfig = {
@@ -835,6 +838,189 @@ async function openSessionInfoEditor(kind,id,onSaved){
     }
     catch(e){error.textContent=e.code?mapError(e):e.message;}
     finally{busy=false;save.disabled=false;cancel.disabled=false;host.querySelectorAll("input,textarea").forEach(el=>el.disabled=false);}
+  };
+}
+
+/* ---------------- GATE 1B.3-D1: Contract Interaction semantic editor ----------------
+   Loads/saves through contract-editor.mjs (which itself only ever calls the completed
+   session-reader.mjs / contract-writer.mjs) — this block is DOM wiring only, no semantic or
+   security logic of its own. See contract-editor.mjs for the load/change-detection/save
+   behavior this wires up, and test/gate1b3d1/ for its coverage. */
+function contractEditorQuestionCard(q, idx, total){
+  const meta = QUESTION_TYPES[q.type] || QUESTION_TYPES.single;
+  const isPreset = TIMER_PRESETS.some(t=>t.value===q.timeLimit);
+  return `<div class="card mt-8" data-ceq="${idx}">
+    <div class="flex-between">
+      <b>Câu ${idx+1}</b>
+      <div class="flex gap-8">
+        <button type="button" class="btn btn-sm btn-ghost" data-ce-up="${idx}" ${idx===0?"disabled":""} title="Chuyển lên">▲</button>
+        <button type="button" class="btn btn-sm btn-ghost" data-ce-down="${idx}" ${idx===total-1?"disabled":""} title="Chuyển xuống">▼</button>
+        <button type="button" class="btn btn-sm btn-danger" data-ce-remove="${idx}" title="Xóa câu hỏi">✕</button>
+      </div>
+    </div>
+    <div class="field mt-8"><label>Loại câu hỏi</label>
+      <select data-ce-field="type" data-ce-idx="${idx}">
+        ${Object.entries(QUESTION_TYPES).map(([k,v])=>`<option value="${k}" ${q.type===k?"selected":""}>${v.icon} ${esc(v.label)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="field"><label>Nội dung câu hỏi</label><textarea rows="2" data-ce-field="question" data-ce-idx="${idx}">${esc(q.question)}</textarea></div>
+    <div class="field"><label>Mô tả (tùy chọn)</label><textarea rows="2" data-ce-field="description" data-ce-idx="${idx}">${esc(q.description||"")}</textarea></div>
+    <label class="flex gap-8" style="align-items:center;"><input type="checkbox" data-ce-field="required" data-ce-idx="${idx}" ${q.required?"checked":""}> Bắt buộc trả lời</label>
+    <label class="flex gap-8 mt-8" style="align-items:center;"><input type="checkbox" data-ce-field="allowChangeAnswer" data-ce-idx="${idx}" ${q.allowChangeAnswer?"checked":""}> Cho phép sửa câu trả lời</label>
+    <div class="field mt-8"><label>Kiểu biểu đồ</label>
+      <select data-ce-field="chartType" data-ce-idx="${idx}">
+        ${meta.allowedCharts.map(ct=>`<option value="${ct}" ${q.chartType===ct?"selected":""}>${esc(CHART_LABELS[ct])}</option>`).join("")}
+      </select>
+    </div>
+    <div class="field"><label>Thời gian trả lời</label>
+      <select data-ce-field="timeLimitPreset" data-ce-idx="${idx}">
+        ${TIMER_PRESETS.map(t=>`<option value="${t.value}" ${q.timeLimit===t.value?"selected":""}>${esc(t.label)}</option>`).join("")}
+        <option value="custom" ${!isPreset?"selected":""}>Tùy chỉnh…</option>
+      </select>
+    </div>
+    <div class="field ${isPreset?"hidden":""}" data-ce-custom-time="${idx}">
+      <label>Số phút tùy chỉnh</label>
+      <input type="number" min="1" step="1" data-ce-field="timeLimitCustomMinutes" data-ce-idx="${idx}" value="${q.timeLimit?Math.max(1,Math.round(q.timeLimit/60)):10}">
+    </div>
+    ${q.type==="scale" ? `
+    <div class="flex gap-8">
+      <div class="field"><label>Giá trị nhỏ nhất</label><input type="number" data-ce-field="scaleMin" data-ce-idx="${idx}" value="${q.scaleMin??1}"></div>
+      <div class="field"><label>Giá trị lớn nhất</label><input type="number" data-ce-field="scaleMax" data-ce-idx="${idx}" value="${q.scaleMax??5}"></div>
+    </div>` : ""}
+    ${meta.needsOptions && q.type!=="truefalse" ? `
+    <div class="mt-8"><label>Phương án trả lời</label>
+      ${q.options.map((o,oi)=>`<div class="flex gap-8 mt-8" style="align-items:center;">
+        <input type="text" placeholder="Nhãn (VD: A)" style="max-width:90px;" data-ce-opt-field="label" data-ce-idx="${idx}" data-ce-opt-idx="${oi}" value="${esc(o.label||"")}">
+        <input type="text" placeholder="Nội dung phương án" data-ce-opt-field="text" data-ce-idx="${idx}" data-ce-opt-idx="${oi}" value="${esc(o.text||"")}">
+        <button type="button" class="btn btn-sm btn-ghost" data-ce-opt-remove="${idx}" data-ce-opt-idx="${oi}" ${q.options.length<=1?"disabled":""}>✕</button>
+      </div>`).join("")}
+      <button type="button" class="btn btn-sm btn-outline mt-8" data-ce-opt-add="${idx}">+ Thêm phương án</button>
+    </div>` : q.type==="truefalse" ? `<p class="small mut mt-8">Phương án cố định: Đúng / Sai.</p>` : ""}
+  </div>`;
+}
+function newContractQuestionDraft(){
+  return { type:"single", question:"", description:"", required:true, chartType:QUESTION_TYPES.single.defaultChart,
+    timeLimit:0, allowChangeAnswer:false, scaleMin:1, scaleMax:5,
+    options:[{label:"A",text:"",value:null,isCorrect:null},{label:"B",text:"",value:null,isCorrect:null}] };
+}
+async function openContractInteractionEditor(sessionId, onSaved){
+  const sessionRef = doc(db,"sessions",sessionId);
+  let sessionSnap;
+  try{ sessionSnap = await getDoc(sessionRef); }catch(e){ toast(mapError(e),"err"); return; }
+  if(!sessionSnap.exists()){ toast("Phiên không còn tồn tại.","err"); return; }
+  const sessionData = sessionSnap.data();
+  if(sessionData.ownerId!==STATE.user.uid && !(STATE.profile?.role==="admin" && STATE.profile.status==="active")){
+    toast("Bạn không có quyền sửa phiên này.","err"); return;
+  }
+  let entryState;
+  try{
+    const dbFacade = makeFirestoreDbFacade(db, { doc, getDoc, collection, getDocs, query, where });
+    entryState = await resolveEditorEntryState(dbFacade, `sessions/${sessionId}`, sessionData, sessionId);
+  }catch(e){ toast(mapError(e) || e.message || "Không thể tải cấu hình hợp đồng cho phiên này.", "err"); return; }
+  if(entryState.mode==="legacy"){
+    // GATE 1B.3-D1 item 1: never auto-activate Contract mode from this entry point — that
+    // remains a separate, explicit action elsewhere. Fall back to the unchanged Gate 1A editor.
+    openSessionInfoEditor("sessions", sessionId, onSaved);
+    return;
+  }
+  const banner = entryState.mode==="rev0"
+    ? `⚠️ Đây sẽ là <b>phiên bản nội dung đầu tiên (rev1)</b> theo cơ chế hợp đồng phiên bản. Nội dung câu hỏi cũ hiện tại được nạp sẵn bên dưới để bạn xác nhận/chỉnh sửa — đây KHÔNG phải một bản chụp chính xác tại thời điểm lưu, mà là nội dung đã được bạn xác nhận trong màn hình sửa này.`
+    : `Đang sửa trên <b>phiên bản hiện hành (rev${entryState.expectedRevision})</b>. Lưu sẽ tạo một <b>phiên bản mới</b> (rev${entryState.expectedRevision+1}) — không sửa trực tiếp phiên bản cũ.`;
+  const state = {
+    title: entryState.editorSeed.title, description: entryState.editorSeed.description,
+    allowMultipleResponses: !!entryState.editorSeed.allowMultipleResponses,
+    anonymous: !!entryState.editorSeed.anonymous, showResponderCount: !!entryState.editorSeed.showResponderCount,
+    questions: entryState.editorSeed.questions.map(q=>({...q, options:(q.options||[]).map(o=>({...o}))}))
+  };
+  const host = openModal(`
+    <div class="flex-between"><h3>Sửa nội dung phiên (hợp đồng phiên bản)</h3><button type="button" class="btn btn-sm btn-ghost" id="ceClose">✕</button></div>
+    <p class="hint">${banner}</p>
+    <div class="field"><label>Tên phiên</label><input type="text" id="ceTitle" value="${esc(state.title)}"></div>
+    <div class="field"><label>Mô tả</label><textarea rows="3" id="ceDescription">${esc(state.description)}</textarea></div>
+    <label class="flex gap-8 mt-8" style="align-items:center;"><input type="checkbox" id="ceAllowMultiple" ${state.allowMultipleResponses?"checked":""}> Cho phép trả lời nhiều lần</label>
+    <label class="flex gap-8 mt-8" style="align-items:center;"><input type="checkbox" id="ceAnonymous" ${state.anonymous?"checked":""}> Ẩn danh</label>
+    <label class="flex gap-8 mt-8" style="align-items:center;"><input type="checkbox" id="ceShowResponderCount" ${state.showResponderCount?"checked":""}> Hiển thị số lượt trả lời</label>
+    <div class="flex-between mt-14"><h4 id="ceQCount" style="margin:0;">Câu hỏi (${state.questions.length}/100)</h4><button type="button" class="btn btn-sm btn-outline" id="ceAddQuestion">+ Thêm câu hỏi</button></div>
+    <div id="ceQuestions"></div>
+    <div id="ceError" class="error-text mt-8" role="alert"></div>
+    <div class="flex-between mt-14"><button class="btn btn-ghost" id="ceCancel">HỦY</button><button class="btn" id="ceSave">LƯU PHIÊN BẢN MỚI</button></div>
+  `, true);
+  function renderQuestions(){
+    $("#ceQuestions").innerHTML = state.questions.map((q,i)=>contractEditorQuestionCard(q,i,state.questions.length)).join("") ||
+      `<p class="mut small mt-8">Chưa có câu hỏi nào.</p>`;
+    if($("#ceQCount")) $("#ceQCount").textContent = `Câu hỏi (${state.questions.length}/100)`;
+    $("#ceQuestions").querySelectorAll("[data-ce-field]").forEach(el=>{
+      const idx=Number(el.dataset.ceIdx), field=el.dataset.ceField;
+      el.onchange=()=>{
+        const q=state.questions[idx];
+        if(field==="type"){
+          q.type=el.value;
+          const meta=QUESTION_TYPES[q.type];
+          if(!meta.allowedCharts.includes(q.chartType)) q.chartType=meta.defaultChart;
+          if(q.type==="truefalse") q.options=QUESTION_TYPES.truefalse.fixedOptions.map((label,i)=>({label,text:label,value:null,isCorrect:null}));
+          else if(meta.needsOptions && q.options.length===0) q.options=[{label:"A",text:"",value:null,isCorrect:null},{label:"B",text:"",value:null,isCorrect:null}];
+          renderQuestions();
+        } else if(field==="timeLimitPreset"){
+          if(el.value==="custom"){ renderQuestions(); return; }
+          q.timeLimit=Number(el.value); renderQuestions();
+        } else if(field==="timeLimitCustomMinutes"){
+          q.timeLimit=Math.max(1,Math.round(Number(el.value)||1))*60;
+        } else if(field==="required" || field==="allowChangeAnswer"){
+          q[field]=el.checked;
+        } else if(field==="scaleMin" || field==="scaleMax"){
+          q[field]=Number(el.value);
+        } else {
+          q[field]=el.value;
+        }
+      };
+    });
+    $("#ceQuestions").querySelectorAll("[data-ce-opt-field]").forEach(el=>{
+      el.onchange=()=>{ state.questions[Number(el.dataset.ceIdx)].options[Number(el.dataset.ceOptIdx)][el.dataset.ceOptField]=el.value; };
+    });
+    $("#ceQuestions").querySelectorAll("[data-ce-opt-add]").forEach(b=>b.onclick=()=>{
+      state.questions[Number(b.dataset.ceOptAdd)].options.push({label:"",text:"",value:null,isCorrect:null}); renderQuestions();
+    });
+    $("#ceQuestions").querySelectorAll("[data-ce-opt-remove]").forEach(b=>b.onclick=()=>{
+      const q=state.questions[Number(b.dataset.ceOptRemove)]; q.options.splice(Number(b.dataset.ceOptIdx),1); renderQuestions();
+    });
+    $("#ceQuestions").querySelectorAll("[data-ce-remove]").forEach(b=>b.onclick=()=>{ state.questions.splice(Number(b.dataset.ceRemove),1); renderQuestions(); });
+    $("#ceQuestions").querySelectorAll("[data-ce-up]").forEach(b=>b.onclick=()=>{ const i=Number(b.dataset.ceUp); if(i>0){[state.questions[i-1],state.questions[i]]=[state.questions[i],state.questions[i-1]]; renderQuestions();} });
+    $("#ceQuestions").querySelectorAll("[data-ce-down]").forEach(b=>b.onclick=()=>{ const i=Number(b.dataset.ceDown); if(i<state.questions.length-1){[state.questions[i+1],state.questions[i]]=[state.questions[i],state.questions[i+1]]; renderQuestions();} });
+  }
+  renderQuestions();
+  $("#ceAddQuestion").onclick=()=>{ if(state.questions.length>=100){toast("Đã đạt số câu hỏi tối đa (100) cho một phiên bản.","warn");return;} state.questions.push(newContractQuestionDraft()); renderQuestions(); };
+  const closeBtn=host.querySelector("#ceClose"), cancel=host.querySelector("#ceCancel"), save=host.querySelector("#ceSave"), error=host.querySelector("#ceError");
+  let busy=false;
+  host.querySelector("#modalBackdrop").addEventListener("click",e=>{if(busy)e.stopImmediatePropagation();},true);
+  closeBtn.onclick=cancel.onclick=()=>{if(!busy)closeModal();};
+  save.onclick=async()=>{
+    if(busy)return; busy=true; save.disabled=true; cancel.disabled=true; error.textContent="";
+    const candidateChanges = {
+      title: $("#ceTitle").value, description: $("#ceDescription").value,
+      allowMultipleResponses: $("#ceAllowMultiple").checked, anonymous: $("#ceAnonymous").checked,
+      showResponderCount: $("#ceShowResponderCount").checked,
+      questions: state.questions.map(q=>({...q}))
+    };
+    const operationId = crypto.randomUUID?crypto.randomUUID():`${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    try{
+      const outcome = await saveInteractionRevision({
+        db, firestore:{doc,collection,runTransaction,serverTimestamp,getDoc},
+        sessionId, actorUid: STATE.user.uid, operationId, mode: entryState.mode,
+        expectedRevision: entryState.expectedRevision, editorSeed: entryState.editorSeed,
+        candidateChanges, legacyQuestionsForSnapshot: entryState.legacyQuestionsForSnapshot
+      });
+      closeModal();
+      if(outcome.noChange){ toast("Không có thay đổi cần lưu.","ok"); }
+      else{
+        toast(`Đã lưu phiên bản nội dung mới (rev${outcome.result.resultingRevision}). Màn hình lớp học/trình chiếu chưa hỗ trợ hiển thị nội dung phiên bản mới trong bản này.`,"ok");
+        if(onSaved) Promise.resolve().then(onSaved).catch(()=>{});
+      }
+    }catch(e){
+      // GATE 1B.3-D1 item 8: REVISION_INTEGRITY_VERIFICATION_FAILED must never be presented as
+      // "save failed, nothing happened" — e.message already carries the explicit "the write
+      // occurred, stays CLOSED, do not reopen" guidance from contract-editor.mjs.
+      error.textContent = e.message || mapError(e);
+    }finally{ busy=false; save.disabled=false; cancel.disabled=false; }
   };
 }
 
@@ -2052,7 +2238,11 @@ async function teacherOverview(c){
         ${recentSessions.map(s=>{ return `<tr><td>${esc(s.title)}</td><td>${sessionStatusBadge(s.status)}</td><td>${s.questionCount||0}</td><td>${s.responseCount||0}</td><td>${fmtDateShort(s.createdAt)}</td>
           <td><button class="btn btn-sm btn-outline" data-open="${s.id}">MỞ</button><button class="btn btn-sm btn-outline" data-session-info="${s.id}">SỬA PHIÊN</button></td></tr>`; }).join("")}
       </tbody></table>`;
-      $$("[data-session-info]").forEach(b=>b.onclick=()=>openSessionInfoEditor("sessions",b.dataset.sessionInfo,()=>teacherOverview(c)));
+      $$("[data-session-info]").forEach(b=>b.onclick=()=>{
+        const s=recentSessions.find(x=>x.id===b.dataset.sessionInfo);
+        if(s && isContractSession(s)) openContractInteractionEditor(b.dataset.sessionInfo,()=>teacherOverview(c));
+        else openSessionInfoEditor("sessions",b.dataset.sessionInfo,()=>teacherOverview(c));
+      });
       $$("[data-open]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/live/"+encodeURIComponent(b.dataset.open); });
     }
   }catch(e){ $("#tOvGrid").innerHTML = errorBlock(e, ()=>teacherOverview(c)); }
@@ -3306,14 +3496,13 @@ async function teacherLiveControl(c, sessionId){
       ${session.status==="closed" ? `<button class="btn btn-warn" id="btnReopenSession">MỞ LẠI PHIÊN</button><button class="btn btn-ghost" id="btnArchiveSession">KẾT THÚC PHIÊN</button>`:""}
       <button class="btn btn-outline" id="btnShowQr" ${session.status==="draft"?"disabled":""}>HIỂN THỊ QR</button>
       <button class="btn btn-outline" id="btnPresent" ${session.status==="draft"?"disabled":""}>HIỂN THỊ TRÌNH CHIẾU</button>
-      ${session.status!=="archived" ? `<button class="btn btn-outline" id="btnEditTime">⏱ ĐỔI THỜI GIAN</button>` : ""}
+      ${session.status!=="archived" && !shouldDisableLegacyTimeEdit(session) ? `<button class="btn btn-outline" id="btnEditTime">⏱ ĐỔI THỜI GIAN</button>` : ""}
       <button class="btn ${session.showResults==='live'?'btn-warn':'btn-outline'}" id="btnToggleResults">${session.showResults==='live'?"ẨN KẾT QUẢ":"HIỂN THỊ KẾT QUẢ"}</button>
-      ${isContract
-        ? `<button class="btn btn-outline" id="btnSessionInfo" disabled title="Phiên này đã kích hoạt hợp đồng phiên bản mới; sửa nội dung phiên bản (title/description) chưa được hỗ trợ trong gate này.">SỬA PHIÊN (chưa hỗ trợ)</button>`
-        : `<button class="btn btn-outline" id="btnSessionInfo">SỬA PHIÊN</button>`}
+      <button class="btn btn-outline" id="btnSessionInfo">SỬA PHIÊN</button>
       <button class="btn btn-ghost" id="btnBackDash">← Về tổng quan</button>
     </div>
-    ${isContract ? `<p class="small mut no-print mt-8">⚠️ Phiên này đã kích hoạt hợp đồng phiên bản mới. Sửa tên/mô tả phiên (nội dung phiên bản) chưa được hỗ trợ — vui lòng chờ cập nhật tiếp theo.</p>` : ""}
+    ${shouldDisableLegacyTimeEdit(session) ? `<p class="small mut no-print mt-8">⏱ Thời gian câu hỏi của phiên bản Contract được chỉnh bằng cách tạo phiên bản nội dung mới (nút SỬA PHIÊN).</p>` : ""}
+    ${isContract ? `<p class="small mut no-print mt-8">ℹ️ Đã lưu nội dung theo cơ chế hợp đồng phiên bản. Màn hình lớp học/trình chiếu/báo cáo cho phiên bản ≥1 chưa được hỗ trợ đầy đủ trong bản này — vui lòng chờ cập nhật tiếp theo trước khi mở lại phiên đã có phiên bản nội dung mới.</p>` : ""}
     <div class="card mt-14 no-print"><div class="health-grid">
       <div class="health-item"><div><span class="health-dot" id="healthNetDot"></span><b>Internet</b></div><div class="small mut" id="healthNet">Đang kiểm tra…</div></div>
       <div class="health-item"><div><span class="health-dot" id="healthRtDot"></span><b>Firebase Realtime</b></div><div class="small mut" id="healthRt">Đang kết nối…</div></div>
@@ -3337,7 +3526,9 @@ async function teacherLiveControl(c, sessionId){
         <div class="card mt-14"><div class="chart-box"><canvas id="liveChart"></canvas></div><div id="liveChartSummary"></div></div>
       </div>
     </div>`;
-    if(!isContract) $("#btnSessionInfo").onclick=()=>openSessionInfoEditor("sessions",sessionId);
+    $("#btnSessionInfo").onclick = isContract
+      ? ()=>openContractInteractionEditor(sessionId, ()=>teacherLiveControl(c,sessionId))
+      : ()=>openSessionInfoEditor("sessions",sessionId);
     $("#btnBackDash").onclick = ()=>{ window.location.hash=""; STATE.teacherNav="overview"; teacherRoute(); };
     $$(".qcount [data-q]").forEach(b=>b.onclick=()=>switchQuestion(Number(b.dataset.q)));
     if($("#btnPrevQ")) $("#btnPrevQ").onclick = ()=>switchQuestion(curIndex-1);
@@ -3720,7 +3911,11 @@ async function teacherHistory(c){
         </td></tr>`).join("")}
       </tbody></table>`;
       $$("[data-r]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/report/"+encodeURIComponent(b.dataset.r); });
-      $$("[data-session-info]").forEach(b=>b.onclick=()=>openSessionInfoEditor("sessions",b.dataset.sessionInfo,()=>teacherHistory(c)));
+      $$("[data-session-info]").forEach(b=>b.onclick=()=>{
+        const s=all.find(x=>x.id===b.dataset.sessionInfo);
+        if(s && isContractSession(s)) openContractInteractionEditor(b.dataset.sessionInfo,()=>teacherHistory(c));
+        else openSessionInfoEditor("sessions",b.dataset.sessionInfo,()=>teacherHistory(c));
+      });
       $$("[data-live]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/live/"+encodeURIComponent(b.dataset.live); });
       $$("[data-clone-session]").forEach(b=>b.onclick=()=>cloneSessionToWizard(b.dataset.cloneSession));
       $$("[data-trash-session]").forEach(b=>b.onclick=()=>moveSessionToTrash(

@@ -492,6 +492,12 @@ import { qrModalViewModel, presentationRenderState, buildInteractionJsonExport, 
 // GATE 1B.3-D1: Contract Interaction semantic editor logic. Never imported by any Group
 // Discussion / Knowledge Co-creation / AI-Second-Brain code path — sessions/Interaction only.
 import { resolveEditorEntryState, saveInteractionRevision, shouldDisableLegacyTimeEdit } from "./contract-editor.mjs";
+// GATE 1B.3-D2: runtime consumer bridges (teacher live control, student rendering, reports/
+// exports, clone-to-wizard) + the mandatory reopen integrity guard. sessions/Interaction only.
+import {
+  isEmbeddedOptionsQuestion, isQuestionCurrentForSession, resolveRuntimeQuestions,
+  resolveRuntimeSettings, verifyReopenIntegrity, ContractRuntimeError
+} from "./contract-runtime.mjs";
 
 /* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
 const firebaseConfig = {
@@ -3448,11 +3454,18 @@ async function teacherLiveControl(c, sessionId){
     }
   }
 
+  // GATE 1B.3-D2: single shared resolver for "current ordered questions with embedded options" —
+  // for a Contract rev>=1 session this reads SOLELY from the immutable current configVersions
+  // document, never the raw top-level questions collection (which still holds every retired
+  // revision's own question documents forever — a raw query would have let a prior revision's
+  // question resurface as "current"). Legacy/rev0 behavior is byte-identical to before.
   let questions = [];
+  let runtimeSettings = { allowMultipleResponses: !!session.allowMultipleResponses, anonymous: session.anonymous!==false, showResponderCount: session.showResponderCount!==false };
   try{
-    // FIX 11: kèm ownerId để truy vấn LIST questions phù hợp Security Rules
-    const qs = await getDocs(query(collection(db,"questions"), where("ownerId","==",STATE.user.uid), where("sessionId","==",sessionId), orderBy("order","asc")));
-    questions = qs.docs.map(d=>({id:d.id, ...d.data()}));
+    const dbFacade = makeFirestoreDbFacade(db, { doc, getDoc, collection, getDocs, query, where });
+    const runtimeQ = await resolveRuntimeQuestions(dbFacade, `sessions/${sessionId}`, session, sessionId);
+    questions = runtimeQ.questions;
+    if(isContractSession(session)) runtimeSettings = await resolveRuntimeSettings(dbFacade, `sessions/${sessionId}`, session);
   }catch(e){ c.innerHTML = errorBlock(e, ()=>teacherLiveControl(c,sessionId)); return; }
   if(questions.length===0){ c.innerHTML = `<div class="empty-state"><div class="ic">❓</div>Phiên này chưa có câu hỏi nào.</div>`; return; }
 
@@ -3502,7 +3515,7 @@ async function teacherLiveControl(c, sessionId){
       <button class="btn btn-ghost" id="btnBackDash">← Về tổng quan</button>
     </div>
     ${shouldDisableLegacyTimeEdit(session) ? `<p class="small mut no-print mt-8">⏱ Thời gian câu hỏi của phiên bản Contract được chỉnh bằng cách tạo phiên bản nội dung mới (nút SỬA PHIÊN).</p>` : ""}
-    ${isContract ? `<p class="small mut no-print mt-8">ℹ️ Đã lưu nội dung theo cơ chế hợp đồng phiên bản. Màn hình lớp học/trình chiếu/báo cáo cho phiên bản ≥1 chưa được hỗ trợ đầy đủ trong bản này — vui lòng chờ cập nhật tiếp theo trước khi mở lại phiên đã có phiên bản nội dung mới.</p>` : ""}
+    ${isContract && Number(session.configRevision||0)>=1 ? `<p class="small mut no-print mt-8">ℹ️ Phiên đang dùng nội dung theo cơ chế hợp đồng phiên bản (rev${session.configRevision}). Màn hình HIỂN THỊ TRÌNH CHIẾU chưa hỗ trợ hiển thị nội dung phiên bản này — mọi màn hình khác (điều khiển trực tiếp, học viên, báo cáo, xuất dữ liệu, nhân bản) đã được cập nhật để dùng đúng nội dung hiện hành.</p>` : ""}
     <div class="card mt-14 no-print"><div class="health-grid">
       <div class="health-item"><div><span class="health-dot" id="healthNetDot"></span><b>Internet</b></div><div class="small mut" id="healthNet">Đang kiểm tra…</div></div>
       <div class="health-item"><div><span class="health-dot" id="healthRtDot"></span><b>Firebase Realtime</b></div><div class="small mut" id="healthRt">Đang kết nối…</div></div>
@@ -3547,10 +3560,10 @@ async function teacherLiveControl(c, sessionId){
   async function renderCurrentQuestion(){
     const q = questions[curIndex];
     $("#curQText").textContent = `Câu ${curIndex+1}: ${q.question}`;
-    let options = [];
-    if(QUESTION_TYPES[q.type].needsOptions){
-      try{ const os = await getDocs(query(collection(db,"questions",q.id,"options"), orderBy("order","asc"))); options = os.docs.map(d=>({id:d.id,...d.data()})); }catch(e){}
-    }
+    // GATE 1B.3-D2: `q.options` is already embedded by resolveRuntimeQuestions() for BOTH
+    // legacy and Contract-versioned questions — no separate subcollection query needed (and a
+    // Contract question never has one to query: options create is denied by Rules for it).
+    const options = q.options || [];
     if(q.type==="open"){
       $("#curQBody").innerHTML = `<div id="openList" class="mt-8"><div class="mut">Đang tải câu trả lời…</div></div>`;
     } else {
@@ -3584,9 +3597,16 @@ async function teacherLiveControl(c, sessionId){
         : null;
       // Aggregate chuyên dụng: một giảng viên là writer duy nhất, tránh hotspot do hàng trăm học viên cùng increment.
       // Presentation/Student có thể đọc 1 document aggregate thay vì đọc toàn bộ responses.
-      const aggregatePayload={questionId:q.id,sessionId,ownerId:STATE.user.uid,chartType:q.chartType,agg,respondedCount:docs.length,openAnswers,updatedAt:serverTimestamp()};
+      // GATE 1B.3-D2: showResponderCount is embedded into liveAggregate (an owner-writable,
+      // student-readable root field) rather than left for the student view to read session.
+      // showResponderCount directly — for a Contract rev>=1 session that root field is frozen-
+      // at-activation and no longer authoritative (the real value lives in configVersions,
+      // which Rules correctly never expose to an anonymous reader). The teacher (owner) already
+      // resolved the correct current value once above via resolveRuntimeSettings(); riding it
+      // along on the same aggregate write the student view already reads needs no Rules change.
+      const aggregatePayload={questionId:q.id,sessionId,ownerId:STATE.user.uid,chartType:q.chartType,agg,respondedCount:docs.length,openAnswers,showResponderCount:runtimeSettings.showResponderCount,updatedAt:serverTimestamp()};
       setDoc(doc(db,"sessions",sessionId,"liveAggregates",q.id),aggregatePayload,{merge:true}).catch(()=>{});
-      updateDoc(sessionRef,{responseCount:totalAll,updatedAt:serverTimestamp(),liveAggregate:{questionId:q.id,chartType:q.chartType,agg,respondedCount:docs.length,openAnswers,updatedAt:Timestamp.now()}}).catch(()=>{});
+      updateDoc(sessionRef,{responseCount:totalAll,updatedAt:serverTimestamp(),liveAggregate:{questionId:q.id,chartType:q.chartType,agg,respondedCount:docs.length,openAnswers,showResponderCount:runtimeSettings.showResponderCount,updatedAt:Timestamp.now()}}).catch(()=>{});
       if(q.type==="open"){
         renderOpenList(docs);
       } else {
@@ -3722,6 +3742,18 @@ async function teacherLiveControl(c, sessionId){
     catch(e){ toast(mapError(e),"err"); }
   }
   async function reopenSession(){
+    // GATE 1B.3-D2 item 3: MANDATORY reopen integrity guard — re-reads the authoritative root
+    // and current Contract config fresh (never trusting the in-memory `session` this closure
+    // already holds) and re-proves every declared question document before any reopen write is
+    // even attempted. A no-op (skipped:true) for legacy/rev0; for Contract rev>=1 this is not
+    // advisory — a failure here MUST block the reopen entirely, with no partial/compensating
+    // write of any kind.
+    try{
+      await verifyReopenIntegrity({ db, firestore:{doc,getDoc}, sessionId });
+    }catch(e){
+      toast(e instanceof ContractRuntimeError ? e.message : mapError(e), "err");
+      return;
+    }
     try{
       await updateDoc(sessionRef, {
         status:"open",
@@ -3845,28 +3877,31 @@ async function cloneSessionToWizard(sessionId){
   try{
     const sSnap=await getDoc(doc(db,"sessions",sessionId)); if(!sSnap.exists()) return;
     const s=sSnap.data();
-    const qSnap=await getDocs(query(collection(db,"questions"),where("ownerId","==",STATE.user.uid),where("sessionId","==",sessionId),orderBy("order","asc")));
-    const qs=[];
-    for(const qd of qSnap.docs){
-      const q=qd.data(); let opts=[];
-      if(QUESTION_TYPES[q.type]?.needsOptions){
-        const os=await getDocs(query(collection(db,"questions",qd.id,"options"),orderBy("order","asc")));
-        opts=os.docs.map(x=>x.data().text);
-      }
-      qs.push({...blankQuestion(),question:q.question||"",description:q.description||"",type:q.type||"single",
-        options:q.type==="truefalse"?QUESTION_TYPES.truefalse.fixedOptions.slice():(opts.length?opts:["",""]),
-        chartType:q.chartType||null,scaleMin:q.scaleMin??1,scaleMax:q.scaleMax??5,required:q.required!==false,
-        timeLimit:q.timeLimit||0,allowChangeAnswer:!!q.allowChangeAnswer});
-    }
+    // GATE 1B.3-D2 item 9: seed from the single shared runtime resolvers — for a Contract
+    // rev>=1 session this reads SOLELY the current immutable config (never a leftover live
+    // legacy question, never a stale prior-revision Contract question, never root's frozen-at-
+    // activation title/settings). Only semantic CONTENT is cloned — Contract configId/roundId/
+    // questionId are never even present on the resolver's shape the wizard reads from below
+    // (blankQuestion() below assigns the wizard's own fresh temp identity), so there is nothing
+    // for this clone to carry forward as an authoritative Contract identity.
+    const dbFacade=makeFirestoreDbFacade(db,{doc,getDoc,collection,getDocs,query,where});
+    const [runtimeQ,runtimeSettings]=await Promise.all([
+      resolveRuntimeQuestions(dbFacade,`sessions/${sessionId}`,s,sessionId),
+      resolveRuntimeSettings(dbFacade,`sessions/${sessionId}`,s)
+    ]);
+    const qs=runtimeQ.questions.map(q=>({...blankQuestion(),question:q.question||"",description:q.description||"",type:q.type||"single",
+      options:q.type==="truefalse"?QUESTION_TYPES.truefalse.fixedOptions.slice():((q.options||[]).map(o=>o.text).length?(q.options||[]).map(o=>o.text):["",""]),
+      chartType:q.chartType||null,scaleMin:q.scaleMin??1,scaleMax:q.scaleMax??5,required:q.required!==false,
+      timeLimit:q.timeLimit||0,allowChangeAnswer:!!q.allowChangeAnswer}));
     initWizard();
-    STATE.wizard.title=(s.title||"Phiên")+" - Bản sao";
+    STATE.wizard.title=(runtimeSettings.title||"Phiên")+" - Bản sao";
     STATE.wizard.classId=s.classId||"";
     STATE.wizard.questions=qs.length?qs:[blankQuestion()];
     STATE.wizard.settings={...STATE.wizard.settings,timeLimit:s.timeLimit||0,showResults:s.showResults||"hidden",
-      allowChangeAnswer:!!s.allowChangeAnswer,anonymous:s.anonymous!==false,showResponderCount:s.showResponderCount!==false,
-      allowMultipleResponses:!!s.allowMultipleResponses};
+      allowChangeAnswer:!!s.allowChangeAnswer,anonymous:runtimeSettings.anonymous,showResponderCount:runtimeSettings.showResponderCount,
+      allowMultipleResponses:runtimeSettings.allowMultipleResponses};
     STATE.wizard.step=1;STATE.wizard.qIndex=0;
-    await logAudit("clone_to_wizard","session",sessionId,{title:s.title||""});
+    await logAudit("clone_to_wizard","session",sessionId,{title:runtimeSettings.title||""});
     window.location.hash="#/wizard";toast("Đã nhân bản vào màn hình Tạo tương tác. Anh có thể đổi tên, lớp và câu hỏi trước khi lưu.","ok");
   }catch(e){toast(mapError(e),"err");console.error(e);}
 }
@@ -3968,9 +4003,16 @@ async function teacherReportView(c, sessionId){
     const questions = qSnap.docs.map(d=>({id:d.id,...d.data()}));
     const respSnap = await getDocs(collection(db,"sessions",sessionId,"responses"));
     const allResponses = respSnap.docs.map(d=>d.data());
+    // GATE 1B.3-D2 item 7: every question ever created for this session — legacy AND every
+    // Contract revision's own question documents, which persist forever with fresh IDs per
+    // revision (see Gate 1B.3-C1) — is intentionally included here, unfiltered by revision, so
+    // each historical response stays correctly grouped under the EXACT question document it was
+    // actually submitted against. Only the options resolution differs per question: a
+    // Contract-versioned question's options are embedded (never a subcollection to query).
     const questionBlocks = await Promise.all(questions.map(async (q,i)=>{
       let options = [];
-      if(QUESTION_TYPES[q.type].needsOptions){ const os = await getDocs(query(collection(db,"questions",q.id,"options"), orderBy("order","asc"))); options = os.docs.map(d=>({id:d.id,...d.data()})); }
+      if(isEmbeddedOptionsQuestion(q)){ options = q.options || []; }
+      else if(QUESTION_TYPES[q.type].needsOptions){ const os = await getDocs(query(collection(db,"questions",q.id,"options"), orderBy("order","asc"))); options = os.docs.map(d=>({id:d.id,...d.data()})); }
       const docs = allResponses.filter(r=>r.questionId===q.id);
       return { q, options, docs, idx:i };
     }));
@@ -4205,8 +4247,21 @@ async function loadStudentQuestion(sessionId, session){
     const qSnap = await getDoc(doc(publicDb,"questions",session.activeQuestionId));
     if(!qSnap.exists()){ studentBodyError("Không tìm thấy câu hỏi hiện tại."); return; }
     const question = { id: qSnap.id, ...qSnap.data() };
+    // GATE 1B.3-D2 item 5: fail closed rather than render historical semantics as current — a
+    // Contract-versioned question whose configId no longer matches the session's currentConfigId
+    // (a stale/foreign-revision activeQuestionId) must never be shown as the active question.
+    // This never needs a configVersions read: `session` already carries currentConfigId as a
+    // plain, already-subscribed root field.
+    if(!isQuestionCurrentForSession(question, session)){
+      studentBodyError("Câu hỏi hiện tại không còn thuộc phiên bản nội dung mới nhất. Vui lòng chờ giảng viên.");
+      return;
+    }
+    // A Contract-versioned question carries its options embedded — never a subcollection (Rules
+    // deny creating one for it). Only a legacy question needs the subcollection query.
     let options = [];
-    if(QUESTION_TYPES[question.type].needsOptions){
+    if(isEmbeddedOptionsQuestion(question)){
+      options = question.options || [];
+    } else if(QUESTION_TYPES[question.type].needsOptions){
       const os = await getDocs(query(collection(publicDb,"questions",question.id,"options"), orderBy("order","asc")));
       options = os.docs.map(d=>({id:d.id, ...d.data()}));
     }
@@ -4287,6 +4342,11 @@ function updateStudentResultBadge(session){
   const el = $("#resultBadge"); if(!el) return;
   const agg = session.liveAggregate;
   if(!agg || agg.questionId !== STATE.student.question?.id){ el.innerHTML = ""; return; }
+  // GATE 1B.3-D2: prefer showResponderCount carried on the aggregate itself (resolved by the
+  // teacher, who CAN read the Contract config) over the root field, which is stale for a
+  // Contract rev>=1 session (root is frozen-at-activation and never mirrors this setting). Older
+  // aggregates written before this gate lack the field, so fall back to the root value for them.
+  const showCount = agg.showResponderCount !== undefined ? agg.showResponderCount !== false : session.showResponderCount!==false;
   if(session.showResults === "live" && agg.agg){
     el.innerHTML = `<div class="chart-box chart-box-sm" style="max-width:360px;margin:10px auto 0;"><canvas id="stResultChart"></canvas></div>`;
     const canvas = $("#stResultChart");
@@ -4296,10 +4356,10 @@ function updateStudentResultBadge(session){
         if(__chartInstances[key]){ __chartInstances[key].destroy(); delete __chartInstances[key]; }
         const chartType = agg.chartType;
         renderAggregateChart(canvas, STATE.student.question, agg.agg, chartType, "student");
-      }catch(e){ console.warn("Không thể vẽ biểu đồ kết quả:", e); if(session.showResponderCount!==false){ el.insertAdjacentHTML("beforeend", `<p class="mut">${agg.respondedCount} người đã trả lời</p>`); } }
+      }catch(e){ console.warn("Không thể vẽ biểu đồ kết quả:", e); if(showCount){ el.insertAdjacentHTML("beforeend", `<p class="mut">${agg.respondedCount} người đã trả lời</p>`); } }
     }
   } else {
-    el.innerHTML = session.showResponderCount!==false ? `<p class="mut">${agg.respondedCount} người đã trả lời</p>` : "";
+    el.innerHTML = showCount ? `<p class="mut">${agg.respondedCount} người đã trả lời</p>` : "";
   }
 }
 function renderAnswerInput(question, options, state){

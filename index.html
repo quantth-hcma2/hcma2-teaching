@@ -505,6 +505,9 @@ import { canShowActivationAction, activateSessionExplicit, ContractActivationErr
 // GATE 2A-S: render-time http(s)-only barrier for groupActivities file-links (defense in depth
 // alongside the Rules-side scheme check). Group Discussion only.
 import { safeGroupFileLinkUrl } from "./group-file-link-safety.mjs";
+// GATE 2A-AUTH-I2: student group-membership bootstrap (Stage 2 of 3). Group Discussion only —
+// does not touch topics/notes/photos/files Rules or query shape in this gate.
+import { validStoredGroup, ensureGroupMembership } from "./group-membership.mjs";
 
 /* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
 const firebaseConfig = {
@@ -666,7 +669,8 @@ function mapError(err){
     "deadline-exceeded":"Kết nối quá chậm. Vui lòng thử lại.",
     "not-found":"Không tìm thấy dữ liệu yêu cầu.",
     "already-exists":"Dữ liệu đã tồn tại.",
-    "resource-exhausted":"Hệ thống đang quá tải. Vui lòng thử lại sau."
+    "resource-exhausted":"Hệ thống đang quá tải. Vui lòng thử lại sau.",
+    "group-membership-invalid":"Không thể xác định nhóm của bạn. Vui lòng liên hệ giảng viên."
   };
   if(map[code]) return map[code];
   if(!navigator.onLine) return "Mất kết nối mạng. Đang thử kết nối lại…";
@@ -1992,6 +1996,10 @@ function openImageViewerSimple(src){
 }
 
 /* ---------- Học viên tham gia Thảo luận nhóm ---------- */
+// GATE 2A-AUTH-I2 (Stage 2 of 3): validStoredGroup/ensureGroupMembership now live in
+// group-membership.mjs (imported above) so they can be unit/emulator-tested directly — this
+// is DOM wiring only, no membership semantics of its own. See test/gate2a-auth-i2/ for coverage.
+const groupMembershipFirestore = { doc, getDoc, setDoc, serverTimestamp };
 async function renderGroupStudentEntry(){
   appRoot().innerHTML=`<div class="group-student-wrap"><div class="center-screen"><span class="spinner"></span><p>Đang mở phòng thảo luận…</p></div></div>`;
   try{
@@ -2002,11 +2010,20 @@ async function renderGroupStudentEntry(){
     const id=mapSnap.data().activityId;
     const aSnap=await getDoc(doc(publicDb,GROUP_COLLECTION,id));
     if(!aSnap.exists()) throw {code:"not-found"};
-    let a={id,...aSnap.data()},topics={};
+    let a={id,...aSnap.data()};
+
+    // GATE 2A-AUTH-I2: check for an existing membership BEFORE rendering the interactive
+    // selector — a returning student must never be offered a "choose your group" control
+    // that could imply their group is still changeable (Gate 2A-AUTH-DESIGN Task D:
+    // membership is immutable to the student by design).
+    const existingMemberSnap=await getDoc(doc(publicDb,GROUP_COLLECTION,id,"members",publicAuth.currentUser.uid));
+    let membershipGroup=null;
+    if(existingMemberSnap.exists()) membershipGroup=validStoredGroup(existingMemberSnap.data(),a.groupCount);
+
     appRoot().innerHTML=`<div class="group-student-wrap">
       <div class="center"><div class="eyebrow">HCMA2 - TEACHING</div><h1 id="gsLiveTitle">👥 ${esc(a.title||"Thảo luận nhóm")}</h1><p class="mut" id="gsLiveInstructions" style="white-space:pre-wrap">${esc(a.instructions||"")}</p></div>
       <div class="group-student-card"><div class="flex-between"><div><b>Mã phòng: ${esc(code)}</b><div class="small mut" id="gsStatus"></div></div><div class="group-timer" id="gsTimer">--:--</div></div>
-        <div class="field mt-14"><label>Chọn nhóm của anh/chị *</label><select id="gsGroup"><option value="">— Chọn nhóm —</option>${Array.from({length:a.groupCount||6},(_,k)=>`<option value="${k+1}">Nhóm ${k+1}</option>`).join("")}</select></div>
+        <div class="field mt-14"><label>${membershipGroup?"Nhóm của anh/chị":"Chọn nhóm của anh/chị *"}</label><select id="gsGroup" ${membershipGroup?"disabled":""}><option value="">— Chọn nhóm —</option>${Array.from({length:a.groupCount||6},(_,k)=>`<option value="${k+1}" ${membershipGroup===k+1?"selected":""}>Nhóm ${k+1}</option>`).join("")}</select><div class="small mut mt-8" id="gsJoinMsg">${membershipGroup?"Bạn đã tham gia nhóm này — không thể đổi nhóm.":""}</div></div>
         <div id="gsTopic" class="group-topic hidden" style="white-space:pre-wrap"></div>
       </div>
       <div class="group-student-card hidden" id="gsSubmitCard">
@@ -2015,35 +2032,62 @@ async function renderGroupStudentEntry(){
         ${a.allowFile!==false?`<hr class="mt-16"><div class="field"><label>Gửi file nhỏ DOC/DOCX/PPT/PPTX/PDF (tối đa khoảng 650KB)</label><input id="gsFile" type="file" accept=".doc,.docx,.ppt,.pptx,.pdf"></div><button class="btn btn-outline" id="gsSendFile">GỬI FILE</button>
           <div class="field mt-14"><label>Hoặc gửi link Google Drive / OneDrive</label><input id="gsLink" type="url" placeholder="https://..."></div><button class="btn btn-outline" id="gsSendLink">GỬI LINK</button><div id="gsFileMsg" class="small mt-8"></div>`:""}
       </div>
-      <div class="group-student-card"><h3>Ý kiến đã gửi của nhóm</h3><div id="gsMyNotes"><div class="mut small">Chọn nhóm để xem.</div></div></div>
+      <div class="group-student-card"><h3>Ý kiến đã gửi của nhóm</h3><div id="gsMyNotes"><div class="mut small">${membershipGroup?"Đang tải…":"Chọn nhóm để xem."}</div></div></div>
     </div>`;
 
     const unsubA=onSnapshot(doc(publicDb,GROUP_COLLECTION,id),s=>{if(s.exists()){a={id,...s.data()};$("#gsLiveTitle").textContent="👥 "+(a.title||"Thảo luận nhóm");$("#gsLiveInstructions").textContent=a.instructions||"";updateStudentState();}});
     track(unsubA);
-    const unsubT=onSnapshot(collection(publicDb,GROUP_COLLECTION,id,"topics"),s=>{topics={};s.forEach(d=>topics[d.id]=d.data());updateTopic();});
-    track(unsubT);
-    let selected=0, notes=[];
-    const unsubN=onSnapshot(collection(publicDb,GROUP_COLLECTION,id,"notes"),s=>{notes=s.docs.map(d=>({id:d.id,...d.data()}));renderMyNotes();});
-    track(unsubN);
+    let currentTopic=null, notes=[], joinBusy=false;
 
-    function updateTopic(){
-      const t=topics[String(selected)]?.topic||""; const el=$("#gsTopic");
-      el.textContent=t?`📌 Chủ đề nhóm ${selected}: ${t}`:"";el.classList.toggle("hidden",!t);
+    function updateTopicDisplay(){
+      const t=currentTopic?.topic||""; const el=$("#gsTopic");
+      el.textContent=t?`📌 Chủ đề nhóm ${membershipGroup}: ${t}`:"";el.classList.toggle("hidden",!t);
     }
     function renderMyNotes(){
-      if(!selected){$("#gsMyNotes").innerHTML=`<div class="mut small">Chọn nhóm để xem.</div>`;return;}
-      const arr=notes.filter(n=>Number(n.group)===selected).sort((x,y)=>qrDateValue(x.createdAt)-qrDateValue(y.createdAt));
+      if(!membershipGroup){$("#gsMyNotes").innerHTML=`<div class="mut small">Chọn nhóm để xem.</div>`;return;}
+      const arr=notes.slice().sort((x,y)=>qrDateValue(x.createdAt)-qrDateValue(y.createdAt));
       $("#gsMyNotes").innerHTML=arr.length?arr.map(n=>`<div class="group-note">${esc(n.text||"")}</div>`).join(""):`<div class="mut small">Chưa có ý kiến nào.</div>`;
     }
     function updateStudentState(){
       $("#gsStatus").textContent=a.status==="open"?"Phòng đang mở — có thể gửi kết quả.":a.status==="closed"?"Phòng đã đóng.":"Phòng chưa mở.";
-      $("#gsSubmitCard").classList.toggle("hidden",!selected || a.status!=="open");
+      $("#gsSubmitCard").classList.toggle("hidden",!membershipGroup || a.status!=="open");
     }
-    $("#gsGroup").onchange=()=>{selected=Number($("#gsGroup").value)||0;updateTopic();renderMyNotes();updateStudentState();};
+    // GATE 2A-AUTH-I2: the only place notes/topics listeners for a student are attached —
+    // always AFTER membershipGroup is confirmed (own group only, per the frozen Stage-2
+    // contract), never before. Teacher/admin's own groupLive() listeners are untouched.
+    function attachScopedListeners(group){
+      track(onSnapshot(doc(publicDb,GROUP_COLLECTION,id,"topics",String(group)),s=>{currentTopic=s.exists()?s.data():null;updateTopicDisplay();}));
+      track(onSnapshot(query(collection(publicDb,GROUP_COLLECTION,id,"notes"),where("group","==",group)),s=>{notes=s.docs.map(d=>({id:d.id,...d.data()}));renderMyNotes();}));
+    }
+    function revealParticipation(group){
+      membershipGroup=group;
+      $("#gsGroup").value=String(group); $("#gsGroup").disabled=true;
+      attachScopedListeners(group);
+      updateStudentState(); updateTopicDisplay(); renderMyNotes();
+    }
+
+    if(membershipGroup){
+      revealParticipation(membershipGroup);
+    }else{
+      $("#gsGroup").onchange=async()=>{
+        if(joinBusy) return;
+        const chosen=Number($("#gsGroup").value)||0; if(!chosen) return;
+        joinBusy=true; $("#gsGroup").disabled=true;
+        const msg=$("#gsJoinMsg"); if(msg) msg.textContent="Đang tham gia nhóm…";
+        try{
+          const finalGroup=await ensureGroupMembership({db:publicDb,firestore:groupMembershipFirestore,activityId:id,uid:publicAuth.currentUser.uid,joinCode:code,groupCount:a.groupCount||6,selectedGroup:chosen});
+          if(msg) msg.textContent=finalGroup===chosen?"":`Bạn đã được ghi nhận ở Nhóm ${finalGroup} (đã tham gia trước đó).`;
+          revealParticipation(finalGroup);
+        }catch(e){
+          joinBusy=false; $("#gsGroup").disabled=false; $("#gsGroup").value="";
+          if(msg) msg.textContent=mapError(e);
+        }
+      };
+    }
     if($("#gsText")) $("#gsText").oninput=()=>$("#gsChar").textContent=`${$("#gsText").value.length}/1500`;
     if($("#gsSendText")) $("#gsSendText").onclick=async()=>{
       const text=$("#gsText").value.trim(),msg=$("#gsTextMsg"); if(!text){msg.textContent="Vui lòng nhập ý kiến.";return;}
-      try{await addDoc(collection(publicDb,GROUP_COLLECTION,id,"notes"),{group:selected,text,participantId:publicAuth.currentUser.uid,createdAt:serverTimestamp()});$("#gsText").value="";$("#gsChar").textContent="0/1500";msg.textContent="Đã gửi ✓";}catch(e){msg.textContent=mapError(e);}
+      try{await addDoc(collection(publicDb,GROUP_COLLECTION,id,"notes"),{group:membershipGroup,text,participantId:publicAuth.currentUser.uid,createdAt:serverTimestamp()});$("#gsText").value="";$("#gsChar").textContent="0/1500";msg.textContent="Đã gửi ✓";}catch(e){msg.textContent=mapError(e);}
     };
     if($("#gsSendPhoto")) $("#gsSendPhoto").onclick=async()=>{
       const f=$("#gsPhoto").files[0],msg=$("#gsPhotoMsg"); if(!f){msg.textContent="Vui lòng chọn ảnh.";return;} if(f.size>5*1024*1024){msg.textContent="Ảnh quá lớn. Giới hạn 5MB.";return;} if(!f.type.startsWith("image/")){msg.textContent="Tệp đã chọn không phải ảnh.";return;}
@@ -2052,7 +2096,7 @@ async function renderGroupStudentEntry(){
         const uid=publicAuth.currentUser.uid, safe=f.name.replace(/[^a-zA-Z0-9._-]/g,"_");
         const path=`groupActivities/${id}/photos/${uid}/${Date.now()}_${safe}`;
         const sr=storageRef(publicStorage,path); await uploadBytes(sr,f,{contentType:f.type}); const url=await getDownloadURL(sr);
-        await addDoc(collection(publicDb,GROUP_COLLECTION,id,"photos"),{group:selected,name:f.name,url,storagePath:path,size:f.size,contentType:f.type,participantId:uid,createdAt:serverTimestamp()});
+        await addDoc(collection(publicDb,GROUP_COLLECTION,id,"photos"),{group:membershipGroup,name:f.name,url,storagePath:path,size:f.size,contentType:f.type,participantId:uid,createdAt:serverTimestamp()});
         $("#gsPhoto").value="";msg.textContent="Đã gửi ảnh ✓";
       }catch(e){msg.textContent=mapError(e);}
     };
@@ -2063,13 +2107,13 @@ async function renderGroupStudentEntry(){
         const uid=publicAuth.currentUser.uid,safe=f.name.replace(/[^a-zA-Z0-9._-]/g,"_");
         const path=`groupActivities/${id}/files/${uid}/${Date.now()}_${safe}`;
         const sr=storageRef(publicStorage,path);await uploadBytes(sr,f,{contentType:f.type||"application/octet-stream"});const url=await getDownloadURL(sr);
-        await addDoc(collection(publicDb,GROUP_COLLECTION,id,"files"),{group:selected,name:f.name,url,storagePath:path,size:f.size,contentType:f.type||"",link:null,participantId:uid,createdAt:serverTimestamp()});
+        await addDoc(collection(publicDb,GROUP_COLLECTION,id,"files"),{group:membershipGroup,name:f.name,url,storagePath:path,size:f.size,contentType:f.type||"",link:null,participantId:uid,createdAt:serverTimestamp()});
         $("#gsFile").value="";msg.textContent="Đã gửi file ✓";
       }catch(e){msg.textContent=mapError(e);}
     };
     if($("#gsSendLink")) $("#gsSendLink").onclick=async()=>{
       const raw=$("#gsLink").value.trim(),msg=$("#gsFileMsg"),url=qrNormalizeUrl(raw);if(!url){msg.textContent="Liên kết không hợp lệ.";return;}
-      try{await addDoc(collection(publicDb,GROUP_COLLECTION,id,"files"),{group:selected,name:"Liên kết nhóm",dataUrl:null,link:url,participantId:publicAuth.currentUser.uid,createdAt:serverTimestamp()});$("#gsLink").value="";msg.textContent="Đã gửi link ✓";}catch(e){msg.textContent=mapError(e);}
+      try{await addDoc(collection(publicDb,GROUP_COLLECTION,id,"files"),{group:membershipGroup,name:"Liên kết nhóm",dataUrl:null,link:url,participantId:publicAuth.currentUser.uid,createdAt:serverTimestamp()});$("#gsLink").value="";msg.textContent="Đã gửi link ✓";}catch(e){msg.textContent=mapError(e);}
     };
     const timer=setInterval(()=>{
       const el=$("#gsTimer"); if(!el)return;
@@ -2078,7 +2122,7 @@ async function renderGroupStudentEntry(){
       const remain=Math.max(0,Math.round((start+(a.durationSec||0)*1000-Date.now())/1000));
       el.textContent=fmtDuration(remain);el.classList.toggle("done",remain<=0);
     },1000); track(()=>clearInterval(timer));
-    updateStudentState();updateTopic();
+    updateStudentState();
   }catch(e){
     appRoot().innerHTML=`<div class="center-screen"><div class="ic" style="font-size:48px">⚠️</div><h2>Không mở được phòng thảo luận</h2><p class="mut">${esc(mapError(e))}</p></div>`;
   }

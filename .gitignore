@@ -10,8 +10,8 @@ ui-debug.log
 # test/gate1b3c1/run-emulator-tests.mjs, test/gate1b3c2/run-emulator-tests.mjs,
 # test/gate1b3d1/run-emulator-tests.mjs, test/gate1b3d2/run-emulator-tests.mjs,
 # test/gate-e2/run-emulator-tests.mjs, test/gate-e6/run-emulator-tests.mjs,
-# test/gate2as/run-emulator-tests.mjs and test/gate2a-auth-i1/run-emulator-tests.mjs. Never
-# hand-edit; never the source of truth.
+# test/gate2as/run-emulator-tests.mjs, test/gate2a-auth-i1/run-emulator-tests.mjs and
+# test/gate2a-auth-i2/run-emulator-tests.mjs. Never hand-edit; never the source of truth.
 test/gate1b1/firestore.rules
 test/gate1b2a/firestore.rules
 test/gate1b2b/firestore.rules
@@ -24,3 +24,4 @@ test/gate-e2/firestore.rules
 test/gate-e6/firestore.rules
 test/gate2as/firestore.rules
 test/gate2a-auth-i1/firestore.rules
+test/gate2a-auth-i2/firestore.rules

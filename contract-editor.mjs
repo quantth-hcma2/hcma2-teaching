@@ -15,7 +15,7 @@
 // pre-checks are fail-fast UX, not the security boundary, matching the philosophy
 // contract-writer.mjs documents for itself.
 
-import { isContractSession, resolveInteractionConfig } from "./session-reader.mjs";
+import { isContractSession, resolveInteractionConfig, isProtectedFixture } from "./session-reader.mjs";
 import {
   applyInteractionRevision, ContractWriterError, semanticManifestForCompare,
   buildInteractionManifest, stableEqual
@@ -200,6 +200,13 @@ export function classifyWriterError(e) {
  *     reaches the caller.
  */
 export async function saveInteractionRevision({ db, firestore, sessionId, actorUid, operationId, mode, expectedRevision, editorSeed, candidateChanges, legacyQuestionsForSnapshot }) {
+  // GATE E2 item 6: the one known real-production Contract audit fixture is blocked here,
+  // before any read or write is attempted, regardless of which UI entry point reached this
+  // function — this is the single authoritative choke point for "no semantic revision may ever
+  // be written for this session through the normal UI."
+  if (isProtectedFixture(sessionId)) {
+    throw new ContractEditorError("PROTECTED_FIXTURE", "Phiên kiểm thử hợp đồng hệ thống — chỉ đọc, không chỉnh sửa.");
+  }
   const { doc, getDoc } = firestore;
   const freshSnap = await getDoc(doc(db, "sessions", sessionId));
   if (!freshSnap.exists()) throw new ContractEditorError("SESSION_NOT_FOUND", "Phiên không còn tồn tại.");
@@ -243,7 +250,11 @@ export async function saveInteractionRevision({ db, firestore, sessionId, actorU
  * reachable for it — timeLimit is now versioned semantic config, changed only by creating a new
  * revision through this editor. Legacy sessions and rev0 (still backed by live, mutable legacy
  * question documents) are completely unaffected.
+ *
+ * GATE E2 item 6: also disabled for the one protected production audit fixture regardless of
+ * its revision — `sessionId` is optional (existing callers that only have `sessionData` keep
+ * working exactly as before; the fixture check simply never fires without it).
  */
-export function shouldDisableLegacyTimeEdit(sessionData) {
-  return isContractSession(sessionData) && Number(sessionData.configRevision || 0) >= 1;
+export function shouldDisableLegacyTimeEdit(sessionData, sessionId) {
+  return (isContractSession(sessionData) && Number(sessionData.configRevision || 0) >= 1) || isProtectedFixture(sessionId);
 }

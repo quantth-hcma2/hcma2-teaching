@@ -487,7 +487,7 @@ import {
 // (session-reader.mjs, session-reader-ui.mjs) is implemented and tested (see test/gate1b1/)
 // but is not yet call-sited beyond this marker check — there is no real contract data for it
 // to read yet, and wiring it into the live render paths without that is Gate 1B.2 scope.
-import { isContractSession, assertLegacyWritable, resolveSessionSemantics, makeFirestoreDbFacade } from "./session-reader.mjs";
+import { isContractSession, assertLegacyWritable, resolveSessionSemantics, makeFirestoreDbFacade, isProtectedFixture } from "./session-reader.mjs";
 import { qrModalViewModel, presentationRenderState, buildInteractionJsonExport, buildInteractionCsvRows, resolveShowResponderCount, liveTitleForSnapshot } from "./session-view.mjs";
 // GATE 1B.3-D1: Contract Interaction semantic editor logic. Never imported by any Group
 // Discussion / Knowledge Co-creation / AI-Second-Brain code path — sessions/Interaction only.
@@ -498,6 +498,9 @@ import {
   isEmbeddedOptionsQuestion, isQuestionCurrentForSession, resolveRuntimeQuestions,
   resolveRuntimeSettings, verifyReopenIntegrity, resolveReportQuestionBlocks, writeLiveAggregate, ContractRuntimeError
 } from "./contract-runtime.mjs";
+// GATE E2: explicit Contract activation UX. Never auto-invoked — only ever from one explicit,
+// human-confirmed button click. sessions/Interaction only.
+import { canShowActivationAction, activateSessionExplicit, ContractActivationError } from "./contract-activation.mjs";
 
 /* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
 const firebaseConfig = {
@@ -910,6 +913,10 @@ function newContractQuestionDraft(){
     options:[{label:"A",text:"",value:null,isCorrect:null},{label:"B",text:"",value:null,isCorrect:null}] };
 }
 async function openContractInteractionEditor(sessionId, onSaved){
+  // GATE E2 item 6: single choke point for every "SỬA PHIÊN" entry point (live control,
+  // overview, history) — the protected production audit fixture never opens this editor,
+  // regardless of which list screen the click came from.
+  if(isProtectedFixture(sessionId)){ toast("Phiên kiểm thử hợp đồng hệ thống — chỉ đọc, không chỉnh sửa.","warn"); return; }
   const sessionRef = doc(db,"sessions",sessionId);
   let sessionSnap;
   try{ sessionSnap = await getDoc(sessionRef); }catch(e){ toast(mapError(e),"err"); return; }
@@ -1030,6 +1037,47 @@ async function openContractInteractionEditor(sessionId, onSaved){
       // occurred, stays CLOSED, do not reopen" guidance from contract-editor.mjs.
       error.textContent = e.message || mapError(e);
     }finally{ busy=false; save.disabled=false; cancel.disabled=false; }
+  };
+}
+
+/* ---------------- GATE E2: explicit Contract activation ----------------
+   Wires contract-activation.mjs's canShowActivationAction()/activateSessionExplicit() — DOM
+   only, no semantic/security logic of its own. See contract-activation.mjs and
+   test/gate-e2/ for the behavior this wires up. */
+async function openActivateContractDialog(sessionId, onActivated){
+  const host = openModal(`
+    <div class="flex-between"><h3>Kích hoạt chế độ chỉnh sửa nâng cao</h3><button type="button" class="btn btn-sm btn-ghost" id="acClose">✕</button></div>
+    <div class="card" style="padding:12px 14px;background:#f8fafc;box-shadow:none;">
+      <p class="small" style="margin:0 0 8px;">Thao tác này sẽ:</p>
+      <ul class="small" style="margin:0;padding-left:18px;">
+        <li>bật chế độ chỉnh sửa nội dung theo phiên bản (versioned) cho phiên này;</li>
+        <li><b>không thể hoàn tác</b> — một khi đã kích hoạt, phiên không quay lại chế độ cũ;</li>
+        <li>chỉ thực hiện được khi phiên đang ở trạng thái <b>ĐÃ ĐÓNG</b>;</li>
+        <li><b>không</b> làm thay đổi sessionId, mã tham gia (join code), hay mã QR hiện có;</li>
+        <li><b>không</b> di chuyển hay xóa bất kỳ câu trả lời nào đã thu thập;</li>
+        <li>sau khi kích hoạt, các lần sửa nội dung (câu hỏi/cài đặt) tiếp theo sẽ tạo ra một <b>phiên bản nội dung mới</b> thay vì ghi đè trực tiếp.</li>
+      </ul>
+    </div>
+    <div id="acError" class="error-text mt-8" role="alert"></div>
+    <div class="flex-between mt-14"><button class="btn btn-ghost" id="acCancel">HỦY</button><button class="btn" id="acConfirm">XÁC NHẬN KÍCH HOẠT</button></div>
+  `, true);
+  const close=host.querySelector("#acClose"), cancel=host.querySelector("#acCancel"), confirm=host.querySelector("#acConfirm"), error=host.querySelector("#acError");
+  let busy=false;
+  host.querySelector("#modalBackdrop").addEventListener("click",e=>{if(busy)e.stopImmediatePropagation();},true);
+  close.onclick=cancel.onclick=()=>{if(!busy)closeModal();}; // Cancel performs zero writes.
+  confirm.onclick=async()=>{
+    if(busy)return; busy=true; confirm.disabled=true; cancel.disabled=true; error.textContent="";
+    const operationId = crypto.randomUUID?crypto.randomUUID():`${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    try{
+      await activateSessionExplicit({ db, firestore:{doc,getDoc}, sessionId, actorUid: STATE.user.uid, actorProfile: STATE.profile, operationId });
+      closeModal();
+      // GATE E2 item 9: never implies a semantic revision was created, never auto-opens the
+      // Contract editor — a separate, explicit edit action is required afterward.
+      toast("Đã kích hoạt chế độ chỉnh sửa nâng cao. Phiên hiện ở rev0 và chưa thay đổi nội dung.","ok");
+      if(onActivated) Promise.resolve().then(onActivated).catch(()=>{});
+    }catch(e){
+      error.textContent = e instanceof ContractActivationError ? e.message : mapError(e);
+    }finally{ busy=false; confirm.disabled=false; cancel.disabled=false; }
   };
 }
 
@@ -3501,6 +3549,8 @@ async function teacherLiveControl(c, sessionId){
 
   function renderShell(){
     const isContract = isContractSession(session);
+    const isProtected = isProtectedFixture(sessionId);
+    const canActivate = canShowActivationAction({ sessionId, sessionData: session, actorUid: STATE.user.uid, actorProfile: STATE.profile });
     c.innerHTML = `
     <div class="flex-between no-print">
       <h2 id="liveSessionTitle" style="margin:0;">${esc(displaySemantics.title)}</h2>
@@ -3512,12 +3562,16 @@ async function teacherLiveControl(c, sessionId){
       ${session.status==="closed" ? `<button class="btn btn-warn" id="btnReopenSession">MỞ LẠI PHIÊN</button><button class="btn btn-ghost" id="btnArchiveSession">KẾT THÚC PHIÊN</button>`:""}
       <button class="btn btn-outline" id="btnShowQr" ${session.status==="draft"?"disabled":""}>HIỂN THỊ QR</button>
       <button class="btn btn-outline" id="btnPresent" ${session.status==="draft"?"disabled":""}>HIỂN THỊ TRÌNH CHIẾU</button>
-      ${session.status!=="archived" && !shouldDisableLegacyTimeEdit(session) ? `<button class="btn btn-outline" id="btnEditTime">⏱ ĐỔI THỜI GIAN</button>` : ""}
+      ${session.status!=="archived" && !shouldDisableLegacyTimeEdit(session, sessionId) ? `<button class="btn btn-outline" id="btnEditTime">⏱ ĐỔI THỜI GIAN</button>` : ""}
       <button class="btn ${session.showResults==='live'?'btn-warn':'btn-outline'}" id="btnToggleResults">${session.showResults==='live'?"ẨN KẾT QUẢ":"HIỂN THỊ KẾT QUẢ"}</button>
-      <button class="btn btn-outline" id="btnSessionInfo">SỬA PHIÊN</button>
+      ${isProtected
+        ? `<button class="btn btn-outline" id="btnSessionInfo" disabled title="Phiên kiểm thử hợp đồng hệ thống — chỉ đọc, không chỉnh sửa.">SỬA PHIÊN</button>`
+        : `<button class="btn btn-outline" id="btnSessionInfo">SỬA PHIÊN</button>`}
+      ${canActivate ? `<button class="btn btn-outline" id="btnActivateContract">KÍCH HOẠT CHẾ ĐỘ CHỈNH SỬA NÂNG CAO</button>` : ""}
       <button class="btn btn-ghost" id="btnBackDash">← Về tổng quan</button>
     </div>
-    ${shouldDisableLegacyTimeEdit(session) ? `<p class="small mut no-print mt-8">⏱ Thời gian câu hỏi của phiên bản Contract được chỉnh bằng cách tạo phiên bản nội dung mới (nút SỬA PHIÊN).</p>` : ""}
+    ${isProtected ? `<p class="small mut no-print mt-8">🔒 Phiên kiểm thử hợp đồng hệ thống — chỉ đọc, không chỉnh sửa.</p>` : ""}
+    ${shouldDisableLegacyTimeEdit(session, sessionId) && !isProtected ? `<p class="small mut no-print mt-8">⏱ Thời gian câu hỏi của phiên bản Contract được chỉnh bằng cách tạo phiên bản nội dung mới (nút SỬA PHIÊN).</p>` : ""}
     ${isContract && Number(session.configRevision||0)>=1 ? `<p class="small mut no-print mt-8">ℹ️ Phiên đang dùng nội dung theo cơ chế hợp đồng phiên bản (rev${session.configRevision}). Màn hình HIỂN THỊ TRÌNH CHIẾU chưa hỗ trợ hiển thị nội dung phiên bản này — mọi màn hình khác (điều khiển trực tiếp, học viên, báo cáo, xuất dữ liệu, nhân bản) đã được cập nhật để dùng đúng nội dung hiện hành.</p>` : ""}
     <div class="card mt-14 no-print"><div class="health-grid">
       <div class="health-item"><div><span class="health-dot" id="healthNetDot"></span><b>Internet</b></div><div class="small mut" id="healthNet">Đang kiểm tra…</div></div>
@@ -3542,9 +3596,12 @@ async function teacherLiveControl(c, sessionId){
         <div class="card mt-14"><div class="chart-box"><canvas id="liveChart"></canvas></div><div id="liveChartSummary"></div></div>
       </div>
     </div>`;
-    $("#btnSessionInfo").onclick = isContract
-      ? ()=>openContractInteractionEditor(sessionId, ()=>teacherLiveControl(c,sessionId))
-      : ()=>openSessionInfoEditor("sessions",sessionId);
+    $("#btnSessionInfo").onclick = isProtected
+      ? ()=>toast("Phiên kiểm thử hợp đồng hệ thống — chỉ đọc, không chỉnh sửa.","warn")
+      : isContract
+        ? ()=>openContractInteractionEditor(sessionId, ()=>teacherLiveControl(c,sessionId))
+        : ()=>openSessionInfoEditor("sessions",sessionId);
+    if($("#btnActivateContract")) $("#btnActivateContract").onclick = ()=>openActivateContractDialog(sessionId, ()=>teacherLiveControl(c,sessionId));
     $("#btnBackDash").onclick = ()=>{ window.location.hash=""; STATE.teacherNav="overview"; teacherRoute(); };
     $$(".qcount [data-q]").forEach(b=>b.onclick=()=>switchQuestion(Number(b.dataset.q)));
     if($("#btnPrevQ")) $("#btnPrevQ").onclick = ()=>switchQuestion(curIndex-1);

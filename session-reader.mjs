@@ -39,6 +39,20 @@ export function isContractSession(sessionData) {
 }
 
 /**
+ * GATE E2: the one known real-production Contract audit fixture (activated during Gate
+ * 1B.2B-P2, still sitting at revision 0) — an operational safety deny-list for this EXACT
+ * sessionId only, never a general production-session deny-list. Every semantic-mutating
+ * surface (activation, the Contract editor's save path, legacy time-edit visibility) must
+ * check this before doing anything, so there is exactly one place that names the fixture
+ * rather than a scattered, driftable set of ad-hoc string comparisons.
+ */
+export const PROTECTED_FIXTURE_SESSION_IDS = Object.freeze(["BRH8Uz8XvZxuxmPLADsH"]);
+
+export function isProtectedFixture(sessionId) {
+  return PROTECTED_FIXTURE_SESSION_IDS.includes(sessionId);
+}
+
+/**
  * Gate 1A's legacy editor (`openSessionInfoEditor` / `checkSessionInfoAccess` in index.html)
  * only ever knows how to blind-write the narrow SESSION_INFO_FIELDS allowlist onto the
  * session root. That is correct for legacy sessions and unsafe for a contract session (it

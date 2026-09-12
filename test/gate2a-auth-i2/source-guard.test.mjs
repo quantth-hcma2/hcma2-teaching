@@ -65,17 +65,38 @@ test("SOURCE GUARD: the group <select> is disabled once membership is establishe
   assert.match(body, /\$\("#gsGroup"\)\.disabled=true/);
 });
 
-test("SOURCE GUARD: listeners are attached only inside attachScopedListeners(), called only from revealParticipation() — never before membership is confirmed", () => {
+test("SOURCE GUARD (realigned by I2-CORRECTION-R1): the student flow has exactly the 4 expected listener categories, no more, no less", () => {
+  // Superseded assertion: this test originally pinned onSnapshot() calls to a literal count of
+  // 3 (activity doc + topics doc + notes query). Gate 2A-AUTH-I2-CORRECTION intentionally added
+  // a 4th, required listener — the student's own membership doc, for live lecturer-reassignment
+  // reaction — so a bare count is no longer meaningful. This now asserts the CATEGORIES
+  // explicitly instead of a magic number, which stays meaningful as the feature set evolves.
   const body = studentEntryBody();
+  const categories = {
+    "activity document (own activity's live title/instructions/status)": /onSnapshot\(doc\(publicDb,GROUP_COLLECTION,id\),/,
+    "own membership document (live lecturer-reassignment reaction)": /onSnapshot\(doc\(publicDb,GROUP_COLLECTION,id,"members",publicAuth\.currentUser\.uid\)/,
+    "own-group topic document (single doc, not a collection)": /onSnapshot\(doc\(publicDb,GROUP_COLLECTION,id,"topics",String\(group\)\)/,
+    "own-group notes query (where-scoped, not a broad collection)": /onSnapshot\(query\(collection\(publicDb,GROUP_COLLECTION,id,"notes"\),where\("group","==",group\)\)/
+  };
+  for (const [label, pattern] of Object.entries(categories)) {
+    assert.match(body, pattern, `missing expected listener category: ${label}`);
+  }
   const onSnapshotCalls = [...body.matchAll(/onSnapshot\(/g)].length;
-  // gsLiveTitle/instructions activity-doc listener (1) + topics doc listener (1) + notes query
-  // listener (1) = 3 total onSnapshot calls anywhere in the student flow; the latter two must
-  // both live textually inside attachScopedListeners, never earlier in the function body.
-  assert.equal(onSnapshotCalls, 3, `expected exactly 3 onSnapshot() calls in the student flow, found ${onSnapshotCalls}`);
+  assert.equal(onSnapshotCalls, 4, `expected exactly the 4 listed listener categories and no others, found ${onSnapshotCalls} total onSnapshot() calls`);
+
+  // Ordering/placement: the two scoped (topics/notes) listeners must both live textually inside
+  // attachScopedListeners(), never attached earlier in the function body — unchanged intent from
+  // the original test.
   const fnStart = body.indexOf("function attachScopedListeners");
   const fnEnd = body.indexOf("\n    }", fnStart);
   const fnBody = body.slice(fnStart, fnEnd);
   assert.equal((fnBody.match(/onSnapshot\(/g) || []).length, 2, "attachScopedListeners must contain exactly the topics-doc and notes-query listeners");
+});
+
+test("SOURCE GUARD: no broad student members collection listener/query exists (the membership listener is a single known-uid doc, never a list)", () => {
+  const body = studentEntryBody();
+  assert.doesNotMatch(body, /onSnapshot\(collection\(publicDb,GROUP_COLLECTION,id,"members"\)/, "a collection-level onSnapshot on members must not exist in the student flow");
+  assert.doesNotMatch(body, /getDocs\(collection\(publicDb,GROUP_COLLECTION,id,"members"\)/, "a getDocs list on members must not exist in the student flow");
 });
 
 test("SOURCE GUARD: teacher-side groupLive() all-groups subscriptions remain untouched (still broad, unfiltered, unscoped)", () => {

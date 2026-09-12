@@ -86,6 +86,26 @@ test("VISIBILITY: legacy OPEN owner -> hidden", () => {
   assert.equal(canShowActivationAction({ sessionId: "s1", sessionData: session, actorUid: "teacher-a", actorProfile: { role: "teacher", status: "active" } }), false);
 });
 
+// GATE E4/E6: closes the exact test-coverage gap Gate E4 diagnosed — every freshly-created
+// Interaction session starts at status:"ready" (finalizeWizard() in index.html), never
+// "closed", until a teacher explicitly opens then closes it at least once. The implementation
+// (`sessionData.status !== "closed"`) already correctly hides the action for "ready"/"draft" —
+// these three tests just make that already-correct behavior explicit and permanently guarded.
+test("VISIBILITY: legacy READY (freshly wizard-created, never opened) owner -> hidden", () => {
+  const session = legacySessionFixture({ status: "ready" });
+  assert.equal(canShowActivationAction({ sessionId: "s1", sessionData: session, actorUid: "teacher-a", actorProfile: { role: "teacher", status: "active" } }), false);
+});
+
+test("VISIBILITY: legacy DRAFT owner -> hidden", () => {
+  const session = legacySessionFixture({ status: "draft" });
+  assert.equal(canShowActivationAction({ sessionId: "s1", sessionData: session, actorUid: "teacher-a", actorProfile: { role: "teacher", status: "active" } }), false);
+});
+
+test("VISIBILITY: legacy CLOSED owner -> visible (paired explicitly with the ready/draft-hidden cases above)", () => {
+  const session = legacySessionFixture({ status: "closed" });
+  assert.equal(canShowActivationAction({ sessionId: "s1", sessionData: session, actorUid: "teacher-a", actorProfile: { role: "teacher", status: "active" } }), true);
+});
+
 test("VISIBILITY: legacy CLOSED unauthorized user -> hidden", () => {
   const session = legacySessionFixture();
   assert.equal(canShowActivationAction({ sessionId: "s1", sessionData: session, actorUid: "teacher-b", actorProfile: { role: "teacher", status: "active" } }), false, "not the owner");

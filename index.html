@@ -1069,7 +1069,11 @@ async function openActivateContractDialog(sessionId, onActivated){
     if(busy)return; busy=true; confirm.disabled=true; cancel.disabled=true; error.textContent="";
     const operationId = crypto.randomUUID?crypto.randomUUID():`${Date.now()}_${Math.random().toString(36).slice(2)}`;
     try{
-      await activateSessionExplicit({ db, firestore:{doc,getDoc}, sessionId, actorUid: STATE.user.uid, actorProfile: STATE.profile, operationId });
+      // GATE E6 hotfix: activateSessionExplicit() calls contract-writer.mjs's activateContract()
+      // internally, which needs the full { doc, collection, runTransaction, serverTimestamp }
+      // set (plus getDoc for the fresh-state re-read) — a narrower facade here throws a raw,
+      // unclassified TypeError before any Firestore write is even attempted (see Gate E5).
+      await activateSessionExplicit({ db, firestore:{doc,getDoc,collection,runTransaction,serverTimestamp}, sessionId, actorUid: STATE.user.uid, actorProfile: STATE.profile, operationId });
       closeModal();
       // GATE E2 item 9: never implies a semantic revision was created, never auto-opens the
       // Contract editor — a separate, explicit edit action is required afterward.

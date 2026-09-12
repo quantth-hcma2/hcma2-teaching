@@ -1024,7 +1024,16 @@ service cloud.firestore {
               request.resource.data.size is int &&
               request.resource.data.size <= 10485760
             ) ||
-            (request.resource.data.link is string && request.resource.data.link.size() <= 2000)
+            // GATE 2A-S: newly-created link values must be http(s)-only. matches() requires a
+            // full-string match, so this also rejects a leading-whitespace bypass (e.g. a
+            // " javascript:" payload never reaches position 0) and any embedded whitespace/
+            // newline within the value. lower() makes the scheme check case-insensitive. This
+            // is a create-only barrier — files are immutable (allow update: if false below) —
+            // and does not retroactively touch any historical document already written before
+            // this gate; the render-side barrier (group-file-link-safety.mjs) covers those.
+            (request.resource.data.link is string &&
+             request.resource.data.link.size() <= 2000 &&
+             request.resource.data.link.lower().matches('^https?://[^\\s]+$'))
           );
         allow update: if false;
         allow delete: if isAdmin() ||

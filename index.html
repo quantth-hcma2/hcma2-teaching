@@ -361,6 +361,7 @@ tr:hover td{background:#fafbfc;}
 .group-media{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
 .group-media img{width:70px;height:70px;object-fit:cover;border-radius:8px;border:1px solid #e2e8f0;cursor:pointer}
 .group-file{display:block;padding:7px 9px;border-radius:8px;background:#f8fafc;border:1px solid #e2e8f0;margin-top:6px;word-break:break-all}
+.group-file-unsafe{color:#b91c1c;background:#fef2f2;border-color:#fecaca;cursor:default}
 .group-qr-box{background:#fff;border:1px solid var(--border);border-radius:12px;padding:10px;display:inline-block;text-align:center}
 .group-qr-box img{width:170px;height:170px;display:block;cursor:pointer}
 .group-timer{font-size:38px;font-weight:900;letter-spacing:1px}
@@ -501,6 +502,9 @@ import {
 // GATE E2: explicit Contract activation UX. Never auto-invoked — only ever from one explicit,
 // human-confirmed button click. sessions/Interaction only.
 import { canShowActivationAction, activateSessionExplicit, ContractActivationError } from "./contract-activation.mjs";
+// GATE 2A-S: render-time http(s)-only barrier for groupActivities file-links (defense in depth
+// alongside the Rules-side scheme check). Group Discussion only.
+import { safeGroupFileLinkUrl } from "./group-file-link-safety.mjs";
 
 /* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
 const firebaseConfig = {
@@ -1797,6 +1801,20 @@ async function deleteGroupActivityDeep(id){
   await deleteDoc(aRef);
 }
 
+// GATE 2A-S: the only place a groupActivities file document is turned into anchor HTML. Every
+// render site must call this instead of embedding f.link/f.url in an href template directly —
+// safeGroupFileLinkUrl() fails closed (returns null) for anything but http(s), including a
+// historical document that bypassed the old, scheme-less Rules check.
+function groupFileAnchorHtml(f){
+  if(f.link){
+    const safeHref=safeGroupFileLinkUrl(f.link);
+    return safeHref
+      ? `<a class="group-file" href="${esc(safeHref)}" target="_blank" rel="noopener">🔗 ${esc(f.name||"Liên kết")}</a>`
+      : `<span class="group-file group-file-unsafe">⚠️ Liên kết không hợp lệ hoặc không an toàn</span>`;
+  }
+  return `<a class="group-file" href="${f.url||f.dataUrl}" download="${esc(f.name||"tep")}">📄 ${esc(f.name||"Tệp")}</a>`;
+}
+
 async function groupLive(c,id,isAdminView){
   clearListeners();
   let snap;
@@ -1898,7 +1916,7 @@ async function groupLive(c,id,isAdminView){
         ${topics[String(i)]?.topic?`<div class="group-topic">📌 ${esc(topics[String(i)].topic)}</div>`:""}
         <div>${ns.length?ns.map(n=>`<div class="group-note">${esc(n.text||"")}</div>`).join(""):`<div class="mut small">Đang chờ ý kiến…</div>`}</div>
         ${ps.length?`<div class="group-media">${ps.map(p=>`<img src="${p.url||p.dataUrl}" data-gphoto="${p.id}" alt="Ảnh nhóm ${i}">`).join("")}</div>`:""}
-        ${fs.length?`<div>${fs.map(f=>f.link?`<a class="group-file" href="${esc(f.link)}" target="_blank" rel="noopener">🔗 ${esc(f.name||"Liên kết")}</a>`:`<a class="group-file" href="${f.url||f.dataUrl}" download="${esc(f.name||"tep")}">📄 ${esc(f.name||"Tệp")}</a>`).join("")}</div>`:""}
+        ${fs.length?`<div>${fs.map(f=>groupFileAnchorHtml(f)).join("")}</div>`:""}
       </div>`;
     }).join("");
     $("#gRespCount").textContent=`${total} nội dung đã gửi`;
@@ -1914,7 +1932,7 @@ async function groupLive(c,id,isAdminView){
         <div class="small mut" style="margin-bottom:12px">${ns.length} ý kiến · ${ps.length} ảnh · ${fs.length} tệp/link</div>
         ${ns.length?ns.map(n=>`<div class="group-note">${esc(n.text||"")}</div>`).join(""):`<div class="mut">Đang chờ ý kiến…</div>`}
         ${ps.length?`<div class="group-media mt-14">${ps.map(p=>`<img src="${p.dataUrl}" data-popup-photo="${p.id}" alt="Ảnh nhóm ${i}">`).join("")}</div>`:""}
-        ${fs.length?`<div class="mt-14">${fs.map(f=>f.link?`<a class="group-file" href="${esc(f.link)}" target="_blank" rel="noopener">🔗 ${esc(f.name||"Liên kết")}</a>`:`<a class="group-file" href="${f.url||f.dataUrl}" download="${esc(f.name||"tep")}">📄 ${esc(f.name||"Tệp")}</a>`).join("")}</div>`:""}`;
+        ${fs.length?`<div class="mt-14">${fs.map(f=>groupFileAnchorHtml(f)).join("")}</div>`:""}`;
       $("#groupPanelPopup").classList.remove("hidden");
       $$("[data-popup-photo]").forEach(img=>img.onclick=e=>{e.stopPropagation();const p=photos.find(x=>x.id===img.dataset.popupPhoto);if(p)openImageViewerSimple(p.url||p.dataUrl);});
     });

@@ -24,7 +24,8 @@
     "test:gate2a-auth-i2:pure": "node --test test/gate2a-auth-i2/rules-hash-unchanged.test.mjs test/gate2a-auth-i2/source-guard.test.mjs test/gate2a-auth-i2/closed-activity-guard.test.mjs",
     "test:gate2a-auth-i2": "npm run test:gate2a-auth-i2:pure && node test/gate2a-auth-i2/run-emulator-tests.mjs",
     "test:gate2a-auth-i2-correction:pure": "node --test test/gate2a-auth-i2-correction/source-guard.test.mjs",
-    "test:gate2a-auth-i2-correction": "npm run test:gate2a-auth-i2-correction:pure && node test/gate2a-auth-i2-correction/run-emulator-tests.mjs"
+    "test:gate2a-auth-i2-correction": "npm run test:gate2a-auth-i2-correction:pure && node test/gate2a-auth-i2-correction/run-emulator-tests.mjs",
+    "test:gate2a-auth-i2-correction-fix": "node --test test/gate2a-auth-i2-correction-fix/source-guard.test.mjs test/gate2a-auth-i2-correction-fix/generation-guard-pattern.test.mjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^3.0.4"

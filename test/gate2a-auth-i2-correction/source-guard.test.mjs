@@ -132,7 +132,12 @@ test("Manager UI confirms before writing and shows Vietnamese success/error feed
 
 test("Manager UI displays no PII — label is derived only from the opaque uid, no name/email/profile field referenced", () => {
   const body = managerBody();
-  assert.match(body, /"Học viên ••••"\+String\(r\.uid\)\.slice\(-4\)\.toUpperCase\(\)/);
+  // GATE 2A-AUTH-I2-CORRECTION-FIX realigned this: the label now uses the shared
+  // shortStudentCode() helper (last 6 uid chars, uppercase) instead of a locally-inlined
+  // 4-char slice, so the SAME identifier appears on both the student screen and this roster
+  // (see test/gate2a-auth-i2-correction-fix/source-guard.test.mjs for the full proof). Still
+  // derived only from the opaque uid — no PII, no change to that underlying guarantee.
+  assert.match(body, /"Học viên "\+shortStudentCode\(r\.uid\)/);
   for (const piiField of [".name", ".email", ".phone", ".className", ".displayName"]) {
     assert.doesNotMatch(body, new RegExp(`r\\${piiField}`), `manager UI must not reference r${piiField}`);
   }

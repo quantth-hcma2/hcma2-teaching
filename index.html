@@ -2005,7 +2005,7 @@ async function openGroupMembersManager(activityId,groupCount){
     if(snap.empty){list.innerHTML=`<div class="mut small">Chưa có học viên nào tham gia.</div>`;return;}
     const rows=snap.docs.map(d=>({uid:d.id,...d.data()})).sort((x,y)=>(x.group||0)-(y.group||0));
     list.innerHTML=rows.map(r=>{
-      const label="Học viên ••••"+String(r.uid).slice(-4).toUpperCase();
+      const label="Học viên "+shortStudentCode(r.uid);
       return `<div class="flex-between mt-8" data-gmm-row="${esc(r.uid)}"><div>${esc(label)}</div><div class="flex gap-8" style="align-items:center"><select data-gmm-select>${Array.from({length:groupCount||6},(_,k)=>`<option value="${k+1}" ${r.group===k+1?"selected":""}>Nhóm ${k+1}</option>`).join("")}</select><button class="btn btn-sm btn-outline" data-gmm-save>LƯU</button></div></div>`;
     }).join("");
     list.querySelectorAll("[data-gmm-row]").forEach(row=>{
@@ -2034,6 +2034,12 @@ function openImageViewerSimple(src){
   openModal(`<div style="text-align:center"><img src="${src}" style="max-width:85vw;max-height:75vh;border-radius:10px"><div class="mt-12"><button class="btn btn-outline" id="imgClose">ĐÓNG</button></div></div>`,true);
   $("#imgClose").onclick=closeModal;
 }
+
+// GATE 2A-AUTH-I2-CORRECTION-FIX: the ONE shared classroom identifier helper — used verbatim on
+// both the student screen and the lecturer roster, so a student can read this exact code aloud
+// and the lecturer can match it. Display-only, deterministically derived from auth.uid, never
+// stored in Firestore; not PII (an opaque Firebase-generated id substring, not a real name).
+function shortStudentCode(uid){ return String(uid||"").slice(-6).toUpperCase(); }
 
 /* ---------- Học viên tham gia Thảo luận nhóm ---------- */
 // GATE 2A-AUTH-I2 (Stage 2 of 3): validStoredGroup/ensureGroupMembership now live in
@@ -2074,7 +2080,7 @@ async function renderGroupStudentEntry(){
 
     appRoot().innerHTML=`<div class="group-student-wrap">
       <div class="center"><div class="eyebrow">HCMA2 - TEACHING</div><h1 id="gsLiveTitle">👥 ${esc(a.title||"Thảo luận nhóm")}</h1><p class="mut" id="gsLiveInstructions" style="white-space:pre-wrap">${esc(a.instructions||"")}</p></div>
-      <div class="group-student-card"><div class="flex-between"><div><b>Mã phòng: ${esc(code)}</b><div class="small mut" id="gsStatus"></div></div><div class="group-timer" id="gsTimer">--:--</div></div>
+      <div class="group-student-card"><div class="flex-between"><div><b>Mã phòng: ${esc(code)}</b><div class="small mut" id="gsStatus"></div><div class="small mut mt-8">Mã học viên: <b>${esc(shortStudentCode(publicAuth.currentUser.uid))}</b> — nếu cần đổi nhóm, hãy báo mã này cho giảng viên.</div></div><div class="group-timer" id="gsTimer">--:--</div></div>
         <div class="field mt-14"><label>${membershipGroup?"Nhóm của anh/chị":"Chọn nhóm của anh/chị *"}</label><select id="gsGroup" ${membershipGroup?"disabled":""}><option value="">— Chọn nhóm —</option>${Array.from({length:a.groupCount||6},(_,k)=>`<option value="${k+1}" ${membershipGroup===k+1?"selected":""}>Nhóm ${k+1}</option>`).join("")}</select><div class="small mut mt-8" id="gsJoinMsg">${membershipGroup?"Bạn đã tham gia nhóm này — không thể đổi nhóm.":""}</div></div>
         <div id="gsTopic" class="group-topic hidden" style="white-space:pre-wrap"></div>
       </div>
@@ -2087,7 +2093,7 @@ async function renderGroupStudentEntry(){
       <div class="group-student-card"><h3>Ý kiến đã gửi của nhóm</h3><div id="gsMyNotes"><div class="mut small">${membershipGroup?"Đang tải…":"Chọn nhóm để xem."}</div></div></div>
     </div>`;
 
-    let currentTopic=null, notes=[], joinBusy=false, unsubTopic=null, unsubNotes=null, membershipListenerAttached=false, wasOpen=true;
+    let currentTopic=null, notes=[], joinBusy=false, unsubTopic=null, unsubNotes=null, membershipListenerAttached=false, wasOpen=true, contentGeneration=0;
 
     function updateTopicDisplay(){
       const t=currentTopic?.topic||""; const el=$("#gsTopic");
@@ -2102,11 +2108,19 @@ async function renderGroupStudentEntry(){
       $("#gsStatus").textContent=a.status==="open"?"Phòng đang mở — có thể gửi kết quả.":a.status==="closed"?"Phòng đã đóng.":"Phòng chưa mở.";
       $("#gsSubmitCard").classList.toggle("hidden",!membershipGroup || a.status!=="open");
     }
-    // GATE 2A-AUTH-I2-CORRECTION: unsubscribe-then-reattach, never additive — calling this a
+    // GATE 2A-AUTH-I2-CORRECTION-FIX: unsubscribe-then-reattach, never additive — calling this a
     // second time (an authorized lecturer reassignment) tears down the PREVIOUS group's
     // listeners and clears their already-rendered content BEFORE the new group's listeners are
-    // attached, so old and new group data are never visible concurrently (Task F).
+    // attached, so old and new group data are never visible concurrently (Task F). Also bumps
+    // contentGeneration, which every scoped listener callback checks before applying its update —
+    // this is the actual fix for the reported bug: calling a Firestore unsubscribe function is
+    // not a hard guarantee that zero further callbacks can ever fire for that listener (an
+    // already-in-flight snapshot can still be delivered once more), so without this guard a late
+    // callback from the OLD group could land after membershipGroup/the label have already moved
+    // to the NEW group, rendering stale old-group data mislabeled as the new group. The guard
+    // makes any such stale/superseded delivery a silent no-op regardless of the exact trigger.
     function detachScopedListeners(){
+      contentGeneration++;
       if(unsubTopic){unsubTopic();unsubTopic=null;}
       if(unsubNotes){unsubNotes();unsubNotes=null;}
       currentTopic=null; notes=[];
@@ -2114,14 +2128,27 @@ async function renderGroupStudentEntry(){
     }
     function attachScopedListeners(group){
       detachScopedListeners();
-      unsubTopic=onSnapshot(doc(publicDb,GROUP_COLLECTION,id,"topics",String(group)),s=>{currentTopic=s.exists()?s.data():null;updateTopicDisplay();});
-      unsubNotes=onSnapshot(query(collection(publicDb,GROUP_COLLECTION,id,"notes"),where("group","==",group)),s=>{notes=s.docs.map(d=>({id:d.id,...d.data()}));renderMyNotes();});
+      const myGen=contentGeneration;
+      unsubTopic=onSnapshot(doc(publicDb,GROUP_COLLECTION,id,"topics",String(group)),s=>{
+        if(myGen!==contentGeneration)return;
+        currentTopic=s.exists()?s.data():null;updateTopicDisplay();
+      });
+      unsubNotes=onSnapshot(query(collection(publicDb,GROUP_COLLECTION,id,"notes"),where("group","==",group)),s=>{
+        if(myGen!==contentGeneration)return;
+        notes=s.docs.map(d=>({id:d.id,...d.data()}));renderMyNotes();
+      });
     }
     track(()=>{if(unsubTopic)unsubTopic();if(unsubNotes)unsubNotes();});
+    // GATE 2A-AUTH-I2-CORRECTION-FIX: required ordering — detach the OLD group's listeners and
+    // clear their rendered content FIRST (attachScopedListeners' own first action), and only
+    // THEN update the authoritative membershipGroup and the visible group label. The previous
+    // version updated membershipGroup before the old content was cleared; reversing this means
+    // the clear-render pass inside detachScopedListeners always runs while the UI still reflects
+    // the OLD identity, and the NEW identity is only ever shown once paired with cleared content.
     function revealParticipation(group){
+      attachScopedListeners(group);
       membershipGroup=group;
       $("#gsGroup").value=String(group); $("#gsGroup").disabled=true;
-      attachScopedListeners(group);
       updateStudentState(); updateTopicDisplay(); renderMyNotes();
       // GATE 2A-AUTH-I2-CORRECTION: subscribed exactly once (guarded), the first time this
       // student has a confirmed group — reacts to an authorized lecturer/admin reassignment of

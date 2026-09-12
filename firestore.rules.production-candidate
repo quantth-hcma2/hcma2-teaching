@@ -1040,6 +1040,69 @@ service cloud.firestore {
           (isActiveTeacher() &&
            get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
       }
+
+      // GATE 2A-AUTH-I1 (Stage 1 of 3 — purely additive): membership record proving which group
+      // a signed-in identity actually belongs to in this activity. Not yet read or written by
+      // production frontend, and not yet depended on by topics/notes/photos/files above — those
+      // keep their existing, unchanged rules in this gate. Exists solely so Stage 2 (frontend)
+      // has something to write to before Stage 3 (a later gate) ever tightens the read rules
+      // above to depend on it. See the Gate 2A-AUTH-DESIGN report for full reasoning.
+      match /members/{uid} {
+        // The member themselves (needed by the future frontend to detect an idempotent rejoin
+        // without ever hitting the immutable-update deny below), or the owning teacher/admin
+        // (needed to look up a specific, already-known uid before a legitimate reassignment/
+        // delete correction) can read one membership document. No `list` is declared here at
+        // all — deliberately: nothing in this stage or the documented Stage-2 contract needs a
+        // roster query, so omitting it means any list attempt falls through to the outer
+        // `match /{document=**} { allow read, write: if false }` catch-all — an explicit,
+        // unambiguous deny, not an accidental gap.
+        allow get: if isSignedIn() &&
+          (request.auth.uid == uid ||
+           isAdmin() ||
+           (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid));
+
+        // Join-code proof (Gate 2A-AUTH-DESIGN, Task A): Rules cannot see that the caller
+        // resolved a join code at some earlier moment — that is not a provable server-side fact.
+        // The code must therefore travel as a field of THIS write, re-verified here against the
+        // groupJoinCodes mapping. request.resource.data.joinCode is attacker-influenced (unlike
+        // $(activityId), which comes from the already-matched path, not request body data), so
+        // — unlike the $(activityId)-keyed get() calls elsewhere in this file, which the existing,
+        // already-deployed rules above call directly without an exists() guard — this lookup is
+        // explicitly exists()-guarded first, short-circuiting before any .data access on a
+        // possibly-nonexistent document.
+        allow create: if isSignedIn() &&
+          uid == request.auth.uid &&
+          get(/databases/$(database)/documents/groupActivities/$(activityId)).data.status == 'open' &&
+          request.resource.data.keys().hasOnly(['group', 'joinedAt', 'joinCode']) &&
+          request.resource.data.group is int &&
+          request.resource.data.group >= 1 &&
+          request.resource.data.group <= get(/databases/$(database)/documents/groupActivities/$(activityId)).data.groupCount &&
+          request.resource.data.joinedAt == request.time &&
+          request.resource.data.joinCode is string &&
+          exists(/databases/$(database)/documents/groupJoinCodes/$(request.resource.data.joinCode)) &&
+          get(/databases/$(database)/documents/groupJoinCodes/$(request.resource.data.joinCode)).data.activityId == activityId;
+
+        // Immutable to the student (Gate 2A-AUTH-DESIGN, Task D): allowing a student to change
+        // their own group, even conditionally, would let them read through every group in turn
+        // by rejoining — exactly the exposure this whole membership design exists to close.
+        // Owner/admin may correct a mistaken join by reassigning `group` only — joinCode/joinedAt
+        // (the original provenance of the join) are never mutable by anyone, including owner/admin.
+        allow update: if (
+            isAdmin() ||
+            (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid)
+          ) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['group']) &&
+          request.resource.data.group is int &&
+          request.resource.data.group >= 1 &&
+          request.resource.data.group <= get(/databases/$(database)/documents/groupActivities/$(activityId)).data.groupCount;
+
+        // Owner/admin may delete a membership (e.g. to reset a mistaken join). Classroom
+        // consequence, disclosed per Gate 2A-AUTH-DESIGN: the student can re-enroll afterward
+        // using the same valid join code, exactly as if they had never joined.
+        allow delete: if isAdmin() ||
+          (isActiveTeacher() &&
+           get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+      }
     }
 
     // Mã tham gia phòng nhóm. Học viên chỉ GET đúng mã QR; không được LIST.

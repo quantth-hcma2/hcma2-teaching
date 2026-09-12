@@ -18,7 +18,9 @@
     "test:gate-e2": "node test/gate-e2/run-emulator-tests.mjs",
     "test:gate-e6": "node test/gate-e6/run-emulator-tests.mjs",
     "test:gate2as:pure": "node --test test/gate2as/safe-group-file-link.test.mjs test/gate2as/source-guard.test.mjs",
-    "test:gate2as": "npm run test:gate2as:pure && node test/gate2as/run-emulator-tests.mjs"
+    "test:gate2as": "npm run test:gate2as:pure && node test/gate2as/run-emulator-tests.mjs",
+    "test:gate2a-auth-i1:pure": "node --test test/gate2a-auth-i1/additive-only-proof.test.mjs",
+    "test:gate2a-auth-i1": "npm run test:gate2a-auth-i1:pure && node test/gate2a-auth-i1/run-emulator-tests.mjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^3.0.4"

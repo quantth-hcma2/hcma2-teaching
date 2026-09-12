@@ -93,3 +93,39 @@ export function buildInteractionJsonExport(session, className, questionBlocks, s
     }))
   };
 }
+
+/**
+ * GATE 1B.3-D2R item A: pure CSV row builder for exportSessionCSV in index.html — extracted the
+ * same way buildInteractionJsonExport() already was, so the CSV path is equally testable against
+ * real questionBlocks (built by resolveReportQuestionBlocks in contract-runtime.mjs) rather than
+ * only reasoned about. index.html still owns csvEscape()/joining/Blob-download; this only builds
+ * the row data, keyed per response to its OWN question block — never relabeled under a later
+ * revision's semantics, exactly like the JSON export.
+ */
+export function buildInteractionCsvRows(questionBlocks) {
+  const rows = [["Cau hoi", "Loai cau hoi", "Ma nguoi tham gia", "Cau tra loi", "Thoi gian gui"]];
+  for (const b of questionBlocks) {
+    for (const d of b.docs) {
+      let ans = d.answer;
+      if (b.options && b.options.length && d.selectedOptions) {
+        ans = d.selectedOptions.map((oid) => { const o = b.options.find((x) => x.id === oid); return o ? o.text : oid; }).join(" | ");
+      }
+      rows.push([b.q.question, b.q.type, (d.participantId || "").slice(0, 8), ans, d.submittedAt && d.submittedAt.toDate ? d.submittedAt.toDate().toISOString() : ""]);
+    }
+  }
+  return rows;
+}
+
+/**
+ * GATE 1B.3-D2R item B: resolves whether the student-facing result badge should show the
+ * responder count, preferring the value carried on the live aggregate itself (resolved by the
+ * teacher via resolveRuntimeSettings(), which correctly reads the CURRENT Contract config for a
+ * rev>=1 session) over the session root's own showResponderCount field, which is frozen-at-
+ * activation and therefore stale for any rev>=1 session. An aggregate written before this field
+ * existed (or no aggregate at all yet) falls back to the root value, matching the exact
+ * pre-existing behavior for legacy/rev0 sessions.
+ */
+export function resolveShowResponderCount(agg, sessionData) {
+  if (agg && agg.showResponderCount !== undefined) return agg.showResponderCount !== false;
+  return (sessionData && sessionData.showResponderCount) !== false;
+}

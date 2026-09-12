@@ -58,7 +58,7 @@ async function main() {
     await waitForPort("127.0.0.1", port, 60000);
     console.log("[gate1b3d2] emulator ready, running runtime-bridge/reopen-guard tests...");
     exitCode = await new Promise((resolve) => {
-      const t = spawn(process.execPath, ["--test", path.join(here, "contract-runtime.test.mjs")], {
+      const t = spawn(process.execPath, ["--test", path.join(here, "contract-runtime.test.mjs"), path.join(here, "runtime-report-and-aggregate.test.mjs")], {
         stdio: "inherit",
         env: { ...process.env, GATE1B3D2_EMULATOR_PORT: String(port) }
       });

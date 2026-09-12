@@ -192,3 +192,58 @@ export async function verifyReopenIntegrity({ db, firestore, sessionId }) {
 
   return { ok: true, skipped: false, verifiedCount: expectedQuestions.length };
 }
+
+/**
+ * GATE 1B.3-D2R item A: the exact question-block resolution teacherReportView() uses, factored
+ * out so it is directly testable against the real emulator/Rules rather than only reasoned
+ * about. Deliberately includes EVERY question ever created for this session — legacy AND every
+ * Contract revision's own question documents, which persist forever with a fresh, never-reused
+ * ID per revision (Gate 1B.3-C1) — so each historical response stays grouped under the EXACT
+ * document it was actually submitted against, never relabeled under a later revision's
+ * semantics. `allResponses` is passed in (already fetched by the caller) rather than re-queried
+ * here, so this function does no response-collection I/O of its own.
+ */
+export async function resolveReportQuestionBlocks(dbFacade, sessionId, ownerId, allResponses) {
+  const qDocs = await dbFacade.listDocs("questions", { where: [["ownerId", "==", ownerId], ["sessionId", "==", sessionId]] });
+  const questions = qDocs.map((d) => ({ id: d.id, ...d.data })).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  return Promise.all(questions.map(async (q, i) => {
+    let options = [];
+    if (isEmbeddedOptionsQuestion(q)) {
+      options = q.options || [];
+    } else {
+      const optDocs = await dbFacade.listDocs(`questions/${q.id}/options`);
+      options = optDocs.map((o) => ({ id: o.id, ...o.data })).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    }
+    const docs = (allResponses || []).filter((r) => r.questionId === q.id);
+    return { q, options, docs, idx: i };
+  }));
+}
+
+/**
+ * GATE 1B.3-D2R item B: the exact two-write live-aggregate publish teacherLiveControl's
+ * watchResponses() performs on every response snapshot — factored out so the real write path
+ * (through real Rules, not a rules-disabled shortcut) is directly testable. `showResponderCount`
+ * must be the value resolveRuntimeSettings() resolved for the CURRENT revision — carrying it
+ * here is what lets an anonymous student see the correct current value without ever needing to
+ * read configVersions (see the module header). `liveAggregates/{questionId}` is a durable,
+ * per-question record (not currently read back by any consumer — session.liveAggregate on the
+ * root is the one surface student/Presentation code actually consumes); both are still written
+ * together here to keep them from ever silently diverging if a future consumer starts reading
+ * the subcollection.
+ */
+export async function writeLiveAggregate({ db, firestore, sessionId, ownerId, question, chartType, agg, respondedCount, openAnswers, showResponderCount, totalResponseCount }) {
+  const { doc, setDoc, updateDoc, serverTimestamp, Timestamp } = firestore;
+  const aggregatePayload = {
+    questionId: question.id, sessionId, ownerId, chartType, agg, respondedCount,
+    openAnswers: openAnswers ?? null, showResponderCount, updatedAt: serverTimestamp()
+  };
+  await setDoc(doc(db, "sessions", sessionId, "liveAggregates", question.id), aggregatePayload, { merge: true });
+  await updateDoc(doc(db, "sessions", sessionId), {
+    responseCount: totalResponseCount,
+    updatedAt: serverTimestamp(),
+    liveAggregate: {
+      questionId: question.id, chartType, agg, respondedCount,
+      openAnswers: openAnswers ?? null, showResponderCount, updatedAt: Timestamp.now()
+    }
+  });
+}

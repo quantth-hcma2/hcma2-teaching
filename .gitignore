@@ -38,3 +38,7 @@ test/gate2b-rt-rules/firestore.rules
 # index.html + its .mjs modules, verbatim except for the documented emulator-connection
 # substitutions — regenerate, never hand-edit.
 test/gate2a-auth-i3-ui-fix-runtime/public/
+
+# Scratch regression-run logs (this repo's ad hoc full-regression invocations write here) — not
+# source, never the source of truth.
+.regression-logs/

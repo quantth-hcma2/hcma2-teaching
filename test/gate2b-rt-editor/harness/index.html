@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>GATE 2B-RT-EDITOR local harness (NOT production)</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; max-width: 800px; }
+  h1 { font-size: 16px; color: #b91c1c; }
+  #mount { border: 1px solid #999; margin: 12px 0; }
+  [data-rt-toolbar] { border-bottom: 1px solid #ccc; padding: 4px; display: flex; gap: 6px; }
+  [data-rt-editable] { min-height: 160px; padding: 8px; outline: none; }
+  [data-rt-editable]:focus { box-shadow: inset 0 0 0 2px #2563eb; }
+  button[aria-pressed="true"] { background: #2563eb; color: #fff; }
+  button[aria-pressed="mixed"] { background: #93c5fd; }
+  #debug { white-space: pre-wrap; font-family: monospace; font-size: 12px; background: #f5f5f5; padding: 8px; border: 1px solid #ddd; }
+  .row { margin: 6px 0; }
+</style>
+</head>
+<body>
+<h1>GATE 2B-RT-EDITOR harness — local test-only page, not wired to Firestore or index.html</h1>
+<div id="mount"></div>
+<div class="row">
+  <button id="btnGetRich" type="button">getRichText()</button>
+  <button id="btnGetPlain" type="button">getPlainText()</button>
+  <button id="btnSetSample" type="button">setRichText(sample)</button>
+  <button id="btnSetLegacy" type="button">setPlainText(legacy sample)</button>
+  <button id="btnSetOverLimit" type="button">setRichText(one run over limit, direct DOM)</button>
+</div>
+<div id="debug"></div>
+<script type="module">
+  import { RichTextEditor } from "../../../rich-text-editor.mjs";
+
+  const debugEl = document.getElementById("debug");
+  function log(label, value) {
+    debugEl.textContent = label + ":\n" + JSON.stringify(value, null, 2);
+  }
+
+  const editor = new RichTextEditor({
+    container: document.getElementById("mount"),
+    ariaLabel: "Harness rich text editor",
+    onLimitExceeded: (info) => log("onLimitExceeded", info),
+    onChange: () => { window.__lastChangeAt = Date.now(); }
+  });
+  window.__editor = editor;
+
+  document.getElementById("btnGetRich").addEventListener("click", () => log("getRichText()", editor.getRichText()));
+  document.getElementById("btnGetPlain").addEventListener("click", () => log("getPlainText()", editor.getPlainText()));
+  document.getElementById("btnSetSample").addEventListener("click", () => {
+    const r = editor.setRichText({
+      version: 1,
+      blocks: [
+        { type: "paragraph", runs: [{ text: "Sample " }, { text: "bold", bold: true }, { text: " and " }, { text: "italic-red-20", italic: true, color: "red", size: 20 }] },
+        { type: "paragraph", runs: [{ text: "Second paragraph." }] }
+      ]
+    });
+    log("setRichText(sample)", r);
+  });
+  document.getElementById("btnSetLegacy").addEventListener("click", () => {
+    const r = editor.setPlainText("Legacy line one\nLegacy line two\n\nLegacy line four after blank");
+    log("setPlainText(legacy)", r);
+  });
+  document.getElementById("btnSetOverLimit").addEventListener("click", () => {
+    // Deliberately bypasses setRichText's own validation to construct an over-limit DOM directly,
+    // to exercise getRichText()'s fail-closed reporting from the harness UI.
+    while (editor.editableEl.firstChild) editor.editableEl.removeChild(editor.editableEl.firstChild);
+    const block = document.createElement("div");
+    block.setAttribute("data-rt-block", "paragraph");
+    const span = document.createElement("span");
+    span.setAttribute("data-rt-run", "1");
+    span.textContent = "x".repeat(501);
+    block.appendChild(span);
+    editor.editableEl.appendChild(block);
+    log("setRichText(over-limit direct DOM) — now try getRichText()", { note: "click getRichText() to see the fail-closed result" });
+  });
+</script>
+</body>
+</html>

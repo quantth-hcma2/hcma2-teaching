@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "gate2b-rt-editor-harness",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["test/gate2b-rt-editor/harness/serve-static.mjs"],
+      "port": 8199
+    }
+  ]
+}

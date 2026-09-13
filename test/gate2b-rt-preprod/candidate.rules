@@ -1,0 +1,1665 @@
+rules_version = '2';
+
+// ============================================================
+// HCMA2 - TEACHING — Firestore Security Rules — V2 Knowledge Phase 2 AI
+// ============================================================
+// Nguyên tắc:
+// - Không có rule mở toàn bộ database.
+// - Giảng viên CHỈ truy cập dữ liệu do chính mình sở hữu (ownerId == uid),
+//   VÀ CHỈ KHI tài khoản đang ở trạng thái role=='teacher' && status=='active'
+//   (FIX 2 — một giảng viên bị suspended bị chặn NGAY tại tầng Rules, không chỉ ẩn ở UI).
+// - Học viên (anonymous) không đăng nhập bằng email/password, chỉ được:
+//     + đọc session đã OPEN/CLOSED/ARCHIVED (không đọc DRAFT/READY),
+//     + đọc câu hỏi + phương án đang active của session OPEN,
+//     + gửi (create) response CHỈ cho ĐÚNG câu hỏi đang active của session OPEN,
+//       trong ĐÚNG thời hạn timeLimit (nếu có) — kiểm tra bằng request.time (FIX 3 + FIX 4),
+//     + response được giới hạn field bằng allowlist, submittedAt bắt buộc = request.time (FIX 9),
+//     + KHÔNG được đọc responses của người khác, KHÔNG được liệt kê (list) responses,
+//     + KHÔNG được tự đổi role/status/ownerId của bất kỳ ai.
+// - Admin (role=='admin' && status=='active') được quản lý toàn hệ thống,
+//   nhưng KHÔNG ai được tự nâng quyền chính mình lên admin từ client.
+// - sessionTokens/{token} và joinCodes/{code}: chỉ cho GET-theo-ID, KHÔNG cho LIST,
+//   để học viên tra được sessionId từ QR/mã tham gia mà không thể liệt kê toàn bộ hệ thống.
+// ============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------- Helper functions ----------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAnon() {
+      return isSignedIn() &&
+        request.auth.token.firebase.sign_in_provider == 'anonymous';
+    }
+
+    function userData(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && !isAnon() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        userData(request.auth.uid).role == 'admin' &&
+        userData(request.auth.uid).status == 'active';
+    }
+
+    function isActiveTeacher() {
+      return isSignedIn() && !isAnon() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        userData(request.auth.uid).role == 'teacher' &&
+        userData(request.auth.uid).status == 'active';
+    }
+
+    // FIX 2: chủ sở hữu CHỈ có quyền nếu chính là uid == ownerId VÀ hiện đang là
+    // giảng viên active (role=='teacher' && status=='active'). Một giảng viên bị
+    // suspended sẽ KHÔNG còn thỏa điều kiện này nữa cho DÙ ownerId có khớp uid,
+    // nên mọi rule dùng isOwnerOrAdmin() đều tự động chặn giảng viên bị khóa.
+    function isOwnerActiveTeacher(ownerId) {
+      return isSignedIn() && !isAnon() &&
+        request.auth.uid == ownerId && isActiveTeacher();
+    }
+
+    function isOwnerOrAdmin(ownerId) {
+      return isOwnerActiveTeacher(ownerId) || isAdmin();
+    }
+
+    function sessionData(sessionId) {
+      return get(/databases/$(database)/documents/sessions/$(sessionId)).data;
+    }
+
+    function questionData(questionId) {
+      return get(/databases/$(database)/documents/questions/$(questionId)).data;
+    }
+
+    // FIX A (atomic batch): get()/exists() only see the database's CURRENT COMMITTED
+    // state — they do NOT see sibling writes that are part of the SAME transaction or
+    // batched write that hasn't committed yet. getAfter()/existsAfter() instead resolve
+    // to what a document WILL look like once every write in the current transaction/batch
+    // has been applied. finalizeWizard() writes session + joinCode + sessionToken +
+    // questions + options together in ONE atomic writeBatch(), so when Rules validate a
+    // `questions create` (or an `options create`) they must be able to see the sibling
+    // session (or question) document that is being created in that very same batch —
+    // otherwise get() would see it as not-yet-existing and every such create would be
+    // wrongly denied. getAfter() is used ONLY at these two specific "will this sibling
+    // document exist after the atomic write" checks below — every other get()/exists()
+    // call in this file reads a resource that genuinely already exists independently of
+    // the write being validated (a user account, a session being read by a student, a
+    // session being referenced by a response, etc.), so those correctly stay as get().
+    function sessionDataAfter(sessionId) {
+      return getAfter(/databases/$(database)/documents/sessions/$(sessionId)).data;
+    }
+
+    function questionDataAfter(questionId) {
+      return getAfter(/databases/$(database)/documents/questions/$(questionId)).data;
+    }
+
+    // GATE 1B.3-C1: the one manifest-entry lookup every Contract question `create` check
+    // needs, factored into one place so every field comparison below reads as "the manifest
+    // entry says X" without repeating the getAfter() path. Firestore Rules caches repeated
+    // get()/getAfter() calls to the SAME document within one rule evaluation, so calling this
+    // function many times (once per field compared) still counts as the ONE document access
+    // it represents — not one per call.
+    function contractManifestEntryAfter(sessionId, configId, order) {
+      let cfg = getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(configId)).data;
+      return cfg.questions[order];
+    }
+
+    // GATE 1B.3-C1R: a real revision-apply batch touches 3 documents at once (configVersions
+    // create + editHistory create + session root update), and the FULL Rules file has multiple
+    // OR'd allow-statements per path — the cumulative expression count Firestore evaluates
+    // across that whole batch is a real, separate constraint from per-call get()/getAfter()
+    // caching (confirmed empirically: the session root apply_config branch alone, written with
+    // 5+ separate getAfter() expressions, pushed a real 3-document batch over Firestore's
+    // per-request expression-evaluation ceiling — "Unable to evaluate the expression as the
+    // maximum of 1000 expressions to evaluate has been reached"). Consolidating each cross-
+    // document proof into one function call with one `let`-bound read, instead of many separate
+    // getAfter() expressions inline in the allow-statement, is what actually keeps a 3-document
+    // batch under that ceiling.
+    function sessionsApplyTargetOk(sessionId, configId, expectedRevision, expectedParentConfigId, expectedQuestionCount) {
+      let cfg = getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(configId)).data;
+      return cfg.revision == expectedRevision &&
+        cfg.parentConfigId == expectedParentConfigId &&
+        cfg.kind == 'interaction' &&
+        cfg.roundId == configId &&
+        cfg.questions.size() == expectedQuestionCount;
+    }
+
+    function sessionsApplyHistoryOk(sessionId, operationId, expectedRevision, expectedConfigId, actorUid) {
+      let h = getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(operationId)).data;
+      return h.operationType == 'apply_config' &&
+        h.resultingRevision == expectedRevision &&
+        h.resultingConfigId == expectedConfigId &&
+        h.actorUid == actorUid;
+    }
+
+    // GATE 1B.3-C1R: same consolidation as the two helpers above, applied to the pre-existing
+    // (Gate 1B.2B) activation branch's own 9 unconsolidated getAfter() expressions — a real
+    // revision-1 apply batch and an activation batch both write to the same 3 collections
+    // (session root + configVersions + editHistory), so this pre-existing branch's own
+    // complexity is part of the SAME per-request expression budget any batch touching the
+    // session root must fit within, not a separate concern.
+    function sessionsActivationTargetOk(sessionId, configId) {
+      let cfg = getAfter(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(configId)).data;
+      return cfg.revision == 0 &&
+        cfg.parentConfigId == null &&
+        cfg.kind == 'activation_baseline' &&
+        cfg.source == 'legacy_snapshot' &&
+        cfg.activatedFromLegacy == true;
+    }
+
+    function sessionsActivationHistoryOk(sessionId, operationId, expectedConfigId, actorUid) {
+      let h = getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(operationId)).data;
+      return h.operationType == 'activate_contract' &&
+        h.resultingRevision == 0 &&
+        h.resultingConfigId == expectedConfigId &&
+        h.actorUid == actorUid;
+    }
+
+    // FIX 4: kiểm tra câu hỏi vẫn còn trong thời hạn trả lời (nếu có đặt timeLimit>0),
+    // dựa trên session.activeQuestionStartedAt (Timestamp server ghi khi giảng viên
+    // kích hoạt câu hỏi) cộng với question.timeLimit (giây), so với request.time
+    // (thời điểm server nhận request — không thể giả mạo từ client).
+    function withinTimeLimit(sessionId, questionId) {
+      let q = questionData(questionId);
+      let s = sessionData(sessionId);
+      return q.timeLimit == 0 ||
+        (s.activeQuestionStartedAt != null &&
+         request.time <= s.activeQuestionStartedAt + duration.value(q.timeLimit, 's'));
+    }
+
+    // FIX 3: câu hỏi đang gửi/sửa response PHẢI là câu hỏi đang active của session.
+    function isActiveQuestion(sessionId, questionId) {
+      return sessionData(sessionId).activeQuestionId == questionId;
+    }
+
+    // ---------------- USERS ----------------
+    // users/{uid}
+    match /users/{uid} {
+      // Đọc hồ sơ chính mình LUÔN được phép (kể cả khi status==suspended) — cần thiết để
+      // FIX 10 (theo dõi trạng thái realtime) và màn hình "tài khoản bị khóa" hoạt động.
+      allow read: if isSignedIn() && !isAnon() &&
+        (request.auth.uid == uid || isAdmin());
+
+      // Tự đăng ký: chỉ được tạo hồ sơ của chính mình,
+      // luôn bắt đầu role=teacher, status=pending (không tự phong admin).
+      allow create: if isSignedIn() && !isAnon() &&
+        request.auth.uid == uid &&
+        request.resource.data.uid == uid &&
+        request.resource.data.role == 'teacher' &&
+        request.resource.data.status == 'pending';
+
+      // Cập nhật:
+      //  - Chính chủ: chỉ được sửa thông tin cá nhân (displayName, updatedAt...),
+      //    KHÔNG được đổi role/status/approvedBy/approvedAt/uid/email — kể cả khi
+      //    đang bị suspended (không tự nâng trạng thái chính mình lên active).
+      //  - Admin: được đổi role/status/approvedBy/approvedAt cho người khác,
+      //    nhưng KHÔNG được đổi uid/email của tài khoản đó.
+      allow update: if isSignedIn() && !isAnon() && (
+        (
+          request.auth.uid == uid &&
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.status == resource.data.status &&
+          request.resource.data.approvedBy == resource.data.approvedBy &&
+          request.resource.data.approvedAt == resource.data.approvedAt &&
+          request.resource.data.uid == resource.data.uid &&
+          request.resource.data.email == resource.data.email
+        ) ||
+        (
+          isAdmin() &&
+          request.resource.data.uid == resource.data.uid &&
+          request.resource.data.email == resource.data.email
+        )
+      );
+
+      allow delete: if false;
+    }
+
+    // ---------------- CLASSES ----------------
+    match /classes/{classId} {
+      allow read: if isOwnerOrAdmin(resource.data.ownerId);
+
+      allow create: if isActiveTeacher() &&
+        request.resource.data.ownerId == request.auth.uid;
+
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        request.resource.data.ownerId == resource.data.ownerId;
+
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+    }
+
+    // ---------------- LIBRARY ----------------
+    // Giảng viên chỉ đọc/sửa thư viện của mình; Admin được đọc toàn bộ thư viện
+    // để quản trị và làm nguồn dữ liệu cho các chức năng AI trong tương lai.
+    match /library/{itemId} {
+      allow read: if isOwnerOrAdmin(resource.data.ownerId);
+      allow create: if isActiveTeacher() && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+    }
+
+    // ---------------- QUESTION SETS / BỘ CÂU HỎI MẪU ----------------
+    match /questionSets/{setId} {
+      allow read: if isOwnerOrAdmin(resource.data.ownerId);
+      allow create: if isActiveTeacher() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.questions is list &&
+        request.resource.data.questions.size() >= 1 &&
+        request.resource.data.questions.size() <= 50;
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.questions is list &&
+        request.resource.data.questions.size() <= 50;
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+    }
+
+    // ---------------- JOIN CODES ----------------
+    // joinCodes/{shortCode} -> { sessionId, ownerId }
+    // Ánh xạ mã tham gia ngắn (VD: ABC-729) sang sessionId, cho phép học viên
+    // tra cứu bằng GET theo ID (không phải LIST) để tránh liệt kê toàn bộ session.
+    match /joinCodes/{code} {
+      allow get: if isSignedIn();
+      allow list: if false;
+      allow create: if isActiveTeacher() && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+    }
+
+    // ---------------- SESSION TOKENS (FIX 8) ----------------
+    // sessionTokens/{accessToken} -> { sessionId, ownerId }
+    // Ánh xạ accessToken (chuỗi ngẫu nhiên mật mã học, 28 ký tự) sang sessionId, để
+    // liên kết/QR học viên KHÔNG cần nhúng sessionId trực tiếp. Cùng khuôn mẫu chống
+    // liệt kê như joinCodes: chỉ GET-theo-ID, không LIST.
+    match /sessionTokens/{token} {
+      allow get: if isSignedIn();
+      allow list: if false;
+      allow create: if isActiveTeacher() && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) && request.resource.data.ownerId == resource.data.ownerId;
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+    }
+
+    // ---------------- SESSIONS ----------------
+    match /sessions/{sessionId} {
+      // GET (đọc 1 session theo ID đã biết trước, ví dụ đã tra được từ sessionTokens/joinCodes):
+      //  - Giảng viên/Admin: đọc session của chính mình (hoặc mọi session nếu là Admin);
+      //    giảng viên bị suspended KHÔNG còn thỏa isOwnerOrAdmin (FIX 2).
+      //  - Học viên (anonymous, kể cả chưa biết trước): chỉ đọc khi session đã
+      //    OPEN/CLOSED/ARCHIVED (không đọc được DRAFT/READY để tránh lộ nội dung trước giờ).
+      //  GIỚI HẠN ĐÃ BIẾT (xem README): Rules không thể xác minh accessToken cho một
+      //  GET đơn lẻ (Rules không nhìn thấy query string của URL) — sự bảo vệ ở đây đến
+      //  từ việc sessionId là ID ngẫu nhiên không thể đoán được do Firestore tự sinh,
+      //  và không ai (kể cả học viên) được LIST để dò ra sessionId hợp lệ.
+      allow get: if isOwnerOrAdmin(resource.data.ownerId) || (
+        isSignedIn() &&
+        (resource.data.status == 'open' || resource.data.status == 'closed' || resource.data.status == 'archived')
+      );
+      // LIST (truy vấn nhiều session cùng lúc): CHỈ giảng viên chủ sở hữu ĐANG ACTIVE hoặc Admin.
+      // Học viên/anonymous KHÔNG được liệt kê session (chống liệt kê toàn bộ hệ thống).
+      allow list: if isOwnerOrAdmin(resource.data.ownerId);
+
+      // GATE 1B.2A: create is allowlisted to exactly the fields the create wizard writes today
+      // (finalizeWizard() in index.html) — closes the path for a modified/stale client to create
+      // a session with contract metadata (editContractVersion/configRevision/currentConfigId/
+      // lastOperationId/contractActivatedAt) already set, bypassing activation entirely.
+      allow create: if isActiveTeacher() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.keys().hasOnly([
+          'ownerId','classId','className','title','description','status',
+          'accessToken','shortCode','showResults','allowMultipleResponses','anonymous',
+          'showResponderCount','startedAt','closedAt','createdAt','updatedAt',
+          'questionCount','responseCount','activeQuestionId','activeQuestionStartedAt',
+          'sessionGroupId','roundNumber'
+        ]);
+
+      // GATE 1B.2A: update is allowlisted by DIFF (affectedKeys), not by the full document's
+      // keys() — so a legacy document carrying any older/unknown field keeps updating normally
+      // as long as that field's value isn't touched. ownerId stays immutable (both the explicit
+      // check below and its absence from this list). Any field not in this list — including
+      // editContractVersion/configRevision/currentConfigId/lastOperationId/contractActivatedAt,
+      // any brand-new arbitrary field, or any change to an existing-but-unlisted field — is
+      // denied. This is the exact set of fields any current legitimate write path in index.html
+      // (Gate 1A edit, open/close/reopen/archive, switchQuestion, edit-time, toggle-results,
+      // live-aggregate recompute, trash/restore) ever changes on this document today.
+      // GATE 1B.2B: legacy branch now additionally requires the session to NOT already be
+      // contract-activated (!('configRevision' in resource.data)). Once activated, this branch
+      // can never match again — a stale/old client attempting its old blind legacy-shaped
+      // update against an activated session has no other branch to fall into either (see the
+      // two branches below), so it fails closed server-side, not just via client-side
+      // assertLegacyWritable(). Before activation this is byte-identical to Gate 1B.2A.
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        !('configRevision' in resource.data) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title','description','status','startedAt','closedAt',
+          'activeQuestionId','activeQuestionStartedAt','showResults',
+          'responseCount','liveAggregate','deletedAt','deletedBy','updatedAt'
+        ]);
+
+      // GATE 1B.2B: contract activation (legacy -> configRevision 0). One-way: the
+      // !('configRevision' in resource.data) precondition means this branch can never match a
+      // second time on the same document. Only from CLOSED, never-trashed state. Never touches
+      // status. Requires the sibling configVersions (the activation-baseline manifest) and
+      // editHistory (the activate_contract audit entry) documents to exist, with matching
+      // revision/actor, in the SAME commit (getAfter()) — a client cannot set editContractVersion/
+      // configRevision/currentConfigId/lastOperationId/contractActivatedAt without also
+      // atomically producing both sibling documents correctly.
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        !('configRevision' in resource.data) &&
+        resource.data.status == 'closed' &&
+        (!('deletedAt' in resource.data) || resource.data.deletedAt == null) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'editContractVersion','configRevision','currentConfigId','lastOperationId',
+          'contractActivatedAt','updatedAt'
+        ]) &&
+        request.resource.data.editContractVersion == 1 &&
+        request.resource.data.configRevision == 0 &&
+        request.resource.data.contractActivatedAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        sessionsActivationTargetOk(sessionId, request.resource.data.currentConfigId) &&
+        sessionsActivationHistoryOk(sessionId, request.resource.data.lastOperationId, request.resource.data.currentConfigId, request.auth.uid);
+
+      // GATE 1B.2B: generic config-revision update (apply_config foundation). CLOSED-FIRST,
+      // absolute — never permitted while status == 'open' (Gate 1A-style edit_info is the
+      // separate legacy branch above and is not gated by this). Exactly +1, never a jump.
+      // Same sibling-document atomicity proof as activation, anchored via lastOperationId.
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        ('configRevision' in resource.data) &&
+        resource.data.status == 'closed' &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.status == resource.data.status &&
+        // GATE 1B.3-C1R: every real apply_config for the Interaction (sessions) family is now
+        // required to be a COMPLETE revision — the frozen derived/runtime reset fields are
+        // MANDATORY (hasAll, not merely permitted), and the new config it points at must be
+        // proven to be a genuine full Interaction manifest (kind=='interaction', roundId==
+        // currentConfigId, and questionCount matching its own declared question count) — closing
+        // both the "partial revision" gap and the "stale runtime pointer after a real revision"
+        // gap found in review. This is a hard requirement going forward for THIS family only;
+        // groupActivities/knowledgeSessions' apply_config branches are untouched. A modified
+        // client can no longer create a revision N+1 for sessions while leaving activeQuestionId/
+        // activeQuestionStartedAt/responseCount/liveAggregate pointing at the retired round, and
+        // can no longer create a revision N+1 carrying only the old title/description shape.
+        // GATE 1B.3-C1X: root-caused the "maximum of 1000 expressions" ceiling to this exact
+        // spot, empirically, via a bisected diagnostic (not guessed): calling
+        // .diff(resource.data) a SECOND time for a separate hasAll() check — even reused via a
+        // single let-bound helper function — was consistently what tipped this 3-document batch
+        // (session root + configVersions create + editHistory create) over Firestore's
+        // per-request Rules expression-evaluation budget. hasAll() here is not actually needed
+        // for the security invariant: the scalar value checks below (activeQuestionId == null,
+        // etc.) are evaluated against request.resource.data — the FINAL MERGED document state
+        // for this write, not just the fields this specific update() call touched — so a client
+        // that tries to OMIT one of these fields from its update payload still has that field's
+        // final value checked against the required reset value. If the prior value wasn't
+        // already correct, the write is denied exactly as before (verified: a write that leaves
+        // a stale non-null activeQuestionId/non-zero responseCount by omitting them from the
+        // payload is still denied). hasOnly() (a single .diff() call, unchanged) still bounds
+        // which fields may be touched at all.
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'configRevision','currentConfigId','lastOperationId','updatedAt',
+          'questionCount','activeQuestionId','activeQuestionStartedAt','responseCount','liveAggregate'
+        ]) &&
+        request.resource.data.configRevision == resource.data.configRevision + 1 &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.activeQuestionId == null &&
+        request.resource.data.activeQuestionStartedAt == null &&
+        request.resource.data.responseCount == 0 &&
+        request.resource.data.liveAggregate == null &&
+        request.resource.data.questionCount is int &&
+        sessionsApplyTargetOk(sessionId, request.resource.data.currentConfigId, request.resource.data.configRevision, resource.data.currentConfigId, request.resource.data.questionCount) &&
+        sessionsApplyHistoryOk(sessionId, request.resource.data.lastOperationId, request.resource.data.configRevision, request.resource.data.currentConfigId, request.auth.uid);
+
+      // GATE 1B.2B (fix, post-review): contract non-config lifecycle/runtime updates. An
+      // activated session must remain fully operable — open/close/reopen, active-question
+      // switching, edit-time, toggle-results, live-aggregate recompute, trash/restore — exactly
+      // as before activation, WITHOUT that being a config edit. This branch allows only the
+      // same non-config fields the legacy branch always allowed (title/description are
+      // deliberately EXCLUDED here — they are Class-B/config fields; editing them post-
+      // activation is not implemented in Gate 1B.2B and must go through a future contract
+      // "edit_info" operation, not this branch). configRevision, currentConfigId,
+      // editContractVersion, contractActivatedAt and lastOperationId are all absent from the
+      // allowlist below, so none of them can move through this branch — this is exactly what
+      // prevents it from being used to fake a configVersion or bypass semantic-config
+      // protection: it can change lifecycle/runtime state, never the contract pointer/revision.
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        ('configRevision' in resource.data) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status','startedAt','closedAt','activeQuestionId','activeQuestionStartedAt',
+          'showResults','responseCount','liveAggregate','deletedAt','deletedBy','updatedAt'
+        ]);
+
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId);
+
+      // ---------------- GATE 1B.2B: CONTRACT VERSIONS (immutable) ----------------
+      match /configVersions/{configId} {
+        // BLOCKER 2 fix (post-review): get-only, no list — the writer (contract-writer.mjs)
+        // only ever reads one specific, already-known configId via a transaction get() (to
+        // resolve the ancestry chain, or to compare an idempotency retry's manifest), never a
+        // collection query. No reader/UI in this gate lists the whole configVersions
+        // collection either, so list is not granted until something actually needs it.
+        allow get: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId);
+        // The getAfter() check on the parent session closes the loop the other direction from
+        // the root update rules above: a version doc can only be created if, in the SAME
+        // commit, the session root ends up pointing at it via currentConfigId — a client cannot
+        // create an orphan/unlinked configVersions doc standalone, even if every field looks
+        // individually well-formed.
+        allow create: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId) &&
+          request.resource.data.createdBy == request.auth.uid &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.revision is int && request.resource.data.revision >= 0 &&
+          request.resource.data.active == true &&
+          // GATE 1B.3-C1: extended to admit the frozen revision >=1 Interaction manifest shape
+          // (roundId/allowMultipleResponses/anonymous/showResponderCount/questions) alongside
+          // the unchanged revision-0 activation_baseline shape. hasOnly() only bounds what MAY be
+          // present — see the GATE 1B.3-C1R check immediately below for what MUST be present.
+          request.resource.data.keys().hasOnly([
+            'revision','parentConfigId','kind','source','createdAt','createdBy',
+            'activatedFromLegacy','active','title','description',
+            'roundId','allowMultipleResponses','anonymous','showResponderCount','questions'
+          ]) &&
+          // GATE 1B.3-C1R: a document claiming kind=='interaction' — i.e. any REAL revision >=1
+          // for the Interaction (sessions) family, produced by activateContract()'s 'legacy
+          // v-snapshot -> activation_baseline' path never applies here — must carry the COMPLETE
+          // frozen manifest shape. This is what closes the old writer's partial title/description-
+          // only apply_config path: contract-writer.mjs's applyConfigRevision() sets kind to
+          // cfg.readerKind ('interaction' for this family) unconditionally, so its old, unmodified
+          // partial shape now fails this hasAll() check and is correctly denied — not because the
+          // writer changed, but because a real Interaction revision now requires more than it
+          // knows how to produce. Revision 0 (kind=='activation_baseline') is completely
+          // unaffected by this check and remains exactly as it always was.
+          (request.resource.data.kind != 'interaction' || (
+            request.resource.data.keys().hasAll([
+              'roundId','allowMultipleResponses','anonymous','showResponderCount','questions'
+            ]) &&
+            request.resource.data.roundId == configId
+          )) &&
+          // GATE 1B.3-C1: bound the embedded questions[] array's overall size, when present — a
+          // pure in-memory check over data already part of this write (no additional document
+          // reads). Firestore Rules' CEL dialect does not support a list-comprehension macro
+          // (no .all()/.exists() over a list — confirmed empirically against the emulator, not
+          // assumed), so per-entry structural validation of each question/option map inside this
+          // array cannot be expressed as a Rules-level loop. That per-entry proof is instead
+          // where it actually matters and IS enforceable: the questions/{questionId} create rule
+          // below performs the real, per-document integrity check (identity, position, semantic
+          // content, embedded options) for every question that is actually created — this
+          // top-level size bound is defense in depth on the manifest document's own shape, not a
+          // substitute for that per-document proof.
+          (!('questions' in request.resource.data) || request.resource.data.questions.size() <= 100) &&
+          getAfter(/databases/$(database)/documents/sessions/$(sessionId)).data.currentConfigId == configId;
+        // No update/delete rule at all -> immutable by omission (default-deny).
+      }
+
+      // ---------------- GATE 1B.2B: EDIT HISTORY (append-only) ----------------
+      match /editHistory/{operationId} {
+        // BLOCKER 2 fix (post-review): get-only, no list — same reasoning as configVersions
+        // above. contract-writer.mjs's idempotency check reads exactly one editHistory doc by
+        // its operationId (a transaction get() on a known path), it never lists/queries the
+        // collection, so list is not granted.
+        allow get: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId);
+        // Same closing-the-loop reasoning as configVersions above, anchored via lastOperationId.
+        allow create: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId) &&
+          getAfter(/databases/$(database)/documents/sessions/$(sessionId)).data.lastOperationId == operationId &&
+          request.resource.data.operationId == operationId &&
+          request.resource.data.actorUid == request.auth.uid &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.keys().hasOnly([
+            'operationId','actorUid','operationType','baseRevision','resultingRevision',
+            'previousConfigId','resultingConfigId','changedFields','createdAt',
+            'lifecycleBefore','lifecycleAfter'
+          ]);
+        // No update/delete rule at all -> append-only by omission (default-deny).
+      }
+
+      // ---------------- GATE 1B.3-C1: LEGACY TRANSITION SNAPSHOT (singleton, create-only) ----------------
+      // Frozen in Gate 1B.3-B2/B3.1: an honest, editor-confirmed (NOT commit-time-reverified)
+      // compatibility bridge captured exactly once, only during the FIRST revision-1 apply, so
+      // legacy question IDs referenced by historical responses stay resolvable without ever
+      // rewriting revision 0 or claiming precision the system cannot prove. A literal (non-
+      // wildcard) path segment is used for the document ID — this is what actually guarantees
+      // "only ID snapshot, never a second one": any write to any OTHER document ID under this
+      // collection matches no rule at all (default-deny), and a second write attempt to THIS
+      // exact path is evaluated as an update (no update rule exists here -> default-deny too).
+      match /legacyTransitionSnapshot/snapshot {
+        allow get: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId);
+        // No list rule -> list denied by omission, same policy as configVersions/editHistory.
+        allow create: if isOwnerOrAdmin(get(/databases/$(database)/documents/sessions/$(sessionId)).data.ownerId) &&
+          request.resource.data.keys().hasOnly([
+            'kind','basis','appliedAt','capturedDuringOperationId','parentConfigId','legacyQuestions'
+          ]) &&
+          request.resource.data.kind == 'legacy_transition_snapshot' &&
+          request.resource.data.basis == 'editor_confirmed' &&
+          request.resource.data.appliedAt == request.time &&
+          // Only ever bridges away from the activation baseline this session was really
+          // activated with — proven against the PRE-write session state (get(), not getAfter()),
+          // so this can only be created during the one transition FROM revision 0.
+          request.resource.data.parentConfigId == get(/databases/$(database)/documents/sessions/$(sessionId)).data.currentConfigId &&
+          get(/databases/$(database)/documents/sessions/$(sessionId)/configVersions/$(request.resource.data.parentConfigId)).data.kind == 'activation_baseline' &&
+          // Must correspond to the exact same apply operation that is, in this same commit,
+          // moving the session to revision 1 (never revision 2+) — closes the loop the same way
+          // configVersions/editHistory already do, anchored via editHistory instead of the root.
+          getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.capturedDuringOperationId)).data.operationType == 'apply_config' &&
+          getAfter(/databases/$(database)/documents/sessions/$(sessionId)/editHistory/$(request.resource.data.capturedDuringOperationId)).data.resultingRevision == 1 &&
+          // GATE 1B.3-C1: same size-only bound as configVersions above, for the same reason —
+          // Firestore Rules' CEL dialect has no list-comprehension macro to validate each
+          // legacyQuestions[] entry's own shape (confirmed empirically). This document is an
+          // editor-confirmed compatibility bridge, not a Rules-enforced integrity boundary the
+          // way the questions/{questionId} create rule is (see its comment) — deeper validation
+          // of its contents remains client-side, consistent with its "editor_confirmed" basis.
+          request.resource.data.legacyQuestions.size() <= 100;
+        // No update/delete rule at all -> immutable by omission. No PII field name appears
+        // anywhere in the allowlist above.
+      }
+
+      // ---------------- RESPONSES (subcollection) ----------------
+      match /responses/{responseId} {
+        // GET: chủ session (đang active)/admin đọc mọi response; học viên CHỈ được đọc ĐÚNG
+        // response của chính mình (theo participantId == uid đang đăng nhập) để
+        // hỗ trợ kiểm tra "đã trả lời chưa" / cho phép sửa câu trả lời — không có
+        // cách nào để học viên đọc response của người khác vì phải biết chính xác
+        // document ID (dạng questionId_participantId) và participantId phải khớp uid.
+        // FIX B: nhánh "tự đọc response của mình" CHỈ áp dụng cho participant ẩn danh
+        // (isAnon()) — đúng với quy định V1 "học viên luôn dùng Anonymous Auth". Một tài
+        // khoản email/password bình thường (không phải giảng viên/admin sở hữu session)
+        // không có lý do hợp lệ nào để tự đóng vai học viên và đọc response qua nhánh này.
+        allow get: if isOwnerOrAdmin(sessionData(sessionId).ownerId) ||
+          (isAnon() && resource.data.participantId == request.auth.uid);
+
+        // LIST: học viên KHÔNG BAO GIỜ được liệt kê responses (chống xem trộm kết quả người khác).
+        allow list: if isOwnerOrAdmin(sessionData(sessionId).ownerId);
+
+        // Gửi câu trả lời — TẤT CẢ điều kiện dưới đây đều bắt buộc (FIX 3 + FIX 4 + FIX 9):
+        //  - bắt buộc đăng nhập (kể cả anonymous), participantId PHẢI đúng bằng uid đang
+        //    đăng nhập (chống giả mạo trả lời thay người khác);
+        //  - sessionId trong dữ liệu gửi lên PHẢI khớp path, và question.sessionId PHẢI
+        //    khớp sessionId (câu hỏi phải thuộc đúng session này);
+        //  - session PHẢI đang OPEN;
+        //  - questionId gửi lên PHẢI là câu hỏi ĐANG ACTIVE của session (không cho gửi
+        //    "trả lời trễ" cho câu hỏi cũ đã bị giảng viên chuyển qua câu khác);
+        //  - PHẢI còn trong thời hạn timeLimit (nếu câu hỏi có đặt giới hạn thời gian);
+        //  - responseId PHẢI theo định dạng questionId_participantId để đảm bảo mỗi học
+        //    viên chỉ có 1 response / câu hỏi (chống bỏ phiếu trùng);
+        //  - dữ liệu gửi lên CHỈ được chứa đúng 6 field cho phép (chống chèn field lạ như
+        //    ownerId/role để leo quyền), và submittedAt PHẢI đúng bằng request.time
+        //    (server timestamp thật — không cho phép client tự đặt thời gian giả);
+        //  - (FIX B) người gửi PHẢI đang đăng nhập ẩn danh (isAnon()) — đúng quy định V1
+        //    "học viên luôn dùng Firebase Anonymous Authentication". Một tài khoản
+        //    email/password bình thường (kể cả giảng viên/admin) không được phép tự đóng
+        //    vai học viên để ghi response qua Firestore client.
+        allow create: if isAnon() &&
+          request.auth.uid == request.resource.data.participantId &&
+          request.resource.data.sessionId == sessionId &&
+          questionData(request.resource.data.questionId).sessionId == sessionId &&
+          sessionData(sessionId).status == 'open' &&
+          isActiveQuestion(sessionId, request.resource.data.questionId) &&
+          withinTimeLimit(sessionId, request.resource.data.questionId) &&
+          responseId == (request.resource.data.questionId + '_' + request.resource.data.participantId) &&
+          request.resource.data.keys().hasOnly(['sessionId','questionId','participantId','answer','selectedOptions','submittedAt']) &&
+          request.resource.data.keys().hasAll(['sessionId','questionId','participantId','answer','selectedOptions','submittedAt']) &&
+          request.resource.data.submittedAt == request.time;
+
+        // Sửa câu trả lời đã gửi: chỉ khi câu hỏi cho phép allowChangeAnswer=true,
+        // câu hỏi đó VẪN đang là câu hỏi active của session (FIX 3), vẫn còn trong thời
+        // hạn timeLimit nếu có (FIX 4), session vẫn đang OPEN, không đổi
+        // participantId/questionId/sessionId, chỉ được sửa answer/selectedOptions,
+        // và submittedAt (thời điểm sửa) vẫn phải là server timestamp thật (FIX 9).
+        // (FIX B) người sửa cũng PHẢI đang đăng nhập ẩn danh, cùng lý do như create ở trên.
+        allow update: if isAnon() &&
+          request.auth.uid == resource.data.participantId &&
+          request.resource.data.participantId == resource.data.participantId &&
+          request.resource.data.questionId == resource.data.questionId &&
+          request.resource.data.sessionId == resource.data.sessionId &&
+          sessionData(sessionId).status == 'open' &&
+          isActiveQuestion(sessionId, resource.data.questionId) &&
+          withinTimeLimit(sessionId, resource.data.questionId) &&
+          questionData(resource.data.questionId).allowChangeAnswer == true &&
+          request.resource.data.keys().hasOnly(['sessionId','questionId','participantId','answer','selectedOptions','submittedAt']) &&
+          request.resource.data.keys().hasAll(['sessionId','questionId','participantId','answer','selectedOptions','submittedAt']) &&
+          request.resource.data.submittedAt == request.time;
+
+        allow delete: if isAdmin();
+      }
+
+      // Aggregate realtime: giảng viên chủ phiên là writer duy nhất.
+      // Học viên/Presentation chỉ đọc aggregate của phiên đang mở/đã đóng,
+      // không cần quyền đọc responses cá nhân.
+      match /liveAggregates/{questionId} {
+        allow read: if isOwnerOrAdmin(sessionData(sessionId).ownerId) || (
+          isSignedIn() &&
+          (sessionData(sessionId).status == 'open' ||
+           sessionData(sessionId).status == 'closed' ||
+           sessionData(sessionId).status == 'archived')
+        );
+        allow create, update: if isOwnerOrAdmin(sessionData(sessionId).ownerId) &&
+          request.resource.data.ownerId == sessionData(sessionId).ownerId &&
+          request.resource.data.sessionId == sessionId &&
+          request.resource.data.questionId == questionId;
+        allow delete: if isOwnerOrAdmin(sessionData(sessionId).ownerId);
+      }
+    }
+
+    // ---------------- RESPONSES COLLECTION GROUP — ADMIN ONLY ----------------
+    // Cho phép Admin đọc / thống kê toàn bộ responses bằng collectionGroup("responses").
+    // Học viên và giảng viên KHÔNG được cấp quyền qua rule này.
+    match /{path=**}/responses/{responseId} {
+      allow read: if isAdmin();
+    }
+
+    // ---------------- QUESTIONS ----------------
+    match /questions/{questionId} {
+      allow read: if isOwnerOrAdmin(resource.data.ownerId) || (
+        isSignedIn() &&
+        sessionData(resource.data.sessionId).status == 'open' &&
+        sessionData(resource.data.sessionId).activeQuestionId == questionId
+      );
+
+      // CREATE: giảng viên chỉ tạo được câu hỏi cho session của CHÍNH MÌNH. Session đó
+      // thường được tạo trong CÙNG một writeBatch() atomic với câu hỏi này (finalizeWizard())
+      // nên phải dùng sessionDataAfter() (FIX A) — nếu dùng get() thông thường, session mới
+      // sẽ chưa "tồn tại" theo góc nhìn của get() tại thời điểm đánh giá rule, khiến việc
+      // đọc field .ownerId của nó lỗi và toàn bộ batch bị từ chối oan.
+      // GATE 1B.3-C1: scoped to !('configId' in request.resource.data) — without this, a
+      // document carrying a configId (and therefore claiming to be Contract-versioned) could be
+      // created via THIS unconstrained legacy branch instead of the integrity-proof branch below
+      // it, since Firestore Rules `allow` statements are OR'd (any one passing grants the
+      // write) — the legacy branch's lack of manifest-awareness would otherwise silently bypass
+      // the whole point of the Contract question proof.
+      allow create: if isActiveTeacher() &&
+        !('configId' in request.resource.data) &&
+        request.resource.data.ownerId == request.auth.uid &&
+        sessionDataAfter(request.resource.data.sessionId).ownerId == request.auth.uid;
+
+      // GATE 1B.3-C1: Contract-versioned question create — the one-way integrity proof frozen
+      // in Gate 1B.3-B/B2/B3.1. Rules prove here that EVERY operational question document that
+      // is created maps to an exact manifest entry (identity, position, semantic content,
+      // embedded options) — this is a create-time, per-document proof, cheap and bounded (one
+      // getAfter() on the parent configVersions doc per question create, cached across the many
+      // field comparisons below, not one per comparison).
+      //
+      // ACCEPTED APPLICATION-INTEGRITY RESIDUAL — NOT A PARTICIPANT AUTHORIZATION BYPASS:
+      // Rules do NOT, and structurally cannot at up to 100 questions per revision, prove the
+      // REVERSE direction — that every entry declared in a manifest's questions[] array has a
+      // corresponding document. Proving that would require looping over the manifest array and
+      // performing up to 100 existence checks within one Rules evaluation, which exceeds
+      // Firestore's documented per-evaluation get()/exists() call budget by an order of
+      // magnitude. This gap does NOT permit a participant to submit against a nonexistent or
+      // undeclared question: response creation independently requires questionData(questionId)
+      // to resolve via get(), and activeQuestionId can only ever be set by the session owner's
+      // own client to a value of its choosing — a manifest entry with no backing document can
+      // never become answerable. The only actor who could intentionally create this specific
+      // inconsistency is an authenticated teacher/admin bypassing the official writer against
+      // their OWN session — never a participant, never cross-tenant. The reverse-direction
+      // completeness guarantee belongs to the official writer's post-commit verification
+      // (Gate 1B.3-C2) and the reopen integrity guard (Gate 1B.3-D), not to Rules.
+      allow create: if
+        isActiveTeacher() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        sessionDataAfter(request.resource.data.sessionId).ownerId == request.auth.uid &&
+        request.resource.data.keys().hasOnly([
+          'sessionId','ownerId','configId','revision','order','type','question','description',
+          'required','chartType','timeLimit','allowChangeAnswer','scaleMin','scaleMax','options',
+          'createdAt','createdBy'
+        ]) &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.createdAt == request.time &&
+        // Order bounds are validated BEFORE any array indexing below, so a malformed/out-of-
+        // range order can never reach contractManifestEntryAfter() in an unsafe way.
+        request.resource.data.order is int && request.resource.data.order >= 0 &&
+        request.resource.data.configId == sessionDataAfter(request.resource.data.sessionId).currentConfigId &&
+        request.resource.data.revision == sessionDataAfter(request.resource.data.sessionId).configRevision &&
+        questionId == request.resource.data.configId + '_q' + string(request.resource.data.order) &&
+        request.resource.data.order < getAfter(/databases/$(database)/documents/sessions/$(request.resource.data.sessionId)/configVersions/$(request.resource.data.configId)).data.questions.size() &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).questionId == questionId &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).roundId == request.resource.data.configId &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).order == request.resource.data.order &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).type == request.resource.data.type &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).question == request.resource.data.question &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).description == request.resource.data.description &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).required == request.resource.data.required &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).chartType == request.resource.data.chartType &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).timeLimit == request.resource.data.timeLimit &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).allowChangeAnswer == request.resource.data.allowChangeAnswer &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).scaleMin == request.resource.data.scaleMin &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).scaleMax == request.resource.data.scaleMax &&
+        request.resource.data.options.size() <= 20 &&
+        contractManifestEntryAfter(request.resource.data.sessionId, request.resource.data.configId, request.resource.data.order).options == request.resource.data.options;
+
+      // UPDATE/DELETE: câu hỏi đã tồn tại từ trước (không nằm trong batch tạo mới), nên
+      // chỉ cần dựa vào resource.data (dữ liệu hiện có của chính document) — không cần
+      // đọc chéo sang session nữa.
+      // GATE 1B.3-C1: any question carrying Contract version identity (a `configId` field) is
+      // immutable forever, including the current revision — no update, no delete, ever. This
+      // extends the legacy branch below with a precondition rather than adding a separate
+      // "immutable" rule, mirroring exactly the !('configRevision' in resource.data) pattern
+      // already used on the session root to distinguish legacy from Contract behavior. A
+      // Contract-versioned question therefore falls through to no matching update/delete rule
+      // at all — default-deny, immutable by omission, identical philosophy to configVersions
+      // and editHistory.
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        !('configId' in resource.data) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.sessionId == resource.data.sessionId;
+
+      allow delete: if isOwnerOrAdmin(resource.data.ownerId) && !('configId' in resource.data);
+
+      // ---------------- OPTIONS (subcollection) ----------------
+      match /options/{optionId} {
+        // READ: option đã tồn tại từ trước (được đọc lại, không phải đang được tạo) —
+        // question/session liên quan chắc chắn đã tồn tại độc lập với thao tác đọc này,
+        // nên vẫn dùng get() bình thường (đọc resource đã tồn tại).
+        allow read: if isOwnerOrAdmin(questionData(questionId).ownerId) || (
+          isSignedIn() &&
+          sessionData(questionData(questionId).sessionId).status == 'open' &&
+          sessionData(questionData(questionId).sessionId).activeQuestionId == questionId
+        );
+
+        // CREATE: option luôn được tạo trong CÙNG batch atomic với chính câu hỏi cha của
+        // nó (finalizeWizard()) — giống hệt lý do ở "questions create" — nên phải dùng
+        // questionDataAfter() (FIX A) để thấy được câu hỏi cha ngay sau khi batch áp dụng.
+        // GATE 1B.3-C1: a Contract-versioned question (configId-bearing) uses embedded options
+        // only — it must never acquire a mutable option subdocument that could diverge from its
+        // manifest, so create/update/delete are all denied whenever the parent carries a
+        // configId. Legacy (configId-less) questions are completely unaffected.
+        allow create: if isOwnerOrAdmin(questionDataAfter(questionId).ownerId) &&
+          !('configId' in questionDataAfter(questionId));
+
+        // UPDATE/DELETE: nếu có sửa/xóa một option đã tồn tại độc lập (ngoài batch tạo
+        // mới), câu hỏi cha chắc chắn đã tồn tại từ trước — dùng get() như cũ.
+        allow update, delete: if isOwnerOrAdmin(questionData(questionId).ownerId) &&
+          !('configId' in questionData(questionId));
+      }
+    }
+
+    // ---------------- QR VĨNH VIỄN ----------------
+    // Teacher chỉ đọc/quản lý QR của chính mình; Admin đọc/quản lý toàn bộ.
+    // Người quét QR được GET theo mã và chỉ tăng bộ đếm lượt quét.
+    match /qrlinks/{code} {
+      // QR phải mở được công khai khi người dùng quét mã.
+      allow get: if true;
+
+      // Firestore Rules are not filters: teacher chỉ được LIST document có ownerId của mình.
+      // Frontend đã query where("ownerId", "==", request.auth.uid).
+      allow list: if isAdmin() ||
+        (isActiveTeacher() && resource.data.ownerId == request.auth.uid);
+
+      // Tạo QR: tài khoản đăng nhập chỉ được gán chính UID của mình làm chủ sở hữu.
+      allow create: if (isAdmin() || isActiveTeacher()) &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.clicks == 0;
+
+      // Chủ sở hữu active hoặc Admin được sửa QR, nhưng không được đổi ownerId.
+      // Nhánh thứ hai dành cho người quét QR: chỉ tăng clicks +1 và ghi lastScanAt.
+      allow update: if (
+        (isAdmin() || (isActiveTeacher() && resource.data.ownerId == request.auth.uid)) &&
+        request.resource.data.ownerId == resource.data.ownerId
+      ) || (
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clicks','lastScanAt']) &&
+        request.resource.data.clicks == resource.data.clicks + 1 &&
+        request.resource.data.lastScanAt == request.time
+      );
+
+      allow delete: if isAdmin() ||
+        (isActiveTeacher() && resource.data.ownerId == request.auth.uid);
+    }
+
+
+    // ---------------- THẢO LUẬN NHÓM — GATE 2A-AUTH-I3 helpers ----------------
+    // Final Stage-3 authorization: a student may read a group's topic/notes/photos/files ONLY
+    // while the parent activity is open AND their own membership record's group matches — never
+    // based on a client-selected/self-declared group. Owner/admin bypass this entirely (their
+    // access is unconditional and survives close, matching the frozen product policy).
+    function groupActivityData(activityId) {
+      return get(/databases/$(database)/documents/groupActivities/$(activityId)).data;
+    }
+    function isGroupOwnerOrAdmin(activityId) {
+      return isAdmin() ||
+        (isActiveTeacher() && groupActivityData(activityId).ownerId == request.auth.uid);
+    }
+    function groupMembershipData(activityId) {
+      return get(/databases/$(database)/documents/groupActivities/$(activityId)/members/$(request.auth.uid)).data;
+    }
+    // True only if the caller is signed in, the activity is currently open, a membership record
+    // for the caller's own uid exists, and that membership's group equals the group being
+    // checked. `group` is always compared as the int type membership.group is stored as
+    // (Gate 2A-AUTH-I1's create rule enforces `group is int`) — callers with a string group
+    // identifier (topics' path-segment document ID) must convert before calling this.
+    function isOpenGroupMember(activityId, group) {
+      return isSignedIn() &&
+        groupActivityData(activityId).status == 'open' &&
+        exists(/databases/$(database)/documents/groupActivities/$(activityId)/members/$(request.auth.uid)) &&
+        groupMembershipData(activityId).group == group;
+    }
+
+    // ---------------- GATE 2B-RT-RULES: RichText V1 structural boundary ----------------
+    // Firestore Rules cannot practically validate the full nested RichText AST (there is no
+    // general forEach/map/every over a variable-length list in this rules language — validating
+    // "every run in every block" would require hand-unrolling a fixed number of indices, which is
+    // impractical past the first one or two and was explicitly rejected as brittle in
+    // GATE 2B-RT-DESIGN). This function therefore enforces ONLY the outermost structural/size
+    // boundary — shape, version, and block-count bound — empirically confirmed expressible and
+    // tested against a real Firestore emulator (see test/gate2b-rt-rules/). It deliberately does
+    // NOT validate individual blocks' `type`, runs' keys, `text` length, or the font/size/color
+    // token allowlists — those remain the trusted client serializer's job before write and the
+    // safe renderer's job at render time (rich-text-contract.mjs / rich-text-renderer.mjs), which
+    // independently re-validate every nested field regardless of what this boundary allowed
+    // through. A document that satisfies this boundary but fails the deep client validator is
+    // expected and handled: it renders via the legacy plain-text fallback, never partially.
+    function isRichTextV1Boundary(value) {
+      return value is map &&
+        value.keys().hasOnly(['version', 'blocks']) &&
+        value.version is int && value.version == 1 &&
+        value.blocks is list &&
+        value.blocks.size() >= 1 && value.blocks.size() <= 20;
+    }
+
+    // ---------------- THẢO LUẬN NHÓM ----------------
+    // Giảng viên chỉ quản lý hoạt động của chính mình; Admin quản lý toàn bộ.
+    // Học viên dùng Anonymous Auth và chỉ được gửi dữ liệu khi hoạt động đang mở.
+    match /groupActivities/{activityId} {
+      // Chủ sở hữu/Admin được đọc; học viên đã đăng nhập ẩn danh có thể GET cấu hình
+      // của phòng để biết số nhóm, nhiệm vụ, thời gian và trạng thái.
+      allow get: if isOwnerOrAdmin(resource.data.ownerId) || isSignedIn();
+
+      // LIST toàn collection chỉ cho Admin, hoặc teacher với query ownerId == uid.
+      allow list: if isAdmin() ||
+        (isActiveTeacher() && resource.data.ownerId == request.auth.uid);
+
+      // GATE 1B.2A: create is allowlisted to exactly the fields openGroupCreateForm() writes
+      // today — closes the path for a modified/stale client to create an activity with contract
+      // metadata (editContractVersion/configRevision/currentConfigId/lastOperationId/
+      // contractActivatedAt) already set, bypassing activation entirely.
+      allow create: if isActiveTeacher() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.groupCount >= 2 &&
+        request.resource.data.groupCount <= 12 &&
+        request.resource.data.status == 'draft' &&
+        request.resource.data.keys().hasOnly([
+          'ownerId','classId','className','title','instructions','instructionsRich','groupCount',
+          'durationSec','allowText','allowPhoto','allowFile','joinCode','status',
+          'startedAt','createdAt','updatedAt'
+        ]) &&
+        // GATE 2B-RT-RULES: instructionsRich is a purely additive, optional field — legacy
+        // create (no instructionsRich at all) is untouched. When present, only the outermost
+        // structural/size boundary is enforced here; see isRichTextV1Boundary()'s own comment
+        // for why deep validation stays with the trusted client serializer + safe renderer.
+        (!('instructionsRich' in request.resource.data) || isRichTextV1Boundary(request.resource.data.instructionsRich));
+
+      // GATE 1B.2A: update is allowlisted by DIFF (affectedKeys), not by the full document's
+      // keys() — a legacy document carrying any older/unknown field keeps updating normally as
+      // long as that field's value isn't touched. ownerId stays immutable (both the explicit
+      // check below and its absence from this list). Any field not in this list — including
+      // editContractVersion/configRevision/currentConfigId/lastOperationId/contractActivatedAt,
+      // any brand-new arbitrary field, or any change to an existing-but-unlisted field — is
+      // denied. This is the exact set of fields any current legitimate write path in index.html
+      // (Gate 1A edit, open, close, restart/pause timer) ever changes on this document today.
+      // GATE 1B.2B: legacy branch now additionally requires the activity to NOT already be
+      // contract-activated — see the identical reasoning on the sessions family above.
+      allow update: if (
+          isAdmin() ||
+          (isActiveTeacher() && resource.data.ownerId == request.auth.uid)
+        ) &&
+        !('configRevision' in resource.data) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title','instructions','instructionsRich','status','startedAt','pausedRemainingSec','updatedAt'
+        ]) &&
+        // GATE 2B-RT-RULES: instructionsRich is optional and removable — an update that drops it
+        // entirely (owner clearing rich formatting back to plain text) satisfies this check
+        // trivially, since request.resource.data (the resulting document) then has no
+        // instructionsRich key at all. Structural boundary only when present — see
+        // isRichTextV1Boundary().
+        (!('instructionsRich' in request.resource.data) || isRichTextV1Boundary(request.resource.data.instructionsRich));
+
+      // GATE 1B.2B: contract activation — see sessions family above for full reasoning.
+      // groupActivities has no trash stage, so lifecycle-safety here is CLOSED-only, no
+      // deletedAt check needed (the field doesn't exist for this family).
+      allow update: if (
+          isAdmin() ||
+          (isActiveTeacher() && resource.data.ownerId == request.auth.uid)
+        ) &&
+        !('configRevision' in resource.data) &&
+        resource.data.status == 'closed' &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'editContractVersion','configRevision','currentConfigId','lastOperationId',
+          'contractActivatedAt','updatedAt'
+        ]) &&
+        request.resource.data.editContractVersion == 1 &&
+        request.resource.data.configRevision == 0 &&
+        request.resource.data.contractActivatedAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/configVersions/$(request.resource.data.currentConfigId)).data.revision == 0 &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/configVersions/$(request.resource.data.currentConfigId)).data.parentConfigId == null &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/configVersions/$(request.resource.data.currentConfigId)).data.kind == 'activation_baseline' &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/configVersions/$(request.resource.data.currentConfigId)).data.source == 'legacy_snapshot' &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/configVersions/$(request.resource.data.currentConfigId)).data.activatedFromLegacy == true &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.operationType == 'activate_contract' &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingRevision == 0 &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingConfigId == request.resource.data.currentConfigId &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.actorUid == request.auth.uid;
+
+      // GATE 1B.2B: generic config-revision update (apply_config foundation). CLOSED-FIRST.
+      allow update: if (
+          isAdmin() ||
+          (isActiveTeacher() && resource.data.ownerId == request.auth.uid)
+        ) &&
+        ('configRevision' in resource.data) &&
+        resource.data.status == 'closed' &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'configRevision','currentConfigId','lastOperationId','updatedAt'
+        ]) &&
+        request.resource.data.configRevision == resource.data.configRevision + 1 &&
+        request.resource.data.updatedAt == request.time &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/configVersions/$(request.resource.data.currentConfigId)).data.revision == request.resource.data.configRevision &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/configVersions/$(request.resource.data.currentConfigId)).data.parentConfigId == resource.data.currentConfigId &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.operationType == 'apply_config' &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingRevision == request.resource.data.configRevision &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingConfigId == request.resource.data.currentConfigId &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/editHistory/$(request.resource.data.lastOperationId)).data.actorUid == request.auth.uid;
+
+      // GATE 1B.2B (fix, post-review): contract non-config lifecycle/runtime updates — see
+      // sessions family above for full reasoning. title/instructions are deliberately excluded
+      // (Class-B/config, not implemented as a post-activation edit_info operation in this gate).
+      allow update: if (
+          isAdmin() ||
+          (isActiveTeacher() && resource.data.ownerId == request.auth.uid)
+        ) &&
+        ('configRevision' in resource.data) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status','startedAt','pausedRemainingSec','updatedAt'
+        ]);
+
+      allow delete: if isAdmin() ||
+        (isActiveTeacher() && resource.data.ownerId == request.auth.uid);
+
+      // ---------------- GATE 1B.2B: CONTRACT VERSIONS (immutable) ----------------
+      match /configVersions/{configId} {
+        // BLOCKER 2 fix (post-review): get-only, no list — see sessions family above.
+        allow get: if isAdmin() ||
+          (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+        allow create: if (
+            isAdmin() ||
+            (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid)
+          ) &&
+          request.resource.data.createdBy == request.auth.uid &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.revision is int && request.resource.data.revision >= 0 &&
+          request.resource.data.active == true &&
+          request.resource.data.keys().hasOnly([
+            'revision','parentConfigId','kind','source','createdAt','createdBy',
+            'activatedFromLegacy','active','title','instructions'
+          ]) &&
+          getAfter(/databases/$(database)/documents/groupActivities/$(activityId)).data.currentConfigId == configId;
+      }
+
+      // ---------------- GATE 1B.2B: EDIT HISTORY (append-only) ----------------
+      match /editHistory/{operationId} {
+        // BLOCKER 2 fix (post-review): get-only, no list — see sessions family above.
+        allow get: if isAdmin() ||
+          (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+        allow create: if (
+            isAdmin() ||
+            (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid)
+          ) &&
+          getAfter(/databases/$(database)/documents/groupActivities/$(activityId)).data.lastOperationId == operationId &&
+          request.resource.data.operationId == operationId &&
+          request.resource.data.actorUid == request.auth.uid &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.keys().hasOnly([
+            'operationId','actorUid','operationType','baseRevision','resultingRevision',
+            'previousConfigId','resultingConfigId','changedFields','createdAt',
+            'lifecycleBefore','lifecycleAfter'
+          ]);
+      }
+
+      match /topics/{groupId} {
+        // GATE 2A-AUTH-I3: student read is scoped to their OWN group's topic only, and only
+        // while the activity is open. groupId is always a string path segment; membership.group
+        // is always stored as int (Gate 2A-AUTH-I1's create rule enforces this) — int(groupId)
+        // makes the conversion explicit rather than relying on any assumed coercion.
+        allow get: if isGroupOwnerOrAdmin(activityId) ||
+          isOpenGroupMember(activityId, int(groupId));
+
+        // Students never list topics — the frontend only ever getDoc()s/onSnapshot()s a single,
+        // deterministic doc for their own group. list stays owner/admin-only, matching
+        // groupLive()'s own unfiltered onSnapshot(collection(...,"topics")).
+        allow list: if isGroupOwnerOrAdmin(activityId);
+
+        // Topic được tạo cùng batch với activity mới.
+        allow create: if (
+            isAdmin() ||
+            (isActiveTeacher() &&
+             getAfter(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid)
+          ) &&
+          // GATE 2B-RT-RULES: topicRich is a purely additive, optional field on top of the
+          // pre-existing, deliberately-unrestricted `topic`/`group`/`updatedAt` fields — this
+          // gate adds a structural boundary ONLY for the new field, and does not introduce a
+          // general key allowlist that didn't exist here before (see the Rules diff report for
+          // why: no existing writer of this collection is affected either way).
+          (!('topicRich' in request.resource.data) || isRichTextV1Boundary(request.resource.data.topicRich));
+
+        // GATE 2B-RT-RULES: split out of the previous combined `allow update, delete` so the
+        // topicRich structural check below — which reads request.resource.data, meaningful only
+        // for update — is never evaluated for delete (delete has no resulting resource). The
+        // authorization condition itself (owner/admin only) is byte-for-byte unchanged from the
+        // combined rule this replaces.
+        allow update: if (
+            isAdmin() ||
+            (isActiveTeacher() &&
+             get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid)
+          ) &&
+          (!('topicRich' in request.resource.data) || isRichTextV1Boundary(request.resource.data.topicRich));
+
+        allow delete: if isAdmin() ||
+          (isActiveTeacher() &&
+           get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+      }
+
+      match /notes/{noteId} {
+        // GATE 2A-AUTH-I3: student read scoped to their own membership.group; owner/admin
+        // unconditional (survives close). Empirically proven (Gate 2A-AUTH-DESIGN probe) that a
+        // student's where("group","==",membershipGroup) query is accepted by this shape, an
+        // unfiltered query is denied, and a mismatched group value is denied.
+        allow read: if isGroupOwnerOrAdmin(activityId) ||
+          isOpenGroupMember(activityId, resource.data.group);
+        allow create: if isSignedIn() &&
+          get(/databases/$(database)/documents/groupActivities/$(activityId)).data.status == 'open' &&
+          get(/databases/$(database)/documents/groupActivities/$(activityId)).data.allowText == true &&
+          request.resource.data.participantId == request.auth.uid &&
+          request.resource.data.group >= 1 &&
+          request.resource.data.group <= get(/databases/$(database)/documents/groupActivities/$(activityId)).data.groupCount &&
+          exists(/databases/$(database)/documents/groupActivities/$(activityId)/members/$(request.auth.uid)) &&
+          groupMembershipData(activityId).group == request.resource.data.group &&
+          request.resource.data.text is string &&
+          request.resource.data.text.size() > 0 &&
+          request.resource.data.text.size() <= 1500 &&
+          request.resource.data.createdAt == request.time;
+        allow update: if false;
+        allow delete: if isAdmin() ||
+          (isActiveTeacher() &&
+           get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+      }
+
+      match /photos/{photoId} {
+        // GATE 2A-AUTH-I3: same scoped-read shape as notes.
+        allow read: if isGroupOwnerOrAdmin(activityId) ||
+          isOpenGroupMember(activityId, resource.data.group);
+        allow create: if isSignedIn() &&
+          get(/databases/$(database)/documents/groupActivities/$(activityId)).data.status == 'open' &&
+          get(/databases/$(database)/documents/groupActivities/$(activityId)).data.allowPhoto == true &&
+          request.resource.data.participantId == request.auth.uid &&
+          request.resource.data.group >= 1 &&
+          request.resource.data.group <= get(/databases/$(database)/documents/groupActivities/$(activityId)).data.groupCount &&
+          exists(/databases/$(database)/documents/groupActivities/$(activityId)/members/$(request.auth.uid)) &&
+          groupMembershipData(activityId).group == request.resource.data.group &&
+          request.resource.data.url is string &&
+          request.resource.data.storagePath is string &&
+          request.resource.data.size is int &&
+          request.resource.data.size <= 5242880 &&
+          request.resource.data.createdAt == request.time;
+        allow update: if false;
+        allow delete: if isAdmin() ||
+          (isActiveTeacher() &&
+           get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+      }
+
+      match /files/{fileId} {
+        // GATE 2A-AUTH-I3: same scoped-read shape as notes/photos.
+        allow read: if isGroupOwnerOrAdmin(activityId) ||
+          isOpenGroupMember(activityId, resource.data.group);
+        allow create: if isSignedIn() &&
+          get(/databases/$(database)/documents/groupActivities/$(activityId)).data.status == 'open' &&
+          get(/databases/$(database)/documents/groupActivities/$(activityId)).data.allowFile == true &&
+          request.resource.data.participantId == request.auth.uid &&
+          request.resource.data.group >= 1 &&
+          request.resource.data.group <= get(/databases/$(database)/documents/groupActivities/$(activityId)).data.groupCount &&
+          exists(/databases/$(database)/documents/groupActivities/$(activityId)/members/$(request.auth.uid)) &&
+          groupMembershipData(activityId).group == request.resource.data.group &&
+          request.resource.data.createdAt == request.time &&
+          ( // GATE 2A-S file-link XSS defense — unchanged, preserved exactly:
+            (
+              request.resource.data.url is string &&
+              request.resource.data.storagePath is string &&
+              request.resource.data.size is int &&
+              request.resource.data.size <= 10485760
+            ) ||
+            // GATE 2A-S: newly-created link values must be http(s)-only. matches() requires a
+            // full-string match, so this also rejects a leading-whitespace bypass (e.g. a
+            // " javascript:" payload never reaches position 0) and any embedded whitespace/
+            // newline within the value. lower() makes the scheme check case-insensitive. This
+            // is a create-only barrier — files are immutable (allow update: if false below) —
+            // and does not retroactively touch any historical document already written before
+            // this gate; the render-side barrier (group-file-link-safety.mjs) covers those.
+            (request.resource.data.link is string &&
+             request.resource.data.link.size() <= 2000 &&
+             request.resource.data.link.lower().matches('^https?://[^\\s]+$'))
+          );
+        allow update: if false;
+        allow delete: if isAdmin() ||
+          (isActiveTeacher() &&
+           get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+      }
+
+      // GATE 2A-AUTH-I1: membership record proving which group a signed-in identity actually
+      // belongs to in this activity. As of GATE 2A-AUTH-I3, topics/notes/photos/files above now
+      // depend on this collection for their scoped student read/write authorization — see
+      // isOpenGroupMember()/groupMembershipData() above. This match block's own get/list/create/
+      // update/delete policy is unchanged from Gate 2A-AUTH-I2-CORRECTION; I3 only ever reads
+      // from it, never writes to it, and never widens who may write to it.
+      match /members/{uid} {
+        // The member themselves (needed by the frontend to detect an idempotent rejoin without
+        // ever hitting the immutable-update deny below), or the owning teacher/admin (needed to
+        // look up a specific, already-known uid before a legitimate reassignment/delete
+        // correction) can read one membership document.
+        allow get: if isSignedIn() &&
+          (request.auth.uid == uid ||
+           isAdmin() ||
+           (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid));
+
+        // GATE 2A-AUTH-I2-CORRECTION: additive owner/admin roster capability — NOT Stage-3
+        // student authorization tightening. The lecturer/admin membership-correction UI needs
+        // to enumerate an activity's memberships (student uids are opaque and unknowable in
+        // advance); a student still gets no `list` at all, matching the get-only shape above —
+        // any student list attempt still falls through to the outer
+        // `match /{document=**} { allow read, write: if false }` catch-all.
+        allow list: if isAdmin() ||
+          (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+
+        // Join-code proof (Gate 2A-AUTH-DESIGN, Task A): Rules cannot see that the caller
+        // resolved a join code at some earlier moment — that is not a provable server-side fact.
+        // The code must therefore travel as a field of THIS write, re-verified here against the
+        // groupJoinCodes mapping. request.resource.data.joinCode is attacker-influenced (unlike
+        // $(activityId), which comes from the already-matched path, not request body data), so
+        // — unlike the $(activityId)-keyed get() calls elsewhere in this file, which the existing,
+        // already-deployed rules above call directly without an exists() guard — this lookup is
+        // explicitly exists()-guarded first, short-circuiting before any .data access on a
+        // possibly-nonexistent document.
+        allow create: if isSignedIn() &&
+          uid == request.auth.uid &&
+          get(/databases/$(database)/documents/groupActivities/$(activityId)).data.status == 'open' &&
+          request.resource.data.keys().hasOnly(['group', 'joinedAt', 'joinCode']) &&
+          request.resource.data.group is int &&
+          request.resource.data.group >= 1 &&
+          request.resource.data.group <= get(/databases/$(database)/documents/groupActivities/$(activityId)).data.groupCount &&
+          request.resource.data.joinedAt == request.time &&
+          request.resource.data.joinCode is string &&
+          exists(/databases/$(database)/documents/groupJoinCodes/$(request.resource.data.joinCode)) &&
+          get(/databases/$(database)/documents/groupJoinCodes/$(request.resource.data.joinCode)).data.activityId == activityId;
+
+        // Immutable to the student (Gate 2A-AUTH-DESIGN, Task D): allowing a student to change
+        // their own group, even conditionally, would let them read through every group in turn
+        // by rejoining — exactly the exposure this whole membership design exists to close.
+        // Owner/admin may correct a mistaken join by reassigning `group` only — joinCode/joinedAt
+        // (the original provenance of the join) are never mutable by anyone, including owner/admin.
+        allow update: if (
+            isAdmin() ||
+            (isActiveTeacher() && get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid)
+          ) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['group']) &&
+          request.resource.data.group is int &&
+          request.resource.data.group >= 1 &&
+          request.resource.data.group <= get(/databases/$(database)/documents/groupActivities/$(activityId)).data.groupCount;
+
+        // Owner/admin may delete a membership (e.g. to reset a mistaken join). Classroom
+        // consequence, disclosed per Gate 2A-AUTH-DESIGN: the student can re-enroll afterward
+        // using the same valid join code, exactly as if they had never joined.
+        allow delete: if isAdmin() ||
+          (isActiveTeacher() &&
+           get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+      }
+    }
+
+    // Mã tham gia phòng nhóm. Học viên chỉ GET đúng mã QR; không được LIST.
+    match /groupJoinCodes/{code} {
+      allow get: if isSignedIn();
+      allow list: if isAdmin();
+
+      // Mapping thường được tạo cùng batch với activity mới nên dùng getAfter().
+      allow create: if isActiveTeacher() &&
+        request.resource.data.ownerId == request.auth.uid &&
+        getAfter(/databases/$(database)/documents/groupActivities/$(request.resource.data.activityId)).data.ownerId == request.auth.uid;
+
+      allow update: if false;
+      allow delete: if isAdmin() ||
+        (isActiveTeacher() && resource.data.ownerId == request.auth.uid);
+    }
+
+
+    // ============================================================
+    // V2 PHASE 1 — KNOWLEDGE SPACE
+    // ============================================================
+    function knowledgeSessionData(sessionId) {
+      return get(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data;
+    }
+
+    function knowledgeSessionDataAfter(sessionId) {
+      return getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data;
+    }
+
+    // GATE 3B: kiểm tra shape của participantFields (map 4 field, mỗi field có
+    // enabled/required kiểu bool, required=>enabled) trên dữ liệu ĐANG GHI (request.resource.data).
+    function validParticipantFieldsShape(d) {
+      return d.participantFields is map &&
+        d.participantFields.keys().hasOnly(['fullName','className','email','phone']) &&
+        d.participantFields.fullName is map &&
+        d.participantFields.fullName.enabled is bool &&
+        d.participantFields.fullName.required is bool &&
+        (!d.participantFields.fullName.required || d.participantFields.fullName.enabled) &&
+        d.participantFields.className is map &&
+        d.participantFields.className.enabled is bool &&
+        d.participantFields.className.required is bool &&
+        (!d.participantFields.className.required || d.participantFields.className.enabled) &&
+        d.participantFields.email is map &&
+        d.participantFields.email.enabled is bool &&
+        d.participantFields.email.required is bool &&
+        (!d.participantFields.email.required || d.participantFields.email.enabled) &&
+        d.participantFields.phone is map &&
+        d.participantFields.phone.enabled is bool &&
+        d.participantFields.phone.required is bool &&
+        (!d.participantFields.phone.required || d.participantFields.phone.enabled) &&
+        (d.participantFields.fullName.enabled || d.participantFields.className.enabled ||
+         d.participantFields.email.enabled || d.participantFields.phone.enabled) &&
+        d.classOptions is list &&
+        d.classOptions.size() <= 200 &&
+        (d.participantFields.className.enabled ? d.classOptions.size() >= 1 : d.classOptions.size() == 0);
+    }
+
+    // GATE 3B: collectParticipantProfile/participantFields/classOptions PHẢI đi cùng
+    // nhau (cả 3 cùng có hoặc cả 3 cùng không có) — không cho trạng thái nửa vời.
+    function validProfileConfigOnWrite(d) {
+      return (
+        !('collectParticipantProfile' in d) &&
+        !('participantFields' in d) &&
+        !('classOptions' in d)
+      ) || (
+        d.collectParticipantProfile == true &&
+        validParticipantFieldsShape(d)
+      );
+    }
+
+    // Mã công khai chỉ được GET theo đúng ID. Anonymous chỉ tra được mã của phiên mở.
+    match /knowledgeJoinCodes/{code} {
+      allow get: if isAdmin() || isActiveTeacher() ||
+        (isAnon() &&
+         exists(/databases/$(database)/documents/knowledgeSessions/$(resource.data.sessionId)) &&
+         knowledgeSessionData(resource.data.sessionId).status == 'open' &&
+         (!('teacherDeletedAt' in knowledgeSessionData(resource.data.sessionId)) || knowledgeSessionData(resource.data.sessionId).teacherDeletedAt == null) &&
+         (!('adminDeletedAt' in knowledgeSessionData(resource.data.sessionId)) || knowledgeSessionData(resource.data.sessionId).adminDeletedAt == null));
+      allow list: if false;
+
+      allow create: if (isActiveTeacher() || isAdmin()) &&
+        request.resource.data.keys().hasOnly(['sessionId', 'ownerId', 'createdAt']) &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.sessionId is string &&
+        request.resource.data.createdAt == request.time &&
+        knowledgeSessionDataAfter(request.resource.data.sessionId).ownerId == request.auth.uid &&
+        knowledgeSessionDataAfter(request.resource.data.sessionId).joinCode == code;
+
+      allow update: if false;
+      // Xóa vật lý chỉ qua Cloud Function Admin SDK.
+      allow delete: if false;
+    }
+
+    match /knowledgeSessions/{sessionId} {
+      // Học viên chỉ GET một phiên đã biết ID và chỉ khi phiên đang mở.
+      allow get: if isOwnerOrAdmin(resource.data.ownerId) ||
+        (isAnon() && resource.data.status == 'open' &&
+         (!('teacherDeletedAt' in resource.data) || resource.data.teacherDeletedAt == null) &&
+         (!('adminDeletedAt' in resource.data) || resource.data.adminDeletedAt == null));
+      allow list: if isAdmin() || isOwnerActiveTeacher(resource.data.ownerId);
+
+      // GATE 3B: allowlist mở rộng thêm 3 field config Participant Profile (tùy chọn);
+      // minimumPerParticipant đổi từ hằng số ==3 sang khoảng hợp lệ 1..20.
+      allow create: if (isActiveTeacher() || isAdmin()) &&
+        request.resource.data.keys().hasOnly([
+          'title', 'joinCode', 'ownerId', 'status', 'minimumPerParticipant',
+          'targetSubmissions', 'createdAt', 'updatedAt',
+          'collectParticipantProfile', 'participantFields', 'classOptions'
+        ]) &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.title is string &&
+        request.resource.data.title.size() >= 3 &&
+        request.resource.data.title.size() <= 120 &&
+        request.resource.data.joinCode is string &&
+        request.resource.data.joinCode.size() == 6 &&
+        request.resource.data.status == 'open' &&
+        request.resource.data.minimumPerParticipant is int &&
+        request.resource.data.minimumPerParticipant >= 1 &&
+        request.resource.data.minimumPerParticipant <= 20 &&
+        request.resource.data.targetSubmissions is int &&
+        request.resource.data.targetSubmissions >= 3 &&
+        request.resource.data.targetSubmissions <= 10000 &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        validProfileConfigOnWrite(request.resource.data);
+
+      // Teacher giữ nguyên các field bất biến và chỉ quản lý nội dung/trạng thái cùng
+      // hai field thùng rác của chính mình. Không được chạm vào Admin Trash.
+      // GATE 3B: allowlist (tổng field được phép TỒN TẠI trên tài liệu) mở rộng thêm
+      // 3 field config mới — BẮT BUỘC, vì tài liệu kết quả sau update vẫn mang các field
+      // này nếu đã có từ lúc tạo. Nhưng affectedKeys().hasOnly() (field ĐƯỢC PHÉP THAY ĐỔI
+      // GIÁ TRỊ) KHÔNG thêm 3 field mới — cấu hình Participant Profile bất biến sau khi tạo
+      // phiên, theo đúng yêu cầu Gate 3B (ưu tiên an toàn, chưa cần chỉnh sửa sau khi tạo).
+      // GATE 1B.2B: legacy branch now additionally requires the session to NOT already be
+      // contract-activated — see the identical reasoning on the sessions family above.
+      allow update: if isOwnerActiveTeacher(resource.data.ownerId) &&
+        !('configRevision' in resource.data) &&
+        request.resource.data.keys().hasOnly([
+          'title', 'joinCode', 'ownerId', 'status', 'minimumPerParticipant',
+          'targetSubmissions', 'createdAt', 'updatedAt',
+          'teacherDeletedAt', 'teacherDeletedBy', 'adminDeletedAt', 'adminDeletedBy',
+          'analysisFence', 'analysisLease', 'adminDeleting', 'deletingAt', 'deleteRunId',
+          'collectParticipantProfile', 'participantFields', 'classOptions'
+        ]) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'analysisFence', 'analysisLease', 'adminDeleting', 'deletingAt', 'deleteRunId'
+        ]) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title', 'status', 'targetSubmissions', 'updatedAt',
+          'teacherDeletedAt', 'teacherDeletedBy'
+        ]) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.joinCode == resource.data.joinCode &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.minimumPerParticipant == resource.data.minimumPerParticipant &&
+        (!('collectParticipantProfile' in request.resource.data) || request.resource.data.collectParticipantProfile == resource.data.collectParticipantProfile) &&
+        (!('participantFields' in request.resource.data) || request.resource.data.participantFields == resource.data.participantFields) &&
+        (!('classOptions' in request.resource.data) || request.resource.data.classOptions == resource.data.classOptions) &&
+        request.resource.data.status in ['open', 'closed'] &&
+        request.resource.data.title is string &&
+        request.resource.data.title.size() >= 3 &&
+        request.resource.data.title.size() <= 120 &&
+        request.resource.data.targetSubmissions is int &&
+        request.resource.data.targetSubmissions >= 3 &&
+        request.resource.data.targetSubmissions <= 10000 &&
+        request.resource.data.updatedAt == request.time &&
+        (!('teacherDeletedAt' in request.resource.data) ||
+          request.resource.data.teacherDeletedAt == null ||
+          request.resource.data.teacherDeletedAt == request.time) &&
+        (!('teacherDeletedBy' in request.resource.data) ||
+          request.resource.data.teacherDeletedBy == null ||
+          request.resource.data.teacherDeletedBy == request.auth.uid);
+
+      // Admin có thể khôi phục cho teacher, đưa phiên vào Admin Trash hoặc restore.
+      // Các khóa định danh và định mức tối thiểu vẫn bất biến.
+      // GATE 3B: cùng nguyên tắc bất biến như nhánh teacher ở trên.
+      // GATE 1B.2B: legacy branch now additionally requires the session to NOT already be
+      // contract-activated — see the identical reasoning on the sessions family above.
+      allow update: if isAdmin() &&
+        !('configRevision' in resource.data) &&
+        request.resource.data.keys().hasOnly([
+          'title', 'joinCode', 'ownerId', 'status', 'minimumPerParticipant',
+          'targetSubmissions', 'createdAt', 'updatedAt',
+          'teacherDeletedAt', 'teacherDeletedBy', 'adminDeletedAt', 'adminDeletedBy',
+          'analysisFence', 'analysisLease', 'adminDeleting', 'deletingAt', 'deleteRunId',
+          'collectParticipantProfile', 'participantFields', 'classOptions'
+        ]) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'analysisFence', 'analysisLease', 'adminDeleting', 'deletingAt', 'deleteRunId'
+        ]) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.joinCode == resource.data.joinCode &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.minimumPerParticipant == resource.data.minimumPerParticipant &&
+        (!('collectParticipantProfile' in request.resource.data) || request.resource.data.collectParticipantProfile == resource.data.collectParticipantProfile) &&
+        (!('participantFields' in request.resource.data) || request.resource.data.participantFields == resource.data.participantFields) &&
+        (!('classOptions' in request.resource.data) || request.resource.data.classOptions == resource.data.classOptions) &&
+        request.resource.data.status in ['open', 'closed'] &&
+        request.resource.data.updatedAt == request.time &&
+        (!('adminDeletedAt' in request.resource.data) ||
+          request.resource.data.adminDeletedAt == null ||
+          request.resource.data.adminDeletedAt == request.time) &&
+        (!('adminDeletedBy' in request.resource.data) ||
+          request.resource.data.adminDeletedBy == null ||
+          request.resource.data.adminDeletedBy == request.auth.uid);
+
+      // GATE 1B.2B: contract activation — see sessions family above for full reasoning.
+      // knowledgeSessions has no 'draft' state (created directly as 'open'); the safe state to
+      // activate from is CLOSED, not-trashed (teacherDeletedAt/adminDeletedAt both absent/null).
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        !('configRevision' in resource.data) &&
+        resource.data.status == 'closed' &&
+        (!('teacherDeletedAt' in resource.data) || resource.data.teacherDeletedAt == null) &&
+        (!('adminDeletedAt' in resource.data) || resource.data.adminDeletedAt == null) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'editContractVersion','configRevision','currentConfigId','lastOperationId',
+          'contractActivatedAt','updatedAt'
+        ]) &&
+        request.resource.data.editContractVersion == 1 &&
+        request.resource.data.configRevision == 0 &&
+        request.resource.data.contractActivatedAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.revision == 0 &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.parentConfigId == null &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.kind == 'activation_baseline' &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.source == 'legacy_snapshot' &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.activatedFromLegacy == true &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.operationType == 'activate_contract' &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingRevision == 0 &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingConfigId == request.resource.data.currentConfigId &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.actorUid == request.auth.uid;
+
+      // GATE 1B.2B: generic config-revision update (apply_config foundation). CLOSED-FIRST.
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        ('configRevision' in resource.data) &&
+        resource.data.status == 'closed' &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'configRevision','currentConfigId','lastOperationId','updatedAt'
+        ]) &&
+        request.resource.data.configRevision == resource.data.configRevision + 1 &&
+        request.resource.data.updatedAt == request.time &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.revision == request.resource.data.configRevision &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/configVersions/$(request.resource.data.currentConfigId)).data.parentConfigId == resource.data.currentConfigId &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.operationType == 'apply_config' &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingRevision == request.resource.data.configRevision &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.resultingConfigId == request.resource.data.currentConfigId &&
+        getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)/editHistory/$(request.resource.data.lastOperationId)).data.actorUid == request.auth.uid;
+
+      // GATE 1B.2B (fix, post-review): contract non-config lifecycle/runtime updates — teacher
+      // branch. An activated session must remain fully operable (open/close toggle, teacher
+      // trash/restore — DECIDED: restore always lands on CLOSED, since the legacy write shape
+      // here never sets status back to 'open' either, reopen stays its own explicit operation)
+      // without that being a config edit. title/targetSubmissions are deliberately excluded —
+      // Class-B/config, not implemented as a post-activation edit_info operation in this gate.
+      allow update: if isOwnerActiveTeacher(resource.data.ownerId) &&
+        ('configRevision' in resource.data) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status','teacherDeletedAt','teacherDeletedBy','updatedAt'
+        ]);
+
+      // GATE 1B.2B (fix, post-review): same as above, admin branch (also covers admin trash).
+      allow update: if isAdmin() &&
+        ('configRevision' in resource.data) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status','teacherDeletedAt','teacherDeletedBy','adminDeletedAt','adminDeletedBy','updatedAt'
+        ]);
+
+      // Xóa vật lý chỉ qua Cloud Function admin-delete-session.
+      allow delete: if false;
+
+      // ---------------- GATE 1B.2B: CONTRACT VERSIONS (immutable) ----------------
+      // Manifest payload here is schema/config only (title/targetSubmissions/minimumPerParticipant/
+      // classOptions/participantFields) — participantFields is the ON/REQUIRED policy schema, never
+      // participant PII values. No participant document is ever read to build this, and no PII
+      // field name is in the allowlist below.
+      match /configVersions/{configId} {
+        // BLOCKER 2 fix (post-review): get-only, no list — see sessions family above.
+        allow get: if isOwnerOrAdmin(get(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.ownerId);
+        allow create: if isOwnerOrAdmin(get(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.ownerId) &&
+          request.resource.data.createdBy == request.auth.uid &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.revision is int && request.resource.data.revision >= 0 &&
+          request.resource.data.active == true &&
+          request.resource.data.keys().hasOnly([
+            'revision','parentConfigId','kind','source','createdAt','createdBy',
+            'activatedFromLegacy','active','title','targetSubmissions','minimumPerParticipant',
+            'classOptions','participantFields'
+          ]) &&
+          !request.resource.data.keys().hasAny(['fullName','className','email','phone']) &&
+          getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.currentConfigId == configId;
+      }
+
+      // ---------------- GATE 1B.2B: EDIT HISTORY (append-only) ----------------
+      match /editHistory/{operationId} {
+        // BLOCKER 2 fix (post-review): get-only, no list — see sessions family above.
+        allow get: if isOwnerOrAdmin(get(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.ownerId);
+        allow create: if isOwnerOrAdmin(get(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.ownerId) &&
+          getAfter(/databases/$(database)/documents/knowledgeSessions/$(sessionId)).data.lastOperationId == operationId &&
+          request.resource.data.operationId == operationId &&
+          request.resource.data.actorUid == request.auth.uid &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.keys().hasOnly([
+            'operationId','actorUid','operationType','baseRevision','resultingRevision',
+            'previousConfigId','resultingConfigId','changedFields','createdAt',
+            'lifecycleBefore','lifecycleAfter'
+          ]) &&
+          !request.resource.data.keys().hasAny(['fullName','className','email','phone']);
+      }
+
+      match /submissions/{submissionId} {
+        // Owner/Admin xem dashboard/export. Anonymous chỉ được đọc/list bản ghi của mình;
+        // query phía client bắt buộc lọc participantId == auth.uid để Rules chấp nhận.
+        allow get, list: if isOwnerOrAdmin(knowledgeSessionData(sessionId).ownerId) ||
+          (isAnon() &&
+           knowledgeSessionData(sessionId).status == 'open' &&
+           (!('teacherDeletedAt' in knowledgeSessionData(sessionId)) || knowledgeSessionData(sessionId).teacherDeletedAt == null) &&
+           (!('adminDeletedAt' in knowledgeSessionData(sessionId)) || knowledgeSessionData(sessionId).adminDeletedAt == null) &&
+           resource.data.participantId == request.auth.uid);
+
+        // Raw submission bất biến: create-only, allowlist field, server timestamp,
+        // doc ID xác định theo uid_sequence giúp retry không tạo bản ghi trùng.
+        allow create: if isAnon() &&
+          knowledgeSessionData(sessionId).status == 'open' &&
+          (!('teacherDeletedAt' in knowledgeSessionData(sessionId)) || knowledgeSessionData(sessionId).teacherDeletedAt == null) &&
+          (!('adminDeletedAt' in knowledgeSessionData(sessionId)) || knowledgeSessionData(sessionId).adminDeletedAt == null) &&
+          request.resource.data.keys().hasOnly([
+            'sessionId', 'participantId', 'text', 'sequence', 'createdAt'
+          ]) &&
+          request.resource.data.sessionId == sessionId &&
+          request.resource.data.participantId == request.auth.uid &&
+          request.resource.data.sequence is int &&
+          request.resource.data.sequence >= 1 &&
+          // `sequence` là int; phải chuyển thành string trước khi ghép ID.
+          // Nếu ghép trực tiếp string + int, biểu thức Rules lỗi kiểu và CREATE bị deny.
+          submissionId == request.auth.uid + '_' + string(request.resource.data.sequence) &&
+          request.resource.data.text is string &&
+          request.resource.data.text.size() >= 10 &&
+          request.resource.data.text.size() <= 2000 &&
+          request.resource.data.createdAt == request.time;
+
+        allow update: if false;
+        allow delete: if false;
+      }
+
+      // GATE 3B (NEW, additive only), TIGHTENED IN GATE 3C: hồ sơ người tham gia (PII) —
+      // tách biệt hoàn toàn khỏi submissions, không ai ngoài chủ phiên/Admin/chính
+      // participant đó đọc được.
+      // GATE 3C review: className giờ PHẢI khớp đúng một giá trị trong classOptions của
+      // phiên (List.hasAny() hoạt động an toàn với danh sách độ dài bất kỳ, không cần
+      // lặp/unroll từng phần tử). Field TẮT (participantFields.<f>.enabled==false) không
+      // được xuất hiện trong tài liệu; field BẮT BUỘC phải có mặt và không rỗng.
+      // GIỚI HẠN ĐÃ BIẾT: Firestore Rules không có cách lặp qua từng phần tử của MỘT
+      // MẢNG (classOptions) để kiểm tra ĐỘ DÀI riêng từng chuỗi — nên không thể validate
+      // ở đây rằng mỗi tên lớp trong classOptions ≤ 40 ký tự. Giới hạn đó được validate ở
+      // phía client lúc TẠO PHIÊN (index.html, knowledgeCreateDialog), và giới hạn
+      // className.size() dưới đây được nới ra 120 (bằng fullName) — an toàn, generous,
+      // không phụ thuộc vào việc client-side check kia có luôn chạy hay không.
+      match /participants/{participantId} {
+        allow get: if isOwnerOrAdmin(knowledgeSessionData(sessionId).ownerId) ||
+          (isAnon() && request.auth.uid == participantId);
+        allow list: if isOwnerOrAdmin(knowledgeSessionData(sessionId).ownerId);
+
+        allow create: if isAnon() &&
+          request.auth.uid == participantId &&
+          knowledgeSessionData(sessionId).collectParticipantProfile == true &&
+          request.resource.data.keys().hasOnly(['fullName','className','email','phone','createdAt','updatedAt']) &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.updatedAt == request.time &&
+          (knowledgeSessionData(sessionId).participantFields.fullName.enabled || !('fullName' in request.resource.data)) &&
+          (!knowledgeSessionData(sessionId).participantFields.fullName.required || ('fullName' in request.resource.data && request.resource.data.fullName is string && request.resource.data.fullName.size() > 0)) &&
+          (!('fullName' in request.resource.data) || (request.resource.data.fullName is string && request.resource.data.fullName.size() <= 120)) &&
+          (knowledgeSessionData(sessionId).participantFields.className.enabled || !('className' in request.resource.data)) &&
+          (!knowledgeSessionData(sessionId).participantFields.className.required || ('className' in request.resource.data && request.resource.data.className is string && request.resource.data.className.size() > 0)) &&
+          (!('className' in request.resource.data) || (request.resource.data.className is string && request.resource.data.className.size() <= 120 && knowledgeSessionData(sessionId).classOptions.hasAny([request.resource.data.className]))) &&
+          (knowledgeSessionData(sessionId).participantFields.email.enabled || !('email' in request.resource.data)) &&
+          (!knowledgeSessionData(sessionId).participantFields.email.required || ('email' in request.resource.data && request.resource.data.email is string && request.resource.data.email.size() > 0)) &&
+          (!('email' in request.resource.data) || (request.resource.data.email is string && request.resource.data.email.size() <= 200)) &&
+          (knowledgeSessionData(sessionId).participantFields.phone.enabled || !('phone' in request.resource.data)) &&
+          (!knowledgeSessionData(sessionId).participantFields.phone.required || ('phone' in request.resource.data && request.resource.data.phone is string && request.resource.data.phone.size() > 0)) &&
+          (!('phone' in request.resource.data) || (request.resource.data.phone is string && request.resource.data.phone.size() <= 20));
+
+        allow update: if isAnon() &&
+          request.auth.uid == participantId &&
+          knowledgeSessionData(sessionId).collectParticipantProfile == true &&
+          request.resource.data.keys().hasOnly(['fullName','className','email','phone','createdAt','updatedAt']) &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          request.resource.data.updatedAt == request.time &&
+          (knowledgeSessionData(sessionId).participantFields.fullName.enabled || !('fullName' in request.resource.data)) &&
+          (!knowledgeSessionData(sessionId).participantFields.fullName.required || ('fullName' in request.resource.data && request.resource.data.fullName is string && request.resource.data.fullName.size() > 0)) &&
+          (!('fullName' in request.resource.data) || (request.resource.data.fullName is string && request.resource.data.fullName.size() <= 120)) &&
+          (knowledgeSessionData(sessionId).participantFields.className.enabled || !('className' in request.resource.data)) &&
+          (!knowledgeSessionData(sessionId).participantFields.className.required || ('className' in request.resource.data && request.resource.data.className is string && request.resource.data.className.size() > 0)) &&
+          (!('className' in request.resource.data) || (request.resource.data.className is string && request.resource.data.className.size() <= 120 && knowledgeSessionData(sessionId).classOptions.hasAny([request.resource.data.className]))) &&
+          (knowledgeSessionData(sessionId).participantFields.email.enabled || !('email' in request.resource.data)) &&
+          (!knowledgeSessionData(sessionId).participantFields.email.required || ('email' in request.resource.data && request.resource.data.email is string && request.resource.data.email.size() > 0)) &&
+          (!('email' in request.resource.data) || (request.resource.data.email is string && request.resource.data.email.size() <= 200)) &&
+          (knowledgeSessionData(sessionId).participantFields.phone.enabled || !('phone' in request.resource.data)) &&
+          (!knowledgeSessionData(sessionId).participantFields.phone.required || ('phone' in request.resource.data && request.resource.data.phone is string && request.resource.data.phone.size() > 0)) &&
+          (!('phone' in request.resource.data) || (request.resource.data.phone is string && request.resource.data.phone.size() <= 20));
+
+        allow delete: if false;
+      }
+
+      // PHASE 2 AI: anonymous tuyệt đối không được đọc/list. Owner active và Admin
+      // được xem kết quả. Mọi ghi status/result/batch do AI Gateway dùng Admin SDK;
+      // client bị chặn ghi để không thể giả mạo kết quả hoặc sửa tiến độ.
+      match /aiSnapshots/{snapshotId} {
+        allow get, list: if isOwnerOrAdmin(knowledgeSessionData(sessionId).ownerId);
+        allow create, update: if false;
+        // Client, kể cả Admin, không xóa trực tiếp; Cloud Function dùng Admin SDK.
+        allow delete: if false;
+
+        match /aiBatches/{batchId} {
+          allow get, list: if isOwnerOrAdmin(knowledgeSessionData(sessionId).ownerId);
+          allow create, update: if false;
+          allow delete: if false;
+        }
+
+        match /copilotRuns/{runId} {
+          allow get, list: if isOwnerOrAdmin(knowledgeSessionData(sessionId).ownerId);
+          allow create, update: if false;
+          allow delete: if false;
+        }
+      }
+    }
+
+    // ---------------- AUDIT LOGS ----------------
+    // Giảng viên/Admin được ghi nhật ký hành động của chính mình.
+    // Chỉ Admin được đọc toàn bộ nhật ký.
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn() && !isAnon() &&
+        request.resource.data.actorId == request.auth.uid &&
+        request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // ---------------- Mặc định: chặn tất cả ----------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1797,7 +1797,10 @@ async function deleteGroupActivityDeep(id){
   const aRef=doc(db,GROUP_COLLECTION,id); const s=await getDoc(aRef); if(!s.exists()) return;
   const a=s.data();
   if(!(STATE.profile.role==="admin" || a.ownerId===STATE.user.uid)) throw {code:"permission-denied"};
-  for(const sub of ["topics","notes","photos","files"]){
+  // GATE 2A-AUTH-I3-UI-FIX: "members" added — the deep-delete previously left orphaned
+  // groupActivities/{id}/members/{uid} docs behind after normal activity deletion. Same chunked
+  // batch-delete pattern as every other child collection here, no other change to this function.
+  for(const sub of ["topics","notes","photos","files","members"]){
     const snap=await getDocs(collection(db,GROUP_COLLECTION,id,sub));
     await deleteRefsInChunks(snap.docs.map(d=>d.ref));
   }
@@ -2174,12 +2177,28 @@ async function renderGroupStudentEntry(){
     // intent, without touching Rules or any server-side boundary (still frontend-only; the
     // documented known risk is only that this reacts to the CLIENT's own live activity-doc
     // listener, not a server-enforced guarantee — Stage 3 remains the real boundary).
-    const unsubA=onSnapshot(doc(publicDb,GROUP_COLLECTION,id),s=>{
+    const unsubA=onSnapshot(doc(publicDb,GROUP_COLLECTION,id),async s=>{
       if(!s.exists())return;
       a={id,...s.data()};
       $("#gsLiveTitle").textContent="👥 "+(a.title||"Thảo luận nhóm");
       $("#gsLiveInstructions").textContent=a.instructions||"";
-      if(wasOpen && a.status!=="open"){wasOpen=false;detachScopedListeners();}
+      if(wasOpen && a.status!=="open"){
+        wasOpen=false;detachScopedListeners();
+      }else if(!wasOpen && a.status==="open"){
+        // GATE 2A-AUTH-I3-UI-FIX: the matching CLOSED -> OPEN half of the transition above —
+        // without this branch a student whose page stayed open through a close/reopen cycle
+        // never regains live content until a full reload, even though membership and server
+        // authorization are already correct again the instant the activity reopens. Re-fetches
+        // the caller's OWN membership fresh (never trusts the possibly-stale in-memory value) so
+        // a membership removed while closed simply stays in the already-cleared, no-content state
+        // set by detachScopedListeners() above — fail-closed, no authorization invented here.
+        wasOpen=true;
+        const freshSnap=await getDoc(doc(publicDb,GROUP_COLLECTION,id,"members",publicAuth.currentUser.uid));
+        if(freshSnap.exists()){
+          let freshGroup; try{freshGroup=validStoredGroup(freshSnap.data(),a.groupCount);}catch(e){freshGroup=null;}
+          if(freshGroup) revealParticipation(freshGroup);
+        }
+      }
       updateStudentState();
     });
     track(unsubA);

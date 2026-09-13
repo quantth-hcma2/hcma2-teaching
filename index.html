@@ -76,6 +76,16 @@ select, textarea{
 }
 textarea{min-height:88px; resize:vertical;}
 .field{margin-bottom:14px;}
+/* GATE 2B-RT-INTEGRATION: RichTextEditor host — visually consistent with the plain textarea it
+   replaces for Group Discussion's common instructions / per-group topic authoring. */
+.rt-editor-host{border:1.5px solid var(--border); border-radius:9px; background:#fff; overflow:hidden;}
+.rt-editor-host [data-rt-toolbar]{display:flex; gap:6px; flex-wrap:wrap; padding:6px 8px; border-bottom:1px solid var(--border); background:#f9fafb;}
+.rt-editor-host [data-rt-toolbar] button{width:auto; min-height:30px; padding:4px 10px; border:1px solid var(--border); border-radius:6px; background:#fff; cursor:pointer;}
+.rt-editor-host [data-rt-toolbar] button[aria-pressed="true"]{background:var(--brand); color:#fff; border-color:var(--brand);}
+.rt-editor-host [data-rt-toolbar] button[aria-pressed="mixed"]{background:#dbeafe;}
+.rt-editor-host [data-rt-toolbar] select{width:auto; min-height:30px; padding:2px 6px;}
+.rt-editor-host [data-rt-editable]{min-height:88px; padding:11px 12px; outline:none;}
+.rt-editor-host [data-rt-editable]:focus{box-shadow:inset 0 0 0 2px var(--brand);}
 .hint{font-size:12.5px; color:var(--text-mute); margin-top:4px;}
 .error-text{font-size:13px; color:var(--danger); margin-top:6px;}
 
@@ -508,6 +518,12 @@ import { safeGroupFileLinkUrl } from "./group-file-link-safety.mjs";
 // GATE 2A-AUTH-I2: student group-membership bootstrap (Stage 2 of 3). Group Discussion only —
 // does not touch topics/notes/photos/files Rules or query shape in this gate.
 import { validStoredGroup, ensureGroupMembership } from "./group-membership.mjs";
+// GATE 2B-RT-INTEGRATION: RichText V1 for Group Discussion's common instructions + per-group
+// topic authoring/rendering only. Reuses the approved contract/renderer/editor modules exactly
+// as built in GATE 2B-RT-CONTRACT/GATE 2B-RT-EDITOR — no parallel validation or rendering logic.
+import { validateRichTextV1, richTextToPlainText } from "./rich-text-contract.mjs";
+import { renderRichText } from "./rich-text-renderer.mjs";
+import { RichTextEditor } from "./rich-text-editor.mjs";
 
 /* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
 const firebaseConfig = {
@@ -737,14 +753,22 @@ window.addEventListener("hashchange", ()=>{
 });
 
 /* ---------------- Modal / form helpers dùng chung ---------------- */
+// GATE 2B-RT-INTEGRATION: generic modal-close cleanup hook. A caller that mounts stateful
+// resources inside a modal (currently: RichTextEditor instances in openSessionInfoEditor) sets
+// this to a teardown function; any modal transition — Cancel, backdrop click, or a fresh
+// openModal() call that replaces the host's content without an explicit prior closeModal() —
+// runs it exactly once. Every other existing modal never sets this, so it is a no-op for them.
+let modalCloseCleanup=null;
+function runModalCloseCleanup(){ if(modalCloseCleanup){ try{modalCloseCleanup();}catch(e){} modalCloseCleanup=null; } }
 function openModal(html, large){
+  runModalCloseCleanup();
   let host = document.getElementById("globalModal");
   if(!host){ host = document.createElement("div"); host.id="globalModal"; document.body.appendChild(host); }
   host.innerHTML = `<div class="modal-backdrop" id="modalBackdrop"><div class="modal ${large?'modal-lg':''}">${html}</div></div>`;
   $("#modalBackdrop").addEventListener("click", (e)=>{ if(e.target.id==="modalBackdrop") closeModal(); });
   return host;
 }
-function closeModal(){ const h = document.getElementById("globalModal"); if(h) h.innerHTML=""; }
+function closeModal(){ runModalCloseCleanup(); const h = document.getElementById("globalModal"); if(h) h.innerHTML=""; }
 
 // Gate 1A: field-level conflict checks; no lifecycle, identity or collected data writes.
 const SESSION_INFO_FIELDS = {
@@ -790,12 +814,33 @@ function validateSessionInfo(kind,values){
       throw sessionInfoError("Mục tiêu phải là số nguyên từ 3 đến 10.000.");
   }
 }
-async function saveSessionInfo(model,values){
+// GATE 2B-RT-INTEGRATION: deep-equality helper, needed because a RichText field's value is an
+// object (not a scalar) — JSON-stringify comparison for objects, identity comparison otherwise.
+// A drop-in replacement for `!==`/`===` at the two comparison sites below: behaves identically to
+// the strict-equality checks it replaces for every existing scalar field (title, description,
+// targetSubmissions), and is only actually exercised for instructionsRich/topicRich.
+function valuesEqualDeep(a,b){
+  if(a===b) return true;
+  if(a && b && typeof a==="object" && typeof b==="object") return JSON.stringify(a)===JSON.stringify(b);
+  return false;
+}
+// `richPatches` (optional): an array parallel to model.rows, each entry either null or
+// {richKey,richValue,plainKey,plainValue} — supplied by openSessionInfoEditor's RichTextEditor
+// integration for whichever rows' Rich field genuinely changed vs. its load-time baseline (see
+// there for why that baseline, not row.original, is what "changed" is measured against). Rich
+// fields are deliberately excluded from `row.fields` handling below (see RICH_ROW_KEY) — they are
+// written ONLY through this merge, never through the generic scalar diff, so they can carry
+// object values through the exact same transaction/conflict-detection machinery unchanged.
+async function saveSessionInfo(model,values,richPatches){
   validateSessionInfo(model.kind,values);
-  // Missing optional text fields stay missing unless the user actually enters text.
+  // Missing optional text fields stay missing unless the user actually enters text. A field with
+  // no corresponding DOM control this save (Rich-managed fields — see openSessionInfoEditor) has
+  // values[i][k]===undefined and is skipped here entirely; it is supplied via richPatches instead.
   const edits=model.rows.map((row,i)=>Object.fromEntries(row.fields
-    .filter(k=>values[i][k] !== (row.original?.[k] ?? ""))
+    .filter(k=>values[i][k]!==undefined)
+    .filter(k=>!valuesEqualDeep(values[i][k], row.original?.[k] ?? ""))
     .map(k=>[k,values[i][k]])));
+  richPatches?.forEach((rp,i)=>{ if(rp){ edits[i][rp.richKey]=rp.richValue; edits[i][rp.plainKey]=rp.plainValue; } });
   if(!edits.some(e=>Object.keys(e).length)) return false;
   await runTransaction(db,async tx=>{
     if(STATE.user?.uid!==model.uid) throw sessionInfoError("Tài khoản đã thay đổi. Hãy mở lại cửa sổ sửa.");
@@ -813,7 +858,7 @@ async function saveSessionInfo(model,values){
       if(!Object.keys(patch).length) return;
       if(row.original && !latest) throw sessionInfoError("Dữ liệu đã bị xóa ở cửa sổ khác. Bản nhập vẫn được giữ.");
       for(const key of Object.keys(patch)){
-        if(latest?.[key]!==row.original?.[key] && latest?.[key]!==patch[key])
+        if(!valuesEqualDeep(latest?.[key],row.original?.[key]) && !valuesEqualDeep(latest?.[key],patch[key]))
           throw sessionInfoError("Nội dung bạn đang sửa vừa được thay đổi ở cửa sổ khác. Chưa lưu; bản nhập vẫn được giữ. Hãy sao chép bản nhập, hủy và mở lại để đối chiếu.");
       }
       if(latest) tx.update(row.ref,{...patch,updatedAt:serverTimestamp()});
@@ -822,13 +867,20 @@ async function saveSessionInfo(model,values){
   });
   return true;
 }
+// GATE 2B-RT-INTEGRATION: which SESSION_INFO_FIELDS keys have a RichText V1 counterpart, and are
+// therefore rendered/edited via RichTextEditor instead of a plain textarea — groupActivities only.
+const RICH_ROW_KEY={instructions:"instructionsRich",topic:"topicRich"};
 async function openSessionInfoEditor(kind,id,onSaved){
   let model;
   try{model=await loadSessionInfo(kind,id);}catch(e){toast(e.message || mapError(e),"err");return;}
   const labels={title:"Tên phiên",description:"Mô tả",instructions:"Hướng dẫn / nhiệm vụ chung",targetSubmissions:"Mục tiêu lượt gửi",topic:"Nhiệm vụ nhóm"};
+  const isGroupRich=kind==="groupActivities";
   const host=openModal(`<h3>Sửa phiên</h3><p class="mut">Lưu thông tin trên phiên hiện có.</p>
     ${model.rows.map((row,i)=>row.fields.map(key=>{
       const val=row.original?.[key]??"", inputId=`si-${i}-${key}`;
+      if(isGroupRich && RICH_ROW_KEY[key]){
+        return `<div class="field"><label>${esc(labels[key])}${row.group?` ${row.group}`:""}</label><div id="${inputId}-rt" class="rt-editor-host"></div></div>`;
+      }
       return `<div class="field"><label for="${inputId}">${esc(labels[key])}${row.group?` ${row.group}`:""}</label>${key==="targetSubmissions"?
         `<input id="${inputId}" type="number" min="3" max="10000" step="1" value="${esc(val)}">`:
         key==="title"?`<input type="text" id="${inputId}" value="${esc(val)}" ${kind==="knowledgeSessions"?'maxlength="120"':""}>`:
@@ -836,6 +888,37 @@ async function openSessionInfoEditor(kind,id,onSaved){
     }).join("")).join("")}
     <div id="siError" class="error-text" role="alert"></div>
     <div class="flex-between mt-14"><button class="btn btn-ghost" id="siCancel">HỦY</button><button class="btn" id="siSave">LƯU THAY ĐỔI</button></div>`,true);
+
+  // Mount one RichTextEditor per Rich-capable row/field (common instructions + every group's
+  // topic). Each loads instructionsRich/topicRich when present AND contract-valid, else falls
+  // back to the legacy plain string — never the other way around, and never both at once.
+  const richEntries=[];
+  if(isGroupRich){
+    model.rows.forEach((row,i)=>{
+      row.fields.forEach(key=>{
+        const richKey=RICH_ROW_KEY[key];
+        if(!richKey) return;
+        const mount=host.querySelector(`#si-${i}-${key}-rt`);
+        const editor=new RichTextEditor({container:mount, ariaLabel:esc(labels[key])});
+        const stored=row.original?.[richKey];
+        if(stored!==undefined && stored!==null && validateRichTextV1(stored)) editor.setRichText(stored);
+        else editor.setPlainText(row.original?.[key] ?? "");
+        // Baseline = what THIS editor would export right now, immediately after loading and
+        // before any user interaction. Comparing save-time export against this (not against the
+        // raw stored string) is what lets a genuine no-op open+save correctly report "no changes"
+        // even for legacy content whose line-ending/whitespace convention the editor's own
+        // deterministic load->export round trip normalizes.
+        const baseline=editor.getRichText();
+        richEntries.push({
+          rowIndex:i, key, richKey, editor,
+          baselineRich: baseline.ok ? baseline.value : null,
+          baselinePlain: baseline.ok ? richTextToPlainText(baseline.value) : (row.original?.[key] ?? "")
+        });
+      });
+    });
+  }
+  modalCloseCleanup=()=>{ richEntries.forEach(en=>{ try{en.editor.destroy();}catch(e){} }); };
+
   const save=host.querySelector("#siSave"),cancel=host.querySelector("#siCancel"),error=host.querySelector("#siError");
   let busy=false;
   // Do not let a backdrop click discard a draft while a save is pending.
@@ -844,13 +927,34 @@ async function openSessionInfoEditor(kind,id,onSaved){
   save.onclick=async()=>{
     if(busy)return;
     busy=true; save.disabled=true; cancel.disabled=true; error.textContent="";
-    const values=model.rows.map((row,i)=>Object.fromEntries(row.fields.map(key=>{
-      const value=host.querySelector(`#si-${i}-${key}`).value;
-      return [key,key==="targetSubmissions"?Number(value):value];
-    })));
+
+    // Trusted export first, for every Rich editor, BEFORE touching Firestore at all. Any single
+    // failure blocks the WHOLE save — no partial write, modal stays open, every editor's authored
+    // content is left exactly as the lecturer left it (nothing is cleared or reset).
+    const richResults=richEntries.map(en=>({en,result:en.editor.getRichText()}));
+    const failed=richResults.find(r=>!r.result.ok);
+    if(failed){
+      const groupSuffix=model.rows[failed.en.rowIndex].group?` ${model.rows[failed.en.rowIndex].group}`:"";
+      error.textContent=`Nội dung "${labels[failed.en.key]}${groupSuffix}" vượt quá giới hạn định dạng cho phép (quá dài hoặc quá nhiều đoạn/định dạng). Vui lòng rút gọn nội dung rồi lưu lại.`;
+      busy=false; save.disabled=false; cancel.disabled=false;
+      return;
+    }
+    const richPatches=model.rows.map(()=>null);
+    richResults.forEach(({en,result})=>{
+      const richValue=result.value, plainMirror=richTextToPlainText(richValue);
+      const changed=JSON.stringify(richValue)!==JSON.stringify(en.baselineRich) || plainMirror!==en.baselinePlain;
+      if(changed) richPatches[en.rowIndex]={richKey:en.richKey, richValue, plainKey:en.key, plainValue:plainMirror};
+    });
+
+    const values=model.rows.map((row,i)=>Object.fromEntries(row.fields
+      .filter(key=>!(isGroupRich && RICH_ROW_KEY[key]))
+      .map(key=>{
+        const value=host.querySelector(`#si-${i}-${key}`).value;
+        return [key,key==="targetSubmissions"?Number(value):value];
+      })));
     host.querySelectorAll("input,textarea").forEach(el=>el.disabled=true);
     try{
-      const changed=await saveSessionInfo(model,values);closeModal();toast(changed?"Đã lưu thông tin phiên.":"Không có thay đổi cần lưu.","ok");
+      const changed=await saveSessionInfo(model,values,richPatches);closeModal();toast(changed?"Đã lưu thông tin phiên.":"Không có thay đổi cần lưu.","ok");
       if(changed && onSaved) Promise.resolve().then(onSaved).catch(()=>toast("Đã lưu. Hãy tải lại danh sách để xem thông tin mới.","warn"));
     }
     catch(e){error.textContent=e.code?mapError(e):e.message;}
@@ -1843,7 +1947,7 @@ async function groupLive(c,id,isAdminView){
       <button class="btn btn-danger" id="gTimerStop">⏹ DỪNG ĐỒNG HỒ</button>
     </div>
   </div>
-  <div class="card mt-14 ${a.instructions?"":"hidden"}" id="gInstructionsCard"><b>Nhiệm vụ chung:</b><div class="mt-8" id="gLiveInstructions" style="white-space:pre-wrap">${esc(a.instructions||"")}</div></div>
+  <div class="card mt-14 ${a.instructions?"":"hidden"}" id="gInstructionsCard"><b>Nhiệm vụ chung:</b><div class="mt-8" id="gLiveInstructions"></div></div>
   <div class="grid grid-2 mt-14">
     <div class="card">
       <div class="flex-between"><div><h3 style="margin:0">QR tham gia</h3><div class="small mut">Học viên quét QR → chọn nhóm → gửi kết quả.</div></div>
@@ -1907,9 +2011,18 @@ async function groupLive(c,id,isAdminView){
   $("#groupTimerPopupStop").onclick=stopGroupTimer;
 
   let current=a, notes=[],photos=[],files=[],topics={};
+  // GATE 2B-RT-INTEGRATION: same shared safe renderer for the common instructions card, both at
+  // initial paint and on every live update — no separate HTML renderer, never innerHTML with
+  // stored rich content.
+  function renderCommonInstructions(){
+    renderRichText($("#gLiveInstructions"), current.instructionsRich, current.instructions||"");
+  }
   function renderTopics(){
     $("#gTopics").innerHTML=Array.from({length:current.groupCount||6},(_,k)=>k+1).map(i=>
-      `<div class="field" style="margin-bottom:8px"><label>Nhóm ${i}</label><div style="white-space:pre-wrap">${esc(topics[String(i)]?.topic||"Chưa có nhiệm vụ")}</div></div>`).join("");
+      `<div class="field" style="margin-bottom:8px"><label>Nhóm ${i}</label><div data-topic-mount="${i}" style="white-space:pre-wrap">${topics[String(i)]?.topic?"":"Chưa có nhiệm vụ"}</div></div>`).join("");
+    Array.from({length:current.groupCount||6},(_,k)=>k+1).forEach(i=>{
+      if(topics[String(i)]?.topic) renderRichText($(`[data-topic-mount="${i}"]`), topics[String(i)]?.topicRich, topics[String(i)].topic);
+    });
   }
   $("#gSaveTopics").onclick=()=>openSessionInfoEditor("groupActivities",id);
   $("#gManageMembers").onclick=()=>openGroupMembersManager(id,current.groupCount||6);
@@ -1921,13 +2034,16 @@ async function groupLive(c,id,isAdminView){
       const fs=files.filter(x=>Number(x.group)===i);
       total+=ns.length+ps.length+fs.length;
       return `<div class="group-panel" data-group-panel="${i}"><h4>Nhóm ${i}</h4>
-        ${topics[String(i)]?.topic?`<div class="group-topic">📌 ${esc(topics[String(i)].topic)}</div>`:""}
+        ${topics[String(i)]?.topic?`<div class="group-topic">📌 <span data-panel-topic-mount="${i}"></span></div>`:""}
         <div>${ns.length?ns.map(n=>`<div class="group-note">${esc(n.text||"")}</div>`).join(""):`<div class="mut small">Đang chờ ý kiến…</div>`}</div>
         ${ps.length?`<div class="group-media">${ps.map(p=>`<img src="${p.url||p.dataUrl}" data-gphoto="${p.id}" alt="Ảnh nhóm ${i}">`).join("")}</div>`:""}
         ${fs.length?`<div>${fs.map(f=>groupFileAnchorHtml(f)).join("")}</div>`:""}
       </div>`;
     }).join("");
     $("#gRespCount").textContent=`${total} nội dung đã gửi`;
+    Array.from({length:current.groupCount||6},(_,k)=>k+1).forEach(i=>{
+      if(topics[String(i)]?.topic) renderRichText($(`[data-panel-topic-mount="${i}"]`), topics[String(i)]?.topicRich, topics[String(i)].topic);
+    });
     $$("[data-gphoto]").forEach(img=>img.onclick=e=>{e.stopPropagation();const p=photos.find(x=>x.id===img.dataset.gphoto);if(p)openImageViewerSimple(p.url||p.dataUrl);});
     $$("[data-group-panel]").forEach(panel=>panel.onclick=()=>{
       const i=Number(panel.dataset.groupPanel);
@@ -1936,11 +2052,12 @@ async function groupLive(c,id,isAdminView){
       const fs=files.filter(x=>Number(x.group)===i);
       $("#groupPanelPopupInner").innerHTML=`
         <h2>Nhóm ${i}</h2>
-        ${topics[String(i)]?.topic?`<div class="group-topic">📌 ${esc(topics[String(i)].topic)}</div>`:""}
+        ${topics[String(i)]?.topic?`<div class="group-topic">📌 <span id="groupPanelPopupTopic"></span></div>`:""}
         <div class="small mut" style="margin-bottom:12px">${ns.length} ý kiến · ${ps.length} ảnh · ${fs.length} tệp/link</div>
         ${ns.length?ns.map(n=>`<div class="group-note">${esc(n.text||"")}</div>`).join(""):`<div class="mut">Đang chờ ý kiến…</div>`}
         ${ps.length?`<div class="group-media mt-14">${ps.map(p=>`<img src="${p.dataUrl}" data-popup-photo="${p.id}" alt="Ảnh nhóm ${i}">`).join("")}</div>`:""}
         ${fs.length?`<div class="mt-14">${fs.map(f=>groupFileAnchorHtml(f)).join("")}</div>`:""}`;
+      if(topics[String(i)]?.topic) renderRichText($("#groupPanelPopupTopic"), topics[String(i)]?.topicRich, topics[String(i)].topic);
       $("#groupPanelPopup").classList.remove("hidden");
       $$("[data-popup-photo]").forEach(img=>img.onclick=e=>{e.stopPropagation();const p=photos.find(x=>x.id===img.dataset.popupPhoto);if(p)openImageViewerSimple(p.url||p.dataUrl);});
     });
@@ -1986,12 +2103,12 @@ async function groupLive(c,id,isAdminView){
   };
   document.addEventListener("keydown",groupKeyHandler); track(()=>document.removeEventListener("keydown",groupKeyHandler));
 
-  track(onSnapshot(doc(db,GROUP_COLLECTION,id),s=>{if(!s.exists())return;current={id,...s.data()};$("#gLiveTitle").textContent=current.title||"";$("#gLiveInstructions").textContent=current.instructions||"";$("#gInstructionsCard").classList.toggle("hidden",!current.instructions);$("#gStatusBadge").innerHTML=groupStatusBadge(current.status);renderPanels();updateTimer();}));
+  track(onSnapshot(doc(db,GROUP_COLLECTION,id),s=>{if(!s.exists())return;current={id,...s.data()};$("#gLiveTitle").textContent=current.title||"";renderCommonInstructions();$("#gInstructionsCard").classList.toggle("hidden",!current.instructions);$("#gStatusBadge").innerHTML=groupStatusBadge(current.status);renderPanels();updateTimer();}));
   track(onSnapshot(collection(db,GROUP_COLLECTION,id,"topics"),s=>{topics={};s.forEach(d=>topics[d.id]=d.data());renderTopics();renderPanels();}));
   track(onSnapshot(collection(db,GROUP_COLLECTION,id,"notes"),s=>{notes=s.docs.map(d=>({id:d.id,...d.data()}));renderPanels();}));
   track(onSnapshot(collection(db,GROUP_COLLECTION,id,"photos"),s=>{photos=s.docs.map(d=>({id:d.id,...d.data()}));renderPanels();}));
   track(onSnapshot(collection(db,GROUP_COLLECTION,id,"files"),s=>{files=s.docs.map(d=>({id:d.id,...d.data()}));renderPanels();}));
-  renderTopics();renderPanels();updateTimer();
+  renderCommonInstructions();renderTopics();renderPanels();updateTimer();
 }
 
 // GATE 2A-AUTH-I2-CORRECTION: owner/admin-only roster + narrow field-only group correction.
@@ -2082,10 +2199,10 @@ async function renderGroupStudentEntry(){
     if(existingMemberSnap.exists()) membershipGroup=validStoredGroup(existingMemberSnap.data(),a.groupCount);
 
     appRoot().innerHTML=`<div class="group-student-wrap">
-      <div class="center"><div class="eyebrow">HCMA2 - TEACHING</div><h1 id="gsLiveTitle">👥 ${esc(a.title||"Thảo luận nhóm")}</h1><p class="mut" id="gsLiveInstructions" style="white-space:pre-wrap">${esc(a.instructions||"")}</p></div>
+      <div class="center"><div class="eyebrow">HCMA2 - TEACHING</div><h1 id="gsLiveTitle">👥 ${esc(a.title||"Thảo luận nhóm")}</h1><div class="mut" id="gsLiveInstructions"></div></div>
       <div class="group-student-card"><div class="flex-between"><div><b>Mã phòng: ${esc(code)}</b><div class="small mut" id="gsStatus"></div><div class="small mut mt-8">Mã học viên: <b>${esc(shortStudentCode(publicAuth.currentUser.uid))}</b> — nếu cần đổi nhóm, hãy báo mã này cho giảng viên.</div></div><div class="group-timer" id="gsTimer">--:--</div></div>
         <div class="field mt-14"><label>${membershipGroup?"Nhóm của anh/chị":"Chọn nhóm của anh/chị *"}</label><select id="gsGroup" ${membershipGroup?"disabled":""}><option value="">— Chọn nhóm —</option>${Array.from({length:a.groupCount||6},(_,k)=>`<option value="${k+1}" ${membershipGroup===k+1?"selected":""}>Nhóm ${k+1}</option>`).join("")}</select><div class="small mut mt-8" id="gsJoinMsg">${membershipGroup?"Bạn đã tham gia nhóm này — không thể đổi nhóm.":""}</div></div>
-        <div id="gsTopic" class="group-topic hidden" style="white-space:pre-wrap"></div>
+        <div id="gsTopic" class="group-topic hidden"><span id="gsTopicLabel"></span><div id="gsTopicContent"></div></div>
       </div>
       <div class="group-student-card hidden" id="gsSubmitCard">
         ${a.allowText!==false?`<div class="field"><label>Ý kiến thảo luận</label><textarea id="gsText" maxlength="1500" placeholder="Nhập ý kiến của nhóm…"></textarea><div class="small mut" id="gsChar">0/1500</div></div><button class="btn" id="gsSendText">GỬI Ý KIẾN</button><div id="gsTextMsg" class="small mt-8"></div>`:""}
@@ -2095,12 +2212,19 @@ async function renderGroupStudentEntry(){
       </div>
       <div class="group-student-card"><h3>Ý kiến đã gửi của nhóm</h3><div id="gsMyNotes"><div class="mut small">${membershipGroup?"Đang tải…":"Chọn nhóm để xem."}</div></div></div>
     </div>`;
+    // GATE 2B-RT-INTEGRATION: same shared safe renderer as the lecturer view, at initial paint
+    // and on every live update (see the activity onSnapshot listener below).
+    renderRichText($("#gsLiveInstructions"), a.instructionsRich, a.instructions||"");
 
     let currentTopic=null, notes=[], joinBusy=false, unsubTopic=null, unsubNotes=null, membershipListenerAttached=false, wasOpen=true, contentGeneration=0;
 
     function updateTopicDisplay(){
       const t=currentTopic?.topic||""; const el=$("#gsTopic");
-      el.textContent=t?`📌 Chủ đề nhóm ${membershipGroup}: ${t}`:"";el.classList.toggle("hidden",!t);
+      el.classList.toggle("hidden",!t);
+      if(t){
+        $("#gsTopicLabel").textContent=`📌 Chủ đề nhóm ${membershipGroup}: `;
+        renderRichText($("#gsTopicContent"), currentTopic?.topicRich, t);
+      }
     }
     function renderMyNotes(){
       if(!membershipGroup){$("#gsMyNotes").innerHTML=`<div class="mut small">Chọn nhóm để xem.</div>`;return;}
@@ -2181,7 +2305,7 @@ async function renderGroupStudentEntry(){
       if(!s.exists())return;
       a={id,...s.data()};
       $("#gsLiveTitle").textContent="👥 "+(a.title||"Thảo luận nhóm");
-      $("#gsLiveInstructions").textContent=a.instructions||"";
+      renderRichText($("#gsLiveInstructions"), a.instructionsRich, a.instructions||"");
       if(wasOpen && a.status!=="open"){
         wasOpen=false;detachScopedListeners();
       }else if(!wasOpen && a.status==="open"){

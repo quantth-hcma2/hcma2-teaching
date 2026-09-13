@@ -29,7 +29,8 @@
     "test:gate2a-auth-i3": "node test/gate2a-auth-i3/run-emulator-tests.mjs",
     "test:gate2a-auth-i3-ui-fix:pure": "node --test test/gate2a-auth-i3-ui-fix/source-guard.test.mjs",
     "test:gate2a-auth-i3-ui-fix": "npm run test:gate2a-auth-i3-ui-fix:pure && node test/gate2a-auth-i3-ui-fix/run-emulator-tests.mjs",
-    "test:gate2b-rt-contract": "node --test test/gate2b-rt-contract/contract.test.mjs test/gate2b-rt-contract/renderer.test.mjs"
+    "test:gate2b-rt-contract": "node --test test/gate2b-rt-contract/contract.test.mjs test/gate2b-rt-contract/renderer.test.mjs",
+    "test:gate2b-rt-rules": "node test/gate2b-rt-rules/run-emulator-tests.mjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^3.0.4"

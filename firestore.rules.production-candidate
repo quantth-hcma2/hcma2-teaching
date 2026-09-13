@@ -833,6 +833,28 @@ service cloud.firestore {
         groupMembershipData(activityId).group == group;
     }
 
+    // ---------------- GATE 2B-RT-RULES: RichText V1 structural boundary ----------------
+    // Firestore Rules cannot practically validate the full nested RichText AST (there is no
+    // general forEach/map/every over a variable-length list in this rules language — validating
+    // "every run in every block" would require hand-unrolling a fixed number of indices, which is
+    // impractical past the first one or two and was explicitly rejected as brittle in
+    // GATE 2B-RT-DESIGN). This function therefore enforces ONLY the outermost structural/size
+    // boundary — shape, version, and block-count bound — empirically confirmed expressible and
+    // tested against a real Firestore emulator (see test/gate2b-rt-rules/). It deliberately does
+    // NOT validate individual blocks' `type`, runs' keys, `text` length, or the font/size/color
+    // token allowlists — those remain the trusted client serializer's job before write and the
+    // safe renderer's job at render time (rich-text-contract.mjs / rich-text-renderer.mjs), which
+    // independently re-validate every nested field regardless of what this boundary allowed
+    // through. A document that satisfies this boundary but fails the deep client validator is
+    // expected and handled: it renders via the legacy plain-text fallback, never partially.
+    function isRichTextV1Boundary(value) {
+      return value is map &&
+        value.keys().hasOnly(['version', 'blocks']) &&
+        value.version is int && value.version == 1 &&
+        value.blocks is list &&
+        value.blocks.size() >= 1 && value.blocks.size() <= 20;
+    }
+
     // ---------------- THẢO LUẬN NHÓM ----------------
     // Giảng viên chỉ quản lý hoạt động của chính mình; Admin quản lý toàn bộ.
     // Học viên dùng Anonymous Auth và chỉ được gửi dữ liệu khi hoạt động đang mở.
@@ -855,10 +877,15 @@ service cloud.firestore {
         request.resource.data.groupCount <= 12 &&
         request.resource.data.status == 'draft' &&
         request.resource.data.keys().hasOnly([
-          'ownerId','classId','className','title','instructions','groupCount',
+          'ownerId','classId','className','title','instructions','instructionsRich','groupCount',
           'durationSec','allowText','allowPhoto','allowFile','joinCode','status',
           'startedAt','createdAt','updatedAt'
-        ]);
+        ]) &&
+        // GATE 2B-RT-RULES: instructionsRich is a purely additive, optional field — legacy
+        // create (no instructionsRich at all) is untouched. When present, only the outermost
+        // structural/size boundary is enforced here; see isRichTextV1Boundary()'s own comment
+        // for why deep validation stays with the trusted client serializer + safe renderer.
+        (!('instructionsRich' in request.resource.data) || isRichTextV1Boundary(request.resource.data.instructionsRich));
 
       // GATE 1B.2A: update is allowlisted by DIFF (affectedKeys), not by the full document's
       // keys() — a legacy document carrying any older/unknown field keeps updating normally as
@@ -877,8 +904,14 @@ service cloud.firestore {
         !('configRevision' in resource.data) &&
         request.resource.data.ownerId == resource.data.ownerId &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'title','instructions','status','startedAt','pausedRemainingSec','updatedAt'
-        ]);
+          'title','instructions','instructionsRich','status','startedAt','pausedRemainingSec','updatedAt'
+        ]) &&
+        // GATE 2B-RT-RULES: instructionsRich is optional and removable — an update that drops it
+        // entirely (owner clearing rich formatting back to plain text) satisfies this check
+        // trivially, since request.resource.data (the resulting document) then has no
+        // instructionsRich key at all. Structural boundary only when present — see
+        // isRichTextV1Boundary().
+        (!('instructionsRich' in request.resource.data) || isRichTextV1Boundary(request.resource.data.instructionsRich));
 
       // GATE 1B.2B: contract activation — see sessions family above for full reasoning.
       // groupActivities has no trash stage, so lifecycle-safety here is CLOSED-only, no
@@ -1000,11 +1033,31 @@ service cloud.firestore {
         allow list: if isGroupOwnerOrAdmin(activityId);
 
         // Topic được tạo cùng batch với activity mới.
-        allow create: if isAdmin() ||
-          (isActiveTeacher() &&
-           getAfter(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
+        allow create: if (
+            isAdmin() ||
+            (isActiveTeacher() &&
+             getAfter(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid)
+          ) &&
+          // GATE 2B-RT-RULES: topicRich is a purely additive, optional field on top of the
+          // pre-existing, deliberately-unrestricted `topic`/`group`/`updatedAt` fields — this
+          // gate adds a structural boundary ONLY for the new field, and does not introduce a
+          // general key allowlist that didn't exist here before (see the Rules diff report for
+          // why: no existing writer of this collection is affected either way).
+          (!('topicRich' in request.resource.data) || isRichTextV1Boundary(request.resource.data.topicRich));
 
-        allow update, delete: if isAdmin() ||
+        // GATE 2B-RT-RULES: split out of the previous combined `allow update, delete` so the
+        // topicRich structural check below — which reads request.resource.data, meaningful only
+        // for update — is never evaluated for delete (delete has no resulting resource). The
+        // authorization condition itself (owner/admin only) is byte-for-byte unchanged from the
+        // combined rule this replaces.
+        allow update: if (
+            isAdmin() ||
+            (isActiveTeacher() &&
+             get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid)
+          ) &&
+          (!('topicRich' in request.resource.data) || isRichTextV1Boundary(request.resource.data.topicRich));
+
+        allow delete: if isAdmin() ||
           (isActiveTeacher() &&
            get(/databases/$(database)/documents/groupActivities/$(activityId)).data.ownerId == request.auth.uid);
       }

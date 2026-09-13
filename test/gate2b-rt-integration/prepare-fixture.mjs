@@ -1,0 +1,60 @@
+// GATE 2B-RT-INTEGRATION — generates the runtime-test copy of the candidate frontend, following
+// the exact same pattern as test/gate2a-auth-i3-ui-fix-runtime/prepare-fixture.mjs: takes the
+// ACTUAL current index.html and the ACTUAL current .mjs modules it imports, byte-for-byte, and
+// applies only the documented emulator-connection substitutions below — nothing else — so the
+// runtime harness always tests the real candidate integration, never a stale/hand-edited copy.
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.join(here, "..", "..");
+const publicDir = path.join(here, "public");
+mkdirSync(publicDir, { recursive: true });
+
+const MODULES = [
+  "session-reader.mjs", "session-view.mjs", "contract-editor.mjs", "contract-runtime.mjs",
+  "contract-activation.mjs", "contract-writer.mjs", "group-file-link-safety.mjs", "group-membership.mjs",
+  "rich-text-contract.mjs", "rich-text-renderer.mjs", "rich-text-editor-serializer.mjs", "rich-text-editor.mjs"
+];
+
+function replaceOnce(source, oldStr, newStr, label) {
+  const idx = source.indexOf(oldStr);
+  if (idx === -1) throw new Error(`prepare-fixture: expected substring not found (${label}) — real index.html has changed in a way this generator no longer understands. Update prepare-fixture.mjs, do not hand-edit the generated file.`);
+  if (source.indexOf(oldStr, idx + 1) !== -1) throw new Error(`prepare-fixture: substring for ${label} is not unique — refusing to guess which occurrence to replace.`);
+  return source.slice(0, idx) + newStr + source.slice(idx + oldStr.length);
+}
+
+let html = readFileSync(path.join(repoRoot, "index.html"), "utf8").replace(/\r\n/g, "\n");
+
+html = replaceOnce(html,
+  '  browserLocalPersistence\n} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";',
+  '  browserLocalPersistence, connectAuthEmulator\n} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";',
+  "auth import: add connectAuthEmulator"
+);
+html = replaceOnce(html,
+  '  getCountFromServer, collectionGroup, runTransaction\n} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";',
+  '  getCountFromServer, collectionGroup, runTransaction, connectFirestoreEmulator\n} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";',
+  "firestore import: add connectFirestoreEmulator"
+);
+html = replaceOnce(html,
+  '  projectId: "bo-phieu-hcma2",',
+  '  projectId: "demo-hcma2-gate2b-rt-integration",',
+  "firebaseConfig.projectId override"
+);
+html = replaceOnce(html,
+  'const auth = getAuth(fbApp);\nconst db = getFirestore(fbApp);\nconst storage = getStorage(fbApp);',
+  'const auth = getAuth(fbApp);\nconst db = getFirestore(fbApp);\nconst storage = getStorage(fbApp);\nconnectAuthEmulator(auth, "http://127.0.0.1:9200", { disableWarnings: true });\nconnectFirestoreEmulator(db, "127.0.0.1", 8200);',
+  "main app: connect emulators"
+);
+html = replaceOnce(html,
+  'const publicAuth = getAuth(publicApp);\nconst publicDb = getFirestore(publicApp);\nconst publicStorage = getStorage(publicApp);\nsetPersistence(publicAuth, browserLocalPersistence).catch(()=>{});',
+  'const publicAuth = getAuth(publicApp);\nconst publicDb = getFirestore(publicApp);\nconst publicStorage = getStorage(publicApp);\nconnectAuthEmulator(publicAuth, "http://127.0.0.1:9200", { disableWarnings: true });\nconnectFirestoreEmulator(publicDb, "127.0.0.1", 8200);\nsetPersistence(publicAuth, browserLocalPersistence).catch(()=>{});',
+  "public app: connect emulators"
+);
+
+writeFileSync(path.join(publicDir, "index.html"), html);
+for (const m of MODULES) {
+  writeFileSync(path.join(publicDir, m), readFileSync(path.join(repoRoot, m)));
+}
+console.log(`[gate2b-rt-integration] generated public/index.html + ${MODULES.length} modules from the current candidate.`);

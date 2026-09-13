@@ -33,7 +33,9 @@
     "test:gate2b-rt-rules": "node test/gate2b-rt-rules/run-emulator-tests.mjs",
     "test:gate2b-rt-editor:pure": "node --test test/gate2b-rt-editor/serializer.test.mjs",
     "test:gate2b-rt-integration:pure": "node --test test/gate2b-rt-integration/source-guard.test.mjs",
-    "test:gate2b-rt-preprod": "node test/gate2b-rt-preprod/run-emulator-tests.mjs"
+    "test:gate2b-rt-preprod": "node test/gate2b-rt-preprod/run-emulator-tests.mjs",
+    "test:gate2b-rt-fix1:pure": "node --test test/gate2b-rt-fix1/comparator.test.mjs test/gate2b-rt-fix1/conflict-guard.test.mjs",
+    "test:gate2b-rt-fix1": "npm run test:gate2b-rt-fix1:pure && node test/gate2b-rt-fix1/run-emulator-tests.mjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^3.0.4"

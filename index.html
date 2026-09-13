@@ -524,6 +524,9 @@ import { validStoredGroup, ensureGroupMembership } from "./group-membership.mjs"
 import { validateRichTextV1, richTextToPlainText } from "./rich-text-contract.mjs";
 import { renderRichText } from "./rich-text-renderer.mjs";
 import { RichTextEditor } from "./rich-text-editor.mjs";
+// GATE 2B-RT-FIX1: key-order-independent deep equality + the session-info save conflict check —
+// see session-info-compare.mjs for the production-bug root cause and full contract.
+import { valuesEqualDeep, findConflictKey } from "./session-info-compare.mjs";
 
 /* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
 const firebaseConfig = {
@@ -814,16 +817,6 @@ function validateSessionInfo(kind,values){
       throw sessionInfoError("Mục tiêu phải là số nguyên từ 3 đến 10.000.");
   }
 }
-// GATE 2B-RT-INTEGRATION: deep-equality helper, needed because a RichText field's value is an
-// object (not a scalar) — JSON-stringify comparison for objects, identity comparison otherwise.
-// A drop-in replacement for `!==`/`===` at the two comparison sites below: behaves identically to
-// the strict-equality checks it replaces for every existing scalar field (title, description,
-// targetSubmissions), and is only actually exercised for instructionsRich/topicRich.
-function valuesEqualDeep(a,b){
-  if(a===b) return true;
-  if(a && b && typeof a==="object" && typeof b==="object") return JSON.stringify(a)===JSON.stringify(b);
-  return false;
-}
 // `richPatches` (optional): an array parallel to model.rows, each entry either null or
 // {richKey,richValue,plainKey,plainValue} — supplied by openSessionInfoEditor's RichTextEditor
 // integration for whichever rows' Rich field genuinely changed vs. its load-time baseline (see
@@ -857,10 +850,8 @@ async function saveSessionInfo(model,values,richPatches){
       const patch=edits[i], latest=snaps[i].exists()?snaps[i].data():null;
       if(!Object.keys(patch).length) return;
       if(row.original && !latest) throw sessionInfoError("Dữ liệu đã bị xóa ở cửa sổ khác. Bản nhập vẫn được giữ.");
-      for(const key of Object.keys(patch)){
-        if(!valuesEqualDeep(latest?.[key],row.original?.[key]) && !valuesEqualDeep(latest?.[key],patch[key]))
-          throw sessionInfoError("Nội dung bạn đang sửa vừa được thay đổi ở cửa sổ khác. Chưa lưu; bản nhập vẫn được giữ. Hãy sao chép bản nhập, hủy và mở lại để đối chiếu.");
-      }
+      if(findConflictKey(patch,latest,row.original))
+        throw sessionInfoError("Nội dung bạn đang sửa vừa được thay đổi ở cửa sổ khác. Chưa lưu; bản nhập vẫn được giữ. Hãy sao chép bản nhập, hủy và mở lại để đối chiếu.");
       if(latest) tx.update(row.ref,{...patch,updatedAt:serverTimestamp()});
       else tx.set(row.ref,{group:row.group,...patch,updatedAt:serverTimestamp()});
     });

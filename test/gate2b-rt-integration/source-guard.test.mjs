@@ -146,11 +146,17 @@ test("14: saveSessionInfo merges richPatches into the SAME edits/patch structure
   assert.equal(transactionCount, 1, "exactly one runTransaction — no separate write path for Rich fields");
 });
 
-test("15: valuesEqualDeep replaces the two strict-equality comparison sites (edits filter, conflict check) so object-valued Rich fields are compared correctly, while scalar fields behave identically to before", () => {
-  assert.match(html, /function valuesEqualDeep\(a,b\)\{\s*if\(a===b\) return true;\s*if\(a && b && typeof a==="object" && typeof b==="object"\) return JSON\.stringify\(a\)===JSON\.stringify\(b\);\s*return false;\s*\}/);
+test("15: valuesEqualDeep/findConflictKey (imported from session-info-compare.mjs, GATE 2B-RT-FIX1) replace the two strict-equality comparison sites (edits filter, conflict check) so object-valued Rich fields are compared correctly, while scalar fields behave identically to before", () => {
+  // GATE 2B-RT-FIX1: the comparator moved into its own module — see
+  // test/gate2b-rt-fix1/comparator.test.mjs and conflict-guard.test.mjs for its behavioral proof,
+  // including the regression guard against the JSON.stringify key-order bug this gate fixed. This
+  // source guard only proves index.html imports and wires the real module, never a parallel copy.
+  assert.match(html, /import\s*\{\s*valuesEqualDeep,\s*findConflictKey\s*\}\s*from\s*"\.\/session-info-compare\.mjs";/);
+  assert.doesNotMatch(html, /function\s+valuesEqualDeep/, "must not define a parallel valuesEqualDeep in index.html");
+  assert.doesNotMatch(html, /function\s+findConflictKey/, "must not define a parallel findConflictKey in index.html");
   const body = fnBody("async function saveSessionInfo(model,values,richPatches){", "\nasync function openSessionInfoEditor");
   assert.match(body, /\.filter\(k=>!valuesEqualDeep\(values\[i\]\[k\], row\.original\?\.\[k\] \?\? ""\)\)/);
-  assert.match(body, /if\(!valuesEqualDeep\(latest\?\.\[key\],row\.original\?\.\[key\]\) && !valuesEqualDeep\(latest\?\.\[key\],patch\[key\]\)\)/);
+  assert.match(body, /if\(findConflictKey\(patch,latest,row\.original\)\)/);
 });
 
 // ===================================================================================

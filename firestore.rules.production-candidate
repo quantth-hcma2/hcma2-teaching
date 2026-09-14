@@ -1349,6 +1349,14 @@ service cloud.firestore {
       // phiên, theo đúng yêu cầu Gate 3B (ưu tiên an toàn, chưa cần chỉnh sửa sau khi tạo).
       // GATE 1B.2B: legacy branch now additionally requires the session to NOT already be
       // contract-activated — see the identical reasoning on the sessions family above.
+      // GATE 3C: minimumPerParticipant's immutability no longer relies on a direct
+      // request.resource.data.minimumPerParticipant == resource.data.minimumPerParticipant
+      // comparison, which threw a CEL evaluation error (denying the WHOLE write, including
+      // trash/restore) for legacy documents predating this field. minimumPerParticipant is
+      // deliberately absent from the affectedKeys().hasOnly() allowlist immediately below —
+      // that allowlist alone already forbids adding, removing, or changing it, for both a
+      // present-on-both-sides value and an absent-on-both-sides legacy document, without ever
+      // dereferencing the field directly. See GATE 3A-AUDIT / GATE 3B-FIX-DESIGN.
       allow update: if isOwnerActiveTeacher(resource.data.ownerId) &&
         !('configRevision' in resource.data) &&
         request.resource.data.keys().hasOnly([
@@ -1368,7 +1376,6 @@ service cloud.firestore {
         request.resource.data.ownerId == resource.data.ownerId &&
         request.resource.data.joinCode == resource.data.joinCode &&
         request.resource.data.createdAt == resource.data.createdAt &&
-        request.resource.data.minimumPerParticipant == resource.data.minimumPerParticipant &&
         (!('collectParticipantProfile' in request.resource.data) || request.resource.data.collectParticipantProfile == resource.data.collectParticipantProfile) &&
         (!('participantFields' in request.resource.data) || request.resource.data.participantFields == resource.data.participantFields) &&
         (!('classOptions' in request.resource.data) || request.resource.data.classOptions == resource.data.classOptions) &&
@@ -1392,6 +1399,13 @@ service cloud.firestore {
       // GATE 3B: cùng nguyên tắc bất biến như nhánh teacher ở trên.
       // GATE 1B.2B: legacy branch now additionally requires the session to NOT already be
       // contract-activated — see the identical reasoning on the sessions family above.
+      // GATE 3C: unlike the teacher branch above, this branch has no affectedKeys().hasOnly()
+      // positive allowlist of changeable fields, so minimumPerParticipant's immutability is
+      // enforced the same way the pre-existing analysisFence/analysisLease/adminDeleting/
+      // deletingAt/deleteRunId fields already are — added to the hasAny() blocklist just below,
+      // rather than via a direct equality comparison that throws a CEL evaluation error (denying
+      // the whole write) when the field is absent from a legacy document. See GATE 3A-AUDIT /
+      // GATE 3B-FIX-DESIGN.
       allow update: if isAdmin() &&
         !('configRevision' in resource.data) &&
         request.resource.data.keys().hasOnly([
@@ -1402,12 +1416,12 @@ service cloud.firestore {
           'collectParticipantProfile', 'participantFields', 'classOptions'
         ]) &&
         !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-          'analysisFence', 'analysisLease', 'adminDeleting', 'deletingAt', 'deleteRunId'
+          'analysisFence', 'analysisLease', 'adminDeleting', 'deletingAt', 'deleteRunId',
+          'minimumPerParticipant'
         ]) &&
         request.resource.data.ownerId == resource.data.ownerId &&
         request.resource.data.joinCode == resource.data.joinCode &&
         request.resource.data.createdAt == resource.data.createdAt &&
-        request.resource.data.minimumPerParticipant == resource.data.minimumPerParticipant &&
         (!('collectParticipantProfile' in request.resource.data) || request.resource.data.collectParticipantProfile == resource.data.collectParticipantProfile) &&
         (!('participantFields' in request.resource.data) || request.resource.data.participantFields == resource.data.participantFields) &&
         (!('classOptions' in request.resource.data) || request.resource.data.classOptions == resource.data.classOptions) &&

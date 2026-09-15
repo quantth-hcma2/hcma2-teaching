@@ -5128,7 +5128,7 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
     if($("#knProgressText"))$("#knProgressText").textContent=pct+"%";if($("#knProgressBar"))$("#knProgressBar").style.width=pct+"%";
     // GATE 3D: chỉ TÍNH LẠI tiến độ trên hồ sơ đã có sẵn trong bộ nhớ — không đọc lại
     // participants (PII) chỉ vì submissions vừa thay đổi.
-    if(session&&session.collectParticipantProfile===true&&participants!==null)knowledgeRenderParticipants();
+    if(session&&session.collectParticipantProfile===true&&participants!==null)knowledgeRenderParticipantsCompact();
   },e=>toast(mapError(e),"err")));
   function knowledgeRenderDashboard(){
     const url=knowledgeJoinUrl(session.joinCode);
@@ -5154,7 +5154,7 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
     // việc phiên tự re-render (vd đổi trạng thái) không gây đọc lại PII không cần thiết.
     if(session.collectParticipantProfile===true){
       if(participants===null&&!participantsLoading)loadParticipants();
-      else knowledgeRenderParticipants();
+      else knowledgeRenderParticipantsCompact();
     }
     $("#knCsv").onclick=knowledgeExportCsv; $("#knAiRun").onclick=()=>knowledgeStartAi(false); $("#knAiRetry").onclick=()=>knowledgeStartAi(true); $("#knAiJson").onclick=knowledgeExportAiJson; $("#knAiCsv").onclick=knowledgeExportAiCsv; $("#knSearch").oninput=knowledgeRenderRecent;$("#knSeq").onchange=knowledgeRenderRecent;
     $("#knMore").onclick=()=>{recentLimit=Math.min(250,recentLimit+50);attachRecent();};
@@ -5219,28 +5219,39 @@ knowledgeRenderAi();
       return;
     }
     participantsLoading=false;
-    knowledgeRenderParticipants();
+    knowledgeRenderParticipantsCompact();
   }
-  function knowledgeRenderParticipants(){
-    const wrap=$("#knPfWrap");if(!wrap||session.collectParticipantProfile!==true||participants===null)return;
-    const minPer=(Number.isInteger(session.minimumPerParticipant)&&session.minimumPerParticipant>=1)?session.minimumPerParticipant:3;
-    const pf=session.participantFields||{};
+  // GATE 4C-A: pure markup builder, extracted unchanged from the previous single
+  // knowledgeRenderParticipants() so later gates (Expanded/Fullscreen) can mount the exact
+  // same table/toolbar markup into a different host without duplicating this logic. Behavior
+  // (fields, ordering, filter semantics, empty state, orphan warning) is byte-for-byte the
+  // same as before this refactor — only the DOM-mount and event-wiring responsibility moved
+  // into knowledgeRenderParticipantsCompact() below.
+  function knowledgeParticipantsMarkup(participantsArg,countsArg,sessionArg,filter){
+    const minPer=(Number.isInteger(sessionArg.minimumPerParticipant)&&sessionArg.minimumPerParticipant>=1)?sessionArg.minimumPerParticipant:3;
+    const pf=sessionArg.participantFields||{};
     const activeFields=Object.keys(KN_PARTICIPANT_FIELD_LABELS).filter(f=>pf[f]&&pf[f].enabled);
-    const rows=participants.map(p=>{const cnt=participantCounts.get(p.id)||0;return{...p,_count:cnt,_complete:cnt>=minPer};});
+    const rows=participantsArg.map(p=>{const cnt=countsArg.get(p.id)||0;return{...p,_count:cnt,_complete:cnt>=minPer};});
     const total=rows.length,completed=rows.filter(r=>r._complete).length,incomplete=total-completed;
     // GATE 3D (mục 4): submissions không khớp hồ sơ nào — chỉ đếm, KHÔNG hiển thị PII giả.
     const knownIds=new Set(rows.map(r=>r.id));
-    let orphanCount=0;participantCounts.forEach((cnt,pid)=>{if(!knownIds.has(pid))orphanCount++;});
-    const filter=$("#knPfFilter")?.value||"all";
+    let orphanCount=0;countsArg.forEach((cnt,pid)=>{if(!knownIds.has(pid))orphanCount++;});
     const filtered=rows.filter(r=>filter==="complete"?r._complete:(filter==="incomplete"?!r._complete:true));
-    wrap.innerHTML=`<div class="grid grid-3"><div class="card knowledge-stat"><strong>${total}</strong><span>Đã đăng ký</span></div><div class="card knowledge-stat"><strong>${completed}</strong><span>Đã hoàn thành</span></div><div class="card knowledge-stat"><strong>${incomplete}</strong><span>Chưa hoàn thành</span></div></div>
+    return `<div class="grid grid-3"><div class="card knowledge-stat"><strong>${total}</strong><span>Đã đăng ký</span></div><div class="card knowledge-stat"><strong>${completed}</strong><span>Đã hoàn thành</span></div><div class="card knowledge-stat"><strong>${incomplete}</strong><span>Chưa hoàn thành</span></div></div>
       ${orphanCount>0?`<p class="small" style="color:#b45309">⚠️ ${orphanCount} lượt gửi không khớp với hồ sơ người tham gia nào — không hiển thị trong bảng dưới đây.</p>`:""}
       <div class="flex gap-8 mt-8" style="flex-wrap:wrap"><select id="knPfFilter"><option value="all">Tất cả</option><option value="complete">Đã hoàn thành</option><option value="incomplete">Chưa hoàn thành</option></select><button class="btn btn-outline btn-sm" id="knPfRefresh">🔄 Làm mới danh sách</button><button class="btn btn-outline btn-sm" id="knPfExport">XUẤT DANH SÁCH NGƯỜI THAM GIA</button></div>
       <div class="table-wrap mt-8"><table><thead><tr>${activeFields.map(f=>`<th>${esc(KN_PARTICIPANT_FIELD_LABELS[f])}</th>`).join("")}<th>Tiến độ</th><th>Trạng thái</th></tr></thead><tbody>
         ${filtered.length?filtered.map(r=>`<tr>${activeFields.map(f=>`<td>${esc(r[f]||"—")}</td>`).join("")}<td>${r._count}/${minPer}</td><td>${r._complete?"Hoàn thành":"Chưa hoàn thành"}</td></tr>`).join(""):`<tr><td colspan="${activeFields.length+2}">Không có người tham gia phù hợp.</td></tr>`}
       </tbody></table></div>`;
+  }
+  // GATE 4C-A: Compact mount — identical DOM target (#knPfWrap) and identical event-wiring
+  // to the previous knowledgeRenderParticipants(), now built from the shared markup builder.
+  function knowledgeRenderParticipantsCompact(){
+    const wrap=$("#knPfWrap");if(!wrap||session.collectParticipantProfile!==true||participants===null)return;
+    const filter=$("#knPfFilter")?.value||"all";
+    wrap.innerHTML=knowledgeParticipantsMarkup(participants,participantCounts,session,filter);
     $("#knPfFilter").value=filter;
-    $("#knPfFilter").onchange=knowledgeRenderParticipants;
+    $("#knPfFilter").onchange=knowledgeRenderParticipantsCompact;
     $("#knPfRefresh").onclick=()=>{if(!participantsLoading)loadParticipants();};
     $("#knPfExport").onclick=knowledgeExportParticipants;
   }

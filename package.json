@@ -37,7 +37,8 @@
     "test:gate2b-rt-fix1:pure": "node --test test/gate2b-rt-fix1/comparator.test.mjs test/gate2b-rt-fix1/conflict-guard.test.mjs",
     "test:gate2b-rt-fix1": "npm run test:gate2b-rt-fix1:pure && node test/gate2b-rt-fix1/run-emulator-tests.mjs",
     "test:gate3c-fix1": "node test/gate3c-fix1/run-emulator-tests.mjs",
-    "test:gate4c-a": "node --test test/gate4c-a/participant-renderer.test.mjs"
+    "test:gate4c-a": "node --test test/gate4c-a/participant-renderer.test.mjs",
+    "test:gate4c-b": "node --test test/gate4c-b/compact-mode.test.mjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^3.0.4"

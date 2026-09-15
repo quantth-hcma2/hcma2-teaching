@@ -6,7 +6,8 @@
 //
 // Reuse, never duplicate: this module calls validateRichTextV1 / normalizeRichTextV1 /
 // richTextToPlainText from rich-text-contract.mjs for every piece of contract logic. It never
-// re-implements limit checks, token allowlists, or Unicode length policy itself. It calls
+// re-implements validation checks or token allowlists. Export partitions long spans using the
+// contract's run limit and Unicode code-point policy before final validation. It calls
 // FONT_CSS_MAP / SIZE_CSS_MAP / COLOR_CSS_MAP from rich-text-renderer.mjs for the editor's visual
 // styling, so the editing surface renders identically to the safe read-only renderer.
 //
@@ -29,7 +30,7 @@
 // text still passes through the exact same normalize + validate + fail-closed pipeline as anything
 // else, so a hostile/oversized result still fails closed rather than being silently accepted.
 
-import { validateRichTextV1, normalizeRichTextV1, DEFAULT_SIZE } from "./rich-text-contract.mjs";
+import { validateRichTextV1, normalizeRichTextV1, DEFAULT_SIZE, MAX_RUN_TEXT_LENGTH } from "./rich-text-contract.mjs";
 import { FONT_CSS_MAP, SIZE_CSS_MAP, COLOR_CSS_MAP } from "./rich-text-renderer.mjs";
 
 export const DATA_BLOCK_ATTR = "data-rt-block";
@@ -108,11 +109,9 @@ export function createEmptyDocumentDom(doc) {
 
 // Legacy plain-text loader: splits on any line-ending variant, one paragraph per line, mirroring
 // richTextToPlainText's own "\n"-joins-paragraphs policy in reverse. A blank line becomes an empty
-// paragraph (runs: []), exactly like any other empty paragraph. NOTE (scope): a legacy string with
-// more lines/characters than the V1 contract's limits (MAX_BLOCKS / MAX_RUN_TEXT_LENGTH / etc.) can
-// load into a DOM that later fails validateRichTextV1 on first export — this candidate gate does
-// not implement a legacy-migration truncation/splitting policy, since the editor is not yet wired
-// to any real legacy field. That policy question is left to GATE 2B-RT-INTEGRATION.
+// paragraph (runs: []), exactly like any other empty paragraph. Export partitions long lines
+// into bounded runs without truncating or migrating stored data. Legacy content exceeding the
+// document/block limits still loads intact but fails validation on export.
 export function legacyPlainTextToDom(doc, legacyText) {
   const frag = doc.createDocumentFragment();
   const lines = String(legacyText ?? "").split(/\r\n|\r|\n/);
@@ -240,6 +239,22 @@ export function serializeToRichText(rootEl) {
   let normalized;
   try {
     normalized = normalizeRichTextV1(intermediate);
+    // Editing merges same-format spans and paste/legacy loading can create long spans.
+    // A DOM span is not a storage run: partition its text without changing paragraphs,
+    // formatting, or the live DOM/caret. Array.from preserves whole Unicode code points.
+    // Validate AFTER partitioning so run-count, total-text and byte limits still fail
+    // closed, with no truncation or weakening of the stored RichText contract.
+    for (const block of normalized.blocks) {
+      block.runs = block.runs.flatMap(run => {
+        const points = Array.from(run.text);
+        if (points.length <= MAX_RUN_TEXT_LENGTH) return [run];
+        const chunks = [];
+        for (let start = 0; start < points.length; start += MAX_RUN_TEXT_LENGTH) {
+          chunks.push({ ...run, text: points.slice(start, start + MAX_RUN_TEXT_LENGTH).join("") });
+        }
+        return chunks;
+      });
+    }
   } catch (error) {
     return { ok: false, reason: "internal_error", error };
   }

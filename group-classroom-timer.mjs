@@ -57,17 +57,45 @@ export function createExpirySound(makeContext = () => {
       if (!value || disposed) return;
       try { context ||= makeContext(); await context?.resume(); } catch { /* visual timer remains usable */ }
     },
-    play() {
+    play(kind = 'bell') {
       if (!enabled || disposed || context?.state !== 'running') return;
       try {
         const oscillator = context.createOscillator(), gain = context.createGain();
         oscillator.connect(gain); gain.connect(context.destination);
-        oscillator.frequency.value = 880;
+        const duration = kind === 'beep' ? 0.12 : 1.4;
+        oscillator.frequency.value = kind === 'beep' ? 880 : 660;
+        oscillator.type = kind === 'beep' ? 'sine' : 'triangle';
         gain.gain.setValueAtTime(0.12, context.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.35);
-        oscillator.start(); oscillator.stop(context.currentTime + 0.36);
+        gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + duration);
+        oscillator.start(); oscillator.stop(context.currentTime + duration + 0.01);
       } catch { /* unsupported/blocked audio must never break timer */ }
     },
     dispose() { disposed = true; try { context?.close()?.catch?.(() => {}); } catch {} }
+  };
+}
+
+// One observer belongs to the classroom controller, never to individual clocks.
+// Observe only the current threshold: missed seconds are never queued or replayed.
+export function createTimerAudioObserver(sound) {
+  let previous, lowest = Infinity, bell = false;
+  return (activity, remaining, now, visible = true) => {
+    const running = !!activity.startedAt;
+    const run = activity.startedAt?.toMillis ? activity.startedAt.toMillis()
+      : running ? new Date(activity.startedAt).getTime() : null;
+    const changed = previous && (run !== previous.run || activity.durationSec !== previous.duration);
+    // A positive timer following expiry/reset is a new sequence. Pause/resume
+    // and +/- adjustments during an active sequence retain consumed thresholds.
+    if (previous && previous.remaining <= 0 && remaining > 0 && changed) { lowest = Infinity; bell = false; }
+    const fresh = previous && now >= previous.now && now - previous.now <= 1500;
+    const descending = previous && remaining < previous.remaining;
+    if (running && visible && fresh && !changed && previous.running && descending) {
+      if (remaining > 0 && remaining <= 10 && remaining < lowest) {
+        lowest = remaining; sound.play('beep');
+      } else if (remaining === 0 && !bell) { bell = true; sound.play('bell'); }
+    }
+    // Consume skipped/hidden thresholds as well, preventing replay after adjustments.
+    if (running && remaining > 0 && remaining <= 10) lowest = Math.min(lowest, remaining);
+    if (remaining === 0) bell = true;
+    previous = { run, duration: activity.durationSec, remaining, running, now };
   };
 }

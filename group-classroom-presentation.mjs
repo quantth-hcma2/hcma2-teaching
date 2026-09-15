@@ -1,9 +1,10 @@
 import { renderRichText } from './rich-text-renderer.mjs';
-import { timerSeconds, minutesToSeconds, createExpirySound } from './group-classroom-timer.mjs';
+import { timerSeconds, minutesToSeconds, createExpirySound, createTimerAudioObserver } from './group-classroom-timer.mjs';
 
 export function mountClassroomPresentation({ root, initial, write, onError, now = Date.now, sound = createExpirySound() }) {
   const doc = root.ownerDocument;
-  let current = initial, busy = false, disposed = false, previousRun, previousRemaining;
+  const observeAudio = createTimerAudioObserver(sound);
+  let current = initial, busy = false, disposed = false;
   const host = doc.createElement('section');
   host.className = 'classroom-tools card mt-14';
   host.innerHTML = `<label>Thời gian (phút) <input data-minutes type="number" min="0.02" max="1440" step="any" aria-label="Thời gian (phút)"></label>
@@ -39,16 +40,16 @@ export function mountClassroomPresentation({ root, initial, write, onError, now 
     finally { busy = false; if (!disposed) tick(); }
   };
   function tick() {
-    const remaining = timerSeconds(current, now());
+    if (disposed) return;
+    const time = now();
+    const remaining = timerSeconds(current, time);
     const done = remaining <= 0;
     const text = `${String(Math.floor(remaining / 60)).padStart(2, '0')}:${String(remaining % 60).padStart(2, '0')}`;
     dialog.querySelector('[data-clock]').textContent = text;
     dialog.classList.toggle('expired', done);
     dialog.querySelector('[data-expiry]').textContent = done ? 'HẾT GIỜ' : current.startedAt ? 'Đang chạy' : 'Sẵn sàng / Tạm dừng';
     host.querySelector('[data-status]').textContent = busy ? 'Đang lưu…' : done ? 'HẾT GIỜ — có thể đặt thời gian mới' : current.startedAt ? 'Đang chạy' : 'Sẵn sàng / Tạm dừng';
-    const run = current.startedAt?.toMillis ? current.startedAt.toMillis() : current.startedAt ? new Date(current.startedAt).getTime() : null;
-    if (run != null && run === previousRun && previousRemaining > 0 && done) sound.play();
-    previousRun = run; previousRemaining = remaining;
+    observeAudio(current, remaining, time, !doc.hidden);
     for (const button of host.querySelectorAll('[data-action]')) {
       const action = button.dataset.action;
       button.disabled = busy || (action === 'pause' && (!current.startedAt || done)) || (action === 'resume' && (!!current.startedAt || done));

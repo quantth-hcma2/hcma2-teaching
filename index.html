@@ -5091,6 +5091,12 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
   // submissions HIỆN CÓ (không đọc thêm PII) để tiến độ luôn mới mà không cần tải lại hồ sơ.
   let participants=null,participantsLoading=false;
   const participantCounts=new Map();
+  // GATE 4C-C: shared participant-panel UI state foundation for later gates (Expanded=4C-D,
+  // Fullscreen=4C-E, Search=4C-F). Only 'compact'/false/'all'/'' are ever active here — this
+  // gate only moves the existing class-filter's source of truth into this object so re-renders
+  // (filter change, Refresh, submissions-driven auto re-render) all read the same persisted
+  // selection instead of re-deriving it from the DOM each time.
+  let knPfViewState={mode:'compact',fullscreen:false,filter:'all',search:''};
   const openerUid=STATE.user.uid;
   c.innerHTML=`<button class="btn btn-ghost btn-sm" id="knBack">← Danh sách</button><div id="knDash" class="mt-14"><div class="center-screen"><span class="spinner"></span></div></div>`;
   $("#knBack").onclick=()=>{window.location.hash=""; if(isAdminView){STATE.adminNav="knowledge";adminRoute("knowledge");}else{STATE.teacherNav="knowledge";teacherRoute();}};
@@ -5251,12 +5257,14 @@ knowledgeRenderAi();
   }
   // GATE 4C-A: Compact mount — identical DOM target (#knPfWrap) and identical event-wiring
   // to the previous knowledgeRenderParticipants(), now built from the shared markup builder.
+  // GATE 4C-C: filter is now read from/written to knPfViewState.filter instead of the DOM,
+  // so every re-render path (filter change, Refresh, submissions-driven auto re-render) shows
+  // the same persisted selection — filtering semantics themselves are unchanged.
   function knowledgeRenderParticipantsCompact(){
     const wrap=$("#knPfWrap");if(!wrap||session.collectParticipantProfile!==true||participants===null)return;
-    const filter=$("#knPfFilter")?.value||"all";
-    wrap.innerHTML=knowledgeParticipantsMarkup(participants,participantCounts,session,filter);
-    $("#knPfFilter").value=filter;
-    $("#knPfFilter").onchange=knowledgeRenderParticipantsCompact;
+    wrap.innerHTML=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.filter);
+    $("#knPfFilter").value=knPfViewState.filter;
+    $("#knPfFilter").onchange=(e)=>{knPfViewState.filter=e.target.value;knowledgeRenderParticipantsCompact();};
     $("#knPfRefresh").onclick=()=>{if(!participantsLoading)loadParticipants();};
     $("#knPfExport").onclick=knowledgeExportParticipants;
   }

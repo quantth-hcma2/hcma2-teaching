@@ -64,7 +64,11 @@ test("GATE 4C-A source shape: no future Item 4 controls exist yet (no Expanded/F
   assert.doesNotMatch(source, /MỞ RỘNG/);
   assert.doesNotMatch(source, /TOÀN MÀN HÌNH/);
   assert.doesNotMatch(source, /is-fullscreen/);
-  assert.doesNotMatch(source, /knPfViewState/);
+  // knPfViewState was explicitly out of scope for 4C-A itself (still true — this gate's own
+  // diff never introduced it), but GATE 4C-C later added it as its own authorized shared UI
+  // state foundation, so its absence is no longer part of "future controls not yet built" —
+  // see test/gate4c-c/view-state.test.mjs for the up-to-date guard on what's still not built
+  // (Expanded/Fullscreen/Search), which this test's remaining assertions mirror.
   assert.doesNotMatch(source, /knPfSearch/);
 });
 

@@ -43,9 +43,14 @@ test("GATE 4C-B: knowledgeParticipantsMarkup() unchanged since 4C-A checkpoint (
   assert.equal(markupSrc, checkpointMarkup);
 });
 
-test("GATE 4C-B: knowledgeRenderParticipantsCompact() wiring unchanged since 4C-A checkpoint (Refresh/Export/filter handlers frozen)", () => {
-  const checkpointCompact = sliceBetween(checkpointSource, "function knowledgeRenderParticipantsCompact(", "\n  }", "checkpoint compact fn") + "\n  }";
-  assert.equal(compactFnSrc, checkpointCompact);
+test("GATE 4C-B: knowledgeRenderParticipantsCompact()'s Refresh/Export wiring unchanged since 4C-A checkpoint", () => {
+  // Narrowed at GATE 4C-C: that gate's own explicitly authorized scope was to move this
+  // function's filter-handling lines into knPfViewState (see test/gate4c-c/view-state.test.mjs
+  // for the up-to-date guard on that), so whole-function byte-identity against the 4C-A
+  // checkpoint is no longer the correct invariant here. What 4C-B itself actually touched
+  // (and must stay true) is that it never touched Refresh/Export — verify only that.
+  assert.match(compactFnSrc, /\$\("#knPfRefresh"\)\.onclick=\(\)=>\{if\(!participantsLoading\)loadParticipants\(\);\};/);
+  assert.match(compactFnSrc, /\$\("#knPfExport"\)\.onclick=knowledgeExportParticipants;/);
 });
 
 // ===================================================================================
@@ -116,10 +121,11 @@ test("GATE 4C-B: empty state (0 participants) still renders correctly through th
 // 12/13/14/15 — no future Item 4 controls exist yet
 // ===================================================================================
 
-test("GATE 4C-B: no Expanded, Fullscreen, Search, or knPfViewState exist yet", () => {
+test("GATE 4C-B: no Expanded, Fullscreen, or Search exist yet", () => {
   assert.doesNotMatch(source, /MỞ RỘNG/);
   assert.doesNotMatch(source, /TOÀN MÀN HÌNH/);
   assert.doesNotMatch(source, /is-fullscreen/);
-  assert.doesNotMatch(source, /knPfViewState/);
+  // knPfViewState: out of scope for 4C-B itself (still true), but GATE 4C-C later added it as
+  // its own authorized shared UI state foundation — see test/gate4c-c/view-state.test.mjs.
   assert.doesNotMatch(source, /knPfSearch/);
 });

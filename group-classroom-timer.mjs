@@ -45,57 +45,81 @@ export async function writeTimer({ db, ref, runTransaction, serverTimestamp }, a
   });
 }
 
-// Audio is unlocked only by an explicit user gesture. All failures are contained.
-export function createExpirySound(makeContext = () => {
-  const Audio = globalThis.AudioContext || globalThis.webkitAudioContext;
-  return Audio ? new Audio() : null;
-}) {
-  let context, enabled = false, disposed = false;
+// Exact user assets; this controller is owned by the classroom, never a clock.
+export const TIMER_AUDIO_ASSETS = Object.freeze({
+  countdown: new URL('./assets/audio/countdown-10s.mp3', import.meta.url).href,
+  alarm: new URL('./assets/audio/timer-expired-alarm.mp3', import.meta.url).href
+});
+export function createExpirySound(makeAudio = url => new globalThis.Audio(url)) {
+  let enabled = false, disposed = false, generation = 0;
+  const media = {}, attempted = new Set();
+  function stop(kind) { try { media[kind]?.pause(); } catch {} }
+  function halt() { stop('countdown'); stop('alarm'); }
+  function play(kind, offset = 0) {
+    if (!enabled || disposed) return;
+    try {
+      const audio = media[kind];
+      if (!audio) return;
+      audio.currentTime = Math.max(0, offset);
+      Promise.resolve(audio.play()).catch(() => {});
+    } catch { /* blocked playback or seek cannot interrupt the timer */ }
+  }
   return {
     async enable(value) {
-      enabled = value;
+      const token = ++generation;
+      enabled = false; halt(); attempted.clear();
       if (!value || disposed) return;
-      try { context ||= makeContext(); await context?.resume(); } catch { /* visual timer remains usable */ }
+      // Unlock both elements in the checkbox's user gesture, silently.
+      await Promise.all(Object.entries(TIMER_AUDIO_ASSETS).map(async ([kind, url]) => {
+        try {
+          const audio = media[kind] ||= makeAudio(url);
+          audio.preload = 'auto'; audio.loop = false; audio.muted = true;
+          await audio.play();
+        } catch {} finally {
+          if (token === generation) { stop(kind); if (media[kind]) media[kind].muted = false; }
+        }
+      }));
+      if (token !== generation || disposed) return;
+      enabled = true;
     },
-    play(kind = 'bell') {
-      if (!enabled || disposed || context?.state !== 'running') return;
-      try {
-        const oscillator = context.createOscillator(), gain = context.createGain();
-        oscillator.connect(gain); gain.connect(context.destination);
-        const duration = kind === 'beep' ? 0.12 : 1.4;
-        oscillator.frequency.value = kind === 'beep' ? 880 : 660;
-        oscillator.type = kind === 'beep' ? 'sine' : 'triangle';
-        gain.gain.setValueAtTime(0.12, context.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + duration);
-        oscillator.start(); oscillator.stop(context.currentTime + duration + 0.01);
-      } catch { /* unsupported/blocked audio must never break timer */ }
+    countdown(offset) {
+      if (!enabled || disposed) return;
+      const audio = media.countdown;
+      if (!attempted.has('countdown')) { attempted.add('countdown'); play('countdown', offset); }
+      else if (audio && !audio.paused && Math.abs(audio.currentTime - offset) > 0.75) {
+        try { audio.currentTime = offset; } catch {}
+      }
     },
-    dispose() { disposed = true; try { context?.close()?.catch?.(() => {}); } catch {} }
+    pause() { stop('countdown'); attempted.delete('countdown'); },
+    alarm() { this.pause(); if (!attempted.has('alarm')) { attempted.add('alarm'); play('alarm'); } },
+    reset() { halt(); attempted.clear(); },
+    dispose() {
+      disposed = true; enabled = false; generation++; halt();
+      for (const audio of Object.values(media)) { try { audio.removeAttribute('src'); audio.load(); } catch {} }
+    }
   };
 }
 
-// One observer belongs to the classroom controller, never to individual clocks.
-// Observe only the current threshold: missed seconds are never queued or replayed.
 export function createTimerAudioObserver(sound) {
-  let previous, lowest = Infinity, bell = false;
+  let previous, expired = false;
   return (activity, remaining, now, visible = true) => {
     const running = !!activity.startedAt;
     const run = activity.startedAt?.toMillis ? activity.startedAt.toMillis()
       : running ? new Date(activity.startedAt).getTime() : null;
     const changed = previous && (run !== previous.run || activity.durationSec !== previous.duration);
-    // A positive timer following expiry/reset is a new sequence. Pause/resume
-    // and +/- adjustments during an active sequence retain consumed thresholds.
-    if (previous && previous.remaining <= 0 && remaining > 0 && changed) { lowest = Infinity; bell = false; }
+    if (changed && remaining > 0) { expired = false; sound.reset(); }
     const fresh = previous && now >= previous.now && now - previous.now <= 1500;
-    const descending = previous && remaining < previous.remaining;
-    if (running && visible && fresh && !changed && previous.running && descending) {
-      if (remaining > 0 && remaining <= 10 && remaining < lowest) {
-        lowest = remaining; sound.play('beep');
-      } else if (remaining === 0 && !bell) { bell = true; sound.play('bell'); }
+    if (!running || !visible || remaining > 10 || remaining <= 0 || expired) sound.pause();
+    else {
+      // Use the same rounding boundary as the visual clock: 10 appears at 10.5s.
+      const exact = (run + activity.durationSec * 1000 - now) / 1000;
+      sound.countdown(Math.min(9.999, Math.max(0, 10.5 - exact)));
     }
-    // Consume skipped/hidden thresholds as well, preventing replay after adjustments.
-    if (running && remaining > 0 && remaining <= 10) lowest = Math.min(lowest, remaining);
-    if (remaining === 0) bell = true;
-    previous = { run, duration: activity.durationSec, remaining, running, now };
+    if (remaining <= 0) {
+      if (!expired && previous?.running && previous.remaining > 0 && running &&
+          visible && fresh && !changed) sound.alarm();
+      expired = true;
+    }
+    previous = {run, duration: activity.durationSec, remaining, running, now};
   };
 }

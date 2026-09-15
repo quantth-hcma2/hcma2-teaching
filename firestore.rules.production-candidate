@@ -914,6 +914,21 @@ service cloud.firestore {
         (!('instructionsRich' in request.resource.data) || isRichTextV1Boundary(request.resource.data.instructionsRich));
 
       // GATE 1B.2B: contract activation — see sessions family above for full reasoning.
+      // CLASSROOM PRESENTATION V1: duration updates are legacy timer-only writes.
+      // No status/config/content/membership changes may accompany them.
+      allow update: if isOwnerOrAdmin(resource.data.ownerId) &&
+        !('configRevision' in resource.data) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'durationSec','startedAt','pausedRemainingSec','updatedAt'
+        ]) &&
+        request.resource.data.durationSec is int &&
+        request.resource.data.durationSec >= 0 && request.resource.data.durationSec <= 86400 &&
+        (request.resource.data.startedAt == null || request.resource.data.startedAt == request.time) &&
+        (request.resource.data.pausedRemainingSec == null ||
+          (request.resource.data.startedAt == null && request.resource.data.pausedRemainingSec is int &&
+           request.resource.data.pausedRemainingSec >= 0 && request.resource.data.pausedRemainingSec <= 86400)) &&
+        request.resource.data.updatedAt == request.time;
+
       // groupActivities has no trash stage, so lifecycle-safety here is CLOSED-only, no
       // deletedAt check needed (the field doesn't exist for this family).
       allow update: if (

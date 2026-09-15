@@ -1,0 +1,15 @@
+.classroom-tools label{display:inline-flex;align-items:center;gap:8px;margin:6px 12px 6px 0}
+.classroom-tools input[type=number]{width:110px}
+.classroom-tools input[type=checkbox]{width:auto}
+.classroom-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+#gCommonExpand{float:right;margin-left:12px}
+.classroom-presentation{box-sizing:border-box;width:96vw;max-width:1600px;height:94dvh;max-height:96dvh;padding:24px;border:2px solid #d9a441;border-radius:16px;color:#0f2942;background:#fff;overflow:auto}
+.classroom-presentation::backdrop{background:#081526e8}
+.classroom-presentation header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.classroom-presentation h2{margin:0}
+.classroom-clock{text-align:center;font-size:clamp(48px,9vw,110px);font-weight:900;font-variant-numeric:tabular-nums;line-height:1.2}
+.classroom-presentation [data-expiry]{text-align:center;font-size:24px;font-weight:bold;margin-bottom:20px}
+.classroom-presentation.expired{border:6px solid #b91c1c}
+.classroom-presentation.expired .classroom-clock,.classroom-presentation.expired [data-expiry]{color:#b91c1c}
+.classroom-content{overflow-wrap:anywhere;line-height:1.6}
+@media(max-width:600px){.classroom-presentation{padding:14px;width:98vw;height:96dvh}.classroom-presentation h2{font-size:20px}}

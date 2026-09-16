@@ -223,8 +223,13 @@ test("GATE 4C-C.2: knowledgeExportParticipants() unchanged since 4C-C; loadParti
 // 25 — 4C-B Compact CSS (scroll cap + sticky header) still intact
 // ===================================================================================
 
-test("GATE 4C-C.2: 4C-B Compact CSS (scroll cap + sticky header) preserved byte-identical", () => {
-  assert.equal(cssBlock, sliceBetween(checkpointSource, ":root{", "\n/* Badges */", "checkpoint css block"));
+test("GATE 4C-C.2: 4C-B Compact CSS (scroll cap + sticky header) preserved byte-identical — narrowed by the GATE 4C-D.2 SMOKE FIX to the .kn-pf-compact sub-block specifically, since the wider :root{}...Badges CSS block now also legitimately contains a separately-scoped .kn-pf-expanded rule (see test/gate4c-b/compact-mode.test.mjs for the up-to-date guard that no BARE/unscoped rule exists in that wider block)", () => {
+  const compactCssStart = ".kn-pf-compact .table-wrap{max-height:320px; overflow-y:auto;}";
+  const compactCssEnd = ".kn-pf-compact .table-wrap thead th{position:sticky; top:0; background:var(--card); z-index:1;}";
+  const compactCssSrc = sliceBetween(cssBlock, compactCssStart, compactCssEnd, "compact css sub-block") + compactCssEnd;
+  const checkpointCssBlock = sliceBetween(checkpointSource, ":root{", "\n/* Badges */", "checkpoint css block");
+  const checkpointCompactCssSrc = sliceBetween(checkpointCssBlock, compactCssStart, compactCssEnd, "checkpoint compact css sub-block") + compactCssEnd;
+  assert.equal(compactCssSrc, checkpointCompactCssSrc);
 });
 
 // ===================================================================================

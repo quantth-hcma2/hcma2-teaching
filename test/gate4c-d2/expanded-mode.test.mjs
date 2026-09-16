@@ -157,8 +157,8 @@ test("GATE 4C-D2: neither filter dropdown's onchange, nor Refresh, nor the live 
 // 18/19 — every modal close/replacement path resets mode to 'compact'
 // ===================================================================================
 
-test("GATE 4C-D2: opening Expanded registers modalCloseCleanup that resets mode to 'compact' (covers backdrop close AND any modal replacement, both of which already call runModalCloseCleanup() inside openModal()/closeModal())", () => {
-  assert.match(expandedFnSrc, /modalCloseCleanup=\(\)=>\{knPfViewState\.mode='compact';\};/);
+test("GATE 4C-D2: opening Expanded registers modalCloseCleanup that resets mode to 'compact' AND rerenders Compact from current in-memory data (covers backdrop close AND any modal replacement, both of which already call runModalCloseCleanup() inside openModal()/closeModal()) — extended by the GATE 4C-D.2 SMOKE FIX so closing Expanded never leaves Compact stuck on a stale Refresh-in-flight spinner", () => {
+  assert.match(expandedFnSrc, /modalCloseCleanup=\(\)=>\{knPfViewState\.mode='compact';knowledgeRenderParticipantsCompact\(\);\};/);
 });
 
 test("GATE 4C-D2: Expanded's own close button calls the existing closeModal() only — no second close implementation", () => {

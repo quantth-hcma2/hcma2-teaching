@@ -90,20 +90,22 @@ test("GATE 4C-B: base .table-wrap horizontal-scroll rule is untouched (requireme
   assert.match(cssBlock, /\.table-wrap\{overflow-x:auto;\}/);
 });
 
-test("GATE 4C-B: vertical scroll cap is scoped to .kn-pf-compact only (requirement 4/7)", () => {
+test("GATE 4C-B: vertical scroll cap is scoped to .kn-pf-compact only (requirement 4/7) — GATE 4C-D.2 SMOKE FIX legitimately added a second, equally-scoped .kn-pf-expanded rule for Expanded's own table area; this still guards against any BARE, unscoped .table-wrap rule", () => {
   assert.match(cssBlock, /\.kn-pf-compact \.table-wrap\{max-height:320px; overflow-y:auto;\}/);
-  // must NOT exist as a bare, unscoped rule on .table-wrap itself
-  assert.doesNotMatch(cssBlock, /(?<!kn-pf-compact )\.table-wrap\{[^}]*max-height/);
+  // must NOT exist as a bare, unscoped rule on .table-wrap itself — .kn-pf-compact and
+  // .kn-pf-expanded are the only two approved scopes (see test/gate4c-d2/expanded-mode.test.mjs
+  // for the up-to-date, in-depth guard on the Expanded-specific rule).
+  assert.doesNotMatch(cssBlock, /(?<!kn-pf-compact |kn-pf-expanded )\.table-wrap\{[^}]*max-height/);
 });
 
-test("GATE 4C-B: sticky header is scoped to .kn-pf-compact only (requirement 5/9/10)", () => {
+test("GATE 4C-B: sticky header is scoped to .kn-pf-compact only (requirement 5/9/10) — GATE 4C-D.2 SMOKE FIX legitimately added a second, equally-scoped .kn-pf-expanded sticky header rule; this still guards against any BARE, unscoped thead sticky rule", () => {
   assert.match(cssBlock, /\.kn-pf-compact \.table-wrap thead th\{position:sticky; top:0;/);
-  // the ONLY other position:sticky in this CSS block must be the pre-existing, unrelated
-  // app-shell top bar (frozen, Item-unrelated) — never a bare `thead th{position:sticky`
-  // or any other unscoped table-header rule.
-  assert.doesNotMatch(cssBlock, /(?<!kn-pf-compact \.table-wrap )thead th\{position:sticky/);
+  // the ONLY other position:sticky rules in this CSS block must be the pre-existing, unrelated
+  // app-shell top bar (frozen, Item-unrelated) and the GATE 4C-D.2 SMOKE FIX .kn-pf-expanded
+  // table header — never a bare `thead th{position:sticky` or any other unscoped rule.
+  assert.doesNotMatch(cssBlock, /(?<!kn-pf-compact \.table-wrap |kn-pf-expanded \.table-wrap )thead th\{position:sticky/);
   const stickyOccurrences = (cssBlock.match(/position:\s*sticky/g) || []).length;
-  assert.equal(stickyOccurrences, 2, "expected exactly 2 position:sticky rules: the pre-existing app-shell bar + the new kn-pf-compact header");
+  assert.equal(stickyOccurrences, 3, "expected exactly 3 position:sticky rules: the pre-existing app-shell bar + kn-pf-compact header + the GATE 4C-D.2 SMOKE FIX kn-pf-expanded header");
 });
 
 // ===================================================================================

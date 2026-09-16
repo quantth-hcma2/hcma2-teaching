@@ -133,6 +133,14 @@ tr:hover td{background:#fafbfc;}
 .kn-pf-compact .table-wrap{max-height:320px; overflow-y:auto;}
 .kn-pf-compact .table-wrap thead th{position:sticky; top:0; background:var(--card); z-index:1;}
 
+/* GATE 4C-D.2 SMOKE FIX: Expanded participant table only — same scroll-cap + sticky-header
+   pattern as .kn-pf-compact above, scoped to .kn-pf-expanded (the wrapper added only inside
+   knowledgeRenderParticipantsExpanded()'s openModal() call) so only the table area scrolls
+   inside Expanded while the summary counters and filter/Refresh/CSV row above it stay visible.
+   Does not touch .modal/.modal-lg, which are shared by 9 other unrelated large-modal features. */
+.kn-pf-expanded .table-wrap{max-height:min(50vh,440px); overflow-y:auto;}
+.kn-pf-expanded .table-wrap thead th{position:sticky; top:0; background:var(--card); z-index:1;}
+
 /* Badges */
 .badge{display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700;}
 .badge-green{background:#dcfce7; color:#166534;}
@@ -5314,9 +5322,14 @@ knowledgeRenderAi();
   function knowledgeRenderParticipantsExpanded(){
     if(session.collectParticipantProfile!==true||participants===null)return;
     const tableHtml=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter);
-    const host=openModal(`<div class="section-title"><h3>👥 Người tham gia</h3><button class="btn btn-ghost btn-sm" id="knPfExpandClose">✕ Đóng</button></div>${tableHtml}`,true);
+    const host=openModal(`<div class="section-title"><h3>👥 Người tham gia</h3><button class="btn btn-ghost btn-sm" id="knPfExpandClose">✕ Đóng</button></div><div class="kn-pf-expanded">${tableHtml}</div>`,true);
     knPfViewState.mode='expanded';
-    modalCloseCleanup=()=>{knPfViewState.mode='compact';};
+    // GATE 4C-D.2 SMOKE FIX: closing Expanded must leave Compact showing current data, not
+    // whatever loading state a prior Refresh left it in (the Refresh fetch's spinner write
+    // targets #knPfWrap globally, regardless of which mode was active when it fired).
+    // Rerendering here is a pure DOM operation against already-in-memory
+    // participants/participantCounts — no Firestore read.
+    modalCloseCleanup=()=>{knPfViewState.mode='compact';knowledgeRenderParticipantsCompact();};
     const modalEl=host.querySelector('.modal');
     if(!modalEl)return;
     const closeBtn=modalEl.querySelector('#knPfExpandClose');

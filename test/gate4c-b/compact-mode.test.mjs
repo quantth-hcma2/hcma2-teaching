@@ -38,10 +38,13 @@ const cssBlock = sliceBetween(source, ":root{", "\n/* Badges */", "root CSS bloc
 // (columns, filtering, progress/status, Refresh wiring) must be byte-identical to 4C-A
 // ===================================================================================
 
-test("GATE 4C-B: knowledgeParticipantsMarkup() unchanged since 4C-A checkpoint (columns/filter/progress semantics frozen)", () => {
-  const checkpointMarkup = sliceBetween(checkpointSource, "function knowledgeParticipantsMarkup(", "\n  }\n  // GATE 4C-A: Compact mount", "checkpoint markup") + "\n  }";
-  assert.equal(markupSrc, checkpointMarkup);
-});
+// NOTE: the "knowledgeParticipantsMarkup() unchanged since 4C-A" byte-identity test that
+// originally stood here is retired as of GATE 4C-C.2, which explicitly and correctly changed
+// knowledgeParticipantsMarkup()'s signature and filtering body (added classFilter as a second,
+// AND-combined dimension) — 4C-B's own diff never touched this function (only CSS + one class
+// attribute), so there is no narrower true statement left to make here. See
+// test/gate4c-c2/filter-contract.test.mjs for the up-to-date, in-depth coverage of this
+// function's actual current behavior.
 
 test("GATE 4C-B: knowledgeRenderParticipantsCompact()'s Refresh/Export wiring unchanged since 4C-A checkpoint", () => {
   // Narrowed at GATE 4C-C: that gate's own explicitly authorized scope was to move this

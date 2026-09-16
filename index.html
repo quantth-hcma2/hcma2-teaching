@@ -5092,11 +5092,12 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
   let participants=null,participantsLoading=false;
   const participantCounts=new Map();
   // GATE 4C-C: shared participant-panel UI state foundation for later gates (Expanded=4C-D,
-  // Fullscreen=4C-E, Search=4C-F). Only 'compact'/false/'all'/'' are ever active here — this
-  // gate only moves the existing class-filter's source of truth into this object so re-renders
-  // (filter change, Refresh, submissions-driven auto re-render) all read the same persisted
-  // selection instead of re-deriving it from the DOM each time.
-  let knPfViewState={mode:'compact',fullscreen:false,filter:'all',search:''};
+  // Fullscreen=4C-E, Search=4C-F).
+  // GATE 4C-C.2: split the single `filter` field into statusFilter (the existing #knPfFilter
+  // completion-status dropdown: all/complete/incomplete) and classFilter (the new, separate
+  // className dropdown below) — these are two independent, AND-combined filter dimensions.
+  // search stays '' with no UI until Gate 4C-F.
+  let knPfViewState={mode:'compact',fullscreen:false,statusFilter:'all',classFilter:'all',search:''};
   const openerUid=STATE.user.uid;
   c.innerHTML=`<button class="btn btn-ghost btn-sm" id="knBack">← Danh sách</button><div id="knDash" class="mt-14"><div class="center-screen"><span class="spinner"></span></div></div>`;
   $("#knBack").onclick=()=>{window.location.hash=""; if(isAdminView){STATE.adminNav="knowledge";adminRoute("knowledge");}else{STATE.teacherNav="knowledge";teacherRoute();}};
@@ -5238,7 +5239,13 @@ knowledgeRenderAi();
   // (fields, ordering, filter semantics, empty state, orphan warning) is byte-for-byte the
   // same as before this refactor — only the DOM-mount and event-wiring responsibility moved
   // into knowledgeRenderParticipantsCompact() below.
-  function knowledgeParticipantsMarkup(participantsArg,countsArg,sessionArg,filter){
+  // GATE 4C-C.2: now takes statusFilter and classFilter as two independent, AND-combined
+  // dimensions (search stays out of scope until 4C-F). classFilter's option list is derived
+  // from sessionArg.classOptions — already-loaded session data, no new read. The class
+  // dropdown is omitted entirely when there is no meaningful configured class list (className
+  // field not enabled for this session, or classOptions absent/empty) rather than shown
+  // disabled or with a misleading empty option list.
+  function knowledgeParticipantsMarkup(participantsArg,countsArg,sessionArg,statusFilter,classFilter){
     const minPer=(Number.isInteger(sessionArg.minimumPerParticipant)&&sessionArg.minimumPerParticipant>=1)?sessionArg.minimumPerParticipant:3;
     const pf=sessionArg.participantFields||{};
     const activeFields=Object.keys(KN_PARTICIPANT_FIELD_LABELS).filter(f=>pf[f]&&pf[f].enabled);
@@ -5247,24 +5254,34 @@ knowledgeRenderAi();
     // GATE 3D (mục 4): submissions không khớp hồ sơ nào — chỉ đếm, KHÔNG hiển thị PII giả.
     const knownIds=new Set(rows.map(r=>r.id));
     let orphanCount=0;countsArg.forEach((cnt,pid)=>{if(!knownIds.has(pid))orphanCount++;});
-    const filtered=rows.filter(r=>filter==="complete"?r._complete:(filter==="incomplete"?!r._complete:true));
+    const classOptions=activeFields.includes("className")&&Array.isArray(sessionArg.classOptions)?sessionArg.classOptions:[];
+    const showClassFilter=classOptions.length>0;
+    const filtered=rows.filter(r=>{
+      const statusOk=statusFilter==="complete"?r._complete:(statusFilter==="incomplete"?!r._complete:true);
+      const classOk=!showClassFilter||classFilter==="all"?true:r.className===classFilter;
+      return statusOk&&classOk;
+    });
     return `<div class="grid grid-3"><div class="card knowledge-stat"><strong>${total}</strong><span>Đã đăng ký</span></div><div class="card knowledge-stat"><strong>${completed}</strong><span>Đã hoàn thành</span></div><div class="card knowledge-stat"><strong>${incomplete}</strong><span>Chưa hoàn thành</span></div></div>
       ${orphanCount>0?`<p class="small" style="color:#b45309">⚠️ ${orphanCount} lượt gửi không khớp với hồ sơ người tham gia nào — không hiển thị trong bảng dưới đây.</p>`:""}
-      <div class="flex gap-8 mt-8" style="flex-wrap:wrap"><select id="knPfFilter"><option value="all">Tất cả</option><option value="complete">Đã hoàn thành</option><option value="incomplete">Chưa hoàn thành</option></select><button class="btn btn-outline btn-sm" id="knPfRefresh">🔄 Làm mới danh sách</button><button class="btn btn-outline btn-sm" id="knPfExport">XUẤT DANH SÁCH NGƯỜI THAM GIA</button></div>
+      <div class="flex gap-8 mt-8" style="flex-wrap:wrap"><select id="knPfFilter"><option value="all">Tất cả</option><option value="complete">Đã hoàn thành</option><option value="incomplete">Chưa hoàn thành</option></select>${showClassFilter?`<select id="knPfClassFilter"><option value="all">Tất cả lớp</option>${classOptions.map(cl=>`<option value="${esc(cl)}">${esc(cl)}</option>`).join("")}</select>`:""}<button class="btn btn-outline btn-sm" id="knPfRefresh">🔄 Làm mới danh sách</button><button class="btn btn-outline btn-sm" id="knPfExport">XUẤT DANH SÁCH NGƯỜI THAM GIA</button></div>
       <div class="table-wrap mt-8"><table><thead><tr>${activeFields.map(f=>`<th>${esc(KN_PARTICIPANT_FIELD_LABELS[f])}</th>`).join("")}<th>Tiến độ</th><th>Trạng thái</th></tr></thead><tbody>
         ${filtered.length?filtered.map(r=>`<tr>${activeFields.map(f=>`<td>${esc(r[f]||"—")}</td>`).join("")}<td>${r._count}/${minPer}</td><td>${r._complete?"Hoàn thành":"Chưa hoàn thành"}</td></tr>`).join(""):`<tr><td colspan="${activeFields.length+2}">Không có người tham gia phù hợp.</td></tr>`}
       </tbody></table></div>`;
   }
   // GATE 4C-A: Compact mount — identical DOM target (#knPfWrap) and identical event-wiring
   // to the previous knowledgeRenderParticipants(), now built from the shared markup builder.
-  // GATE 4C-C: filter is now read from/written to knPfViewState.filter instead of the DOM,
-  // so every re-render path (filter change, Refresh, submissions-driven auto re-render) shows
-  // the same persisted selection — filtering semantics themselves are unchanged.
+  // GATE 4C-C.2: statusFilter/classFilter are read from/written to knPfViewState instead of
+  // the DOM, so every re-render path (either filter changing, Refresh, submissions-driven auto
+  // re-render) shows the same persisted selections — filtering semantics unchanged, just two
+  // independent dimensions now. #knPfClassFilter may not exist (hidden when there's no
+  // meaningful class list), so its wiring is guarded.
   function knowledgeRenderParticipantsCompact(){
     const wrap=$("#knPfWrap");if(!wrap||session.collectParticipantProfile!==true||participants===null)return;
-    wrap.innerHTML=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.filter);
-    $("#knPfFilter").value=knPfViewState.filter;
-    $("#knPfFilter").onchange=(e)=>{knPfViewState.filter=e.target.value;knowledgeRenderParticipantsCompact();};
+    wrap.innerHTML=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter);
+    $("#knPfFilter").value=knPfViewState.statusFilter;
+    $("#knPfFilter").onchange=(e)=>{knPfViewState.statusFilter=e.target.value;knowledgeRenderParticipantsCompact();};
+    const classSel=$("#knPfClassFilter");
+    if(classSel){classSel.value=knPfViewState.classFilter;classSel.onchange=(e)=>{knPfViewState.classFilter=e.target.value;knowledgeRenderParticipantsCompact();};}
     $("#knPfRefresh").onclick=()=>{if(!participantsLoading)loadParticipants();};
     $("#knPfExport").onclick=knowledgeExportParticipants;
   }

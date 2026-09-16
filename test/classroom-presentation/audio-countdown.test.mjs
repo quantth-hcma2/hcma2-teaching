@@ -164,5 +164,29 @@ test('no oscillators, no two-asset references; timer transaction prefix, index, 
   const read=name=>readFileSync(new URL(name,root),'utf8').replaceAll('\r\n','\n');
   assert.equal(read('group-classroom-timer.mjs').split('// Exact user assets')[0],before('group-classroom-timer.mjs').split('// Audio is unlocked')[0]);
   assert.doesNotMatch(read('group-classroom-timer.mjs'),/createOscillator/);
-  for(const name of ['index.html','group-classroom-presentation.mjs','firestore.rules','firestore.rules.production-candidate','firestore.indexes.json'])assert.equal(read(name),before(name));
+  for(const name of ['group-classroom-presentation.mjs','firestore.rules','firestore.rules.production-candidate','firestore.indexes.json'])assert.equal(read(name),before(name));
+  // GATE 4C-C.2 RECONCILIATION: index.html is compared separately, with stripItem4() applied to
+  // both sides first — see the identical helper (and its full rationale) in
+  // test/classroom-presentation/boundaries.test.mjs. This keeps the byte-equality guard on
+  // every Classroom-Presentation/Timer/schema-relevant part of index.html while excluding only
+  // the three narrow, separately-approved Item 4 participant-panel insertion points.
+  assert.equal(stripItem4(read('index.html')),stripItem4(before('index.html')));
 });
+function stripItem4(source){
+  source=source.replace(' class="kn-pf-compact"','');
+  const cssStart=source.indexOf('/* GATE 4C-B: Knowledge participant Compact card only');
+  if(cssStart!==-1){
+    const cssEnd=source.indexOf('\n\n/* Badges */',cssStart);
+    source=source.slice(0,cssStart)+source.slice(cssEnd+1);
+  }
+  source=source.replaceAll('knowledgeRenderParticipantsCompact','knowledgeRenderParticipants');
+  const aStart=source.indexOf('const participantCounts=new Map();\n');
+  const aEnd=source.indexOf('  const openerUid=STATE.user.uid;',aStart);
+  if(aStart!==-1&&aEnd!==-1)source=source.slice(0,aStart+'const participantCounts=new Map();\n'.length)+source.slice(aEnd);
+  const closeAnchor='    knowledgeRenderParticipants();\n  }\n';
+  const closePos=source.indexOf(closeAnchor);
+  const bStart=closePos!==-1?closePos+closeAnchor.length:-1;
+  const bEnd=source.indexOf('function knowledgeSpreadsheetSafe(',bStart);
+  if(bStart!==-1&&bEnd!==-1)source=source.slice(0,bStart)+source.slice(bEnd);
+  return source;
+}

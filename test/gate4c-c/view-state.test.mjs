@@ -37,8 +37,13 @@ const cssBlock = sliceBetween(source, ":root{", "\n/* Badges */", "root CSS bloc
 // 1/2 — knPfViewState exists inside knowledgeDashboard(), with the exact frozen initial shape
 // ===================================================================================
 
-test("GATE 4C-C: knPfViewState declared inside knowledgeDashboard(), with exact frozen initial state", () => {
-  assert.match(dashboardSrc, /let knPfViewState=\{mode:'compact',fullscreen:false,filter:'all',search:''\};/);
+test("GATE 4C-C: knPfViewState declared inside knowledgeDashboard(), with initial state (shape superseded by GATE 4C-C.2)", () => {
+  // GATE 4C-C.2 explicitly authorized splitting the single `filter` field into statusFilter +
+  // classFilter (see test/gate4c-c2/filter-contract.test.mjs for the up-to-date exact-shape
+  // assertion) — check only that the state object still exists with mode/fullscreen/search
+  // frozen as 4C-C originally shipped them, not the exact whole-object literal.
+  assert.match(dashboardSrc, /let knPfViewState=\{mode:'compact',fullscreen:false,/);
+  assert.match(dashboardSrc, /search:''\};/);
 });
 
 // ===================================================================================
@@ -57,13 +62,15 @@ test("GATE 4C-C: no Expanded, Fullscreen, or Search UI/implementation exists yet
 // 7/8/9 — filter wiring: onchange updates state, render reads state, display stays in sync
 // ===================================================================================
 
-test("GATE 4C-C: filter dropdown onchange updates knPfViewState.filter then re-renders Compact", () => {
-  assert.match(compactFnSrc, /\$\("#knPfFilter"\)\.onchange=\(e\)=>\{knPfViewState\.filter=e\.target\.value;knowledgeRenderParticipantsCompact\(\);\};/);
+test("GATE 4C-C: status filter dropdown onchange updates knPfViewState (field renamed to statusFilter by GATE 4C-C.2)", () => {
+  // Same invariant as originally shipped ("onchange updates persisted state, then re-renders"),
+  // now pointed at the field's current name — see test/gate4c-c2/filter-contract.test.mjs.
+  assert.match(compactFnSrc, /\$\("#knPfFilter"\)\.onchange=\(e\)=>\{knPfViewState\.statusFilter=e\.target\.value;knowledgeRenderParticipantsCompact\(\);\};/);
 });
 
-test("GATE 4C-C: Compact render reads filter from knPfViewState, not the DOM", () => {
-  assert.match(compactFnSrc, /knowledgeParticipantsMarkup\(participants,participantCounts,session,knPfViewState\.filter\)/);
-  assert.match(compactFnSrc, /\$\("#knPfFilter"\)\.value=knPfViewState\.filter;/);
+test("GATE 4C-C: Compact render reads its filter from knPfViewState, not the DOM (field renamed to statusFilter by GATE 4C-C.2)", () => {
+  assert.match(compactFnSrc, /knowledgeParticipantsMarkup\(participants,participantCounts,session,knPfViewState\.statusFilter,knPfViewState\.classFilter\)/);
+  assert.match(compactFnSrc, /\$\("#knPfFilter"\)\.value=knPfViewState\.statusFilter;/);
   // the old DOM-read pattern must be gone
   assert.doesNotMatch(compactFnSrc, /\$\("#knPfFilter"\)\?\.value/);
 });
@@ -72,10 +79,12 @@ test("GATE 4C-C: Compact render reads filter from knPfViewState, not the DOM", (
 // 10/11/15/16 — everything else must remain byte-identical to the 4C-B checkpoint
 // ===================================================================================
 
-test("GATE 4C-C: knowledgeParticipantsMarkup() unchanged since 4C-B (filtering/columns/progress semantics frozen)", () => {
-  const checkpointMarkup = sliceBetween(checkpointSource, "function knowledgeParticipantsMarkup(", "\n  }\n  // GATE 4C-A: Compact mount", "checkpoint markup") + "\n  }";
-  assert.equal(markupSrc, checkpointMarkup);
-});
+// NOTE: the "knowledgeParticipantsMarkup() unchanged since 4C-B" byte-identity test that
+// originally stood here is retired as of GATE 4C-C.2, which explicitly and correctly changed
+// knowledgeParticipantsMarkup()'s signature and filtering body (added classFilter as a second,
+// AND-combined dimension) — 4C-C's own diff never touched this function, so there is no
+// narrower true statement left to make here. See test/gate4c-c2/filter-contract.test.mjs for
+// the up-to-date, in-depth coverage of this function's actual current behavior.
 
 test("GATE 4C-C: loadParticipants() and knowledgeExportParticipants() unchanged since 4C-B (Refresh/CSV semantics frozen)", () => {
   const loadSrc = sliceBetween(source, "async function loadParticipants(){", "\n  }", "loadParticipants()") + "\n  }";
@@ -98,17 +107,17 @@ function buildMarkupFn() {
   return sandbox.__markup;
 }
 
-test("GATE 4C-C: 0/1/multiple participant rendering and progress/status still correct through knPfViewState.filter values", () => {
+test("GATE 4C-C: 0/1/multiple participant rendering and progress/status still correct (statusFilter/classFilter signature per GATE 4C-C.2)", () => {
   const markup = buildMarkupFn();
   const session = { minimumPerParticipant: 2, participantFields: { fullName: { enabled: true } } };
-  const empty = markup([], new Map(), session, "all");
+  const empty = markup([], new Map(), session, "all", "all");
   assert.match(empty, /Không có người tham gia phù hợp\./);
-  const one = markup([{ id: "p1", fullName: "A" }], new Map([["p1", 2]]), session, "all");
+  const one = markup([{ id: "p1", fullName: "A" }], new Map([["p1", 2]]), session, "all", "all");
   assert.match(one, /Hoàn thành/);
   const multi = markup(
     [{ id: "p1", fullName: "A" }, { id: "p2", fullName: "B" }],
     new Map([["p1", 0], ["p2", 5]]),
-    session, "incomplete"
+    session, "incomplete", "all"
   );
   assert.match(multi, />A</);
   assert.doesNotMatch(multi, />B</);

@@ -236,12 +236,10 @@ test("GATE 4C-C.2: 4C-B Compact CSS (scroll cap + sticky header) preserved byte-
 // 26/27/28/29 — no future Item 4 controls exist yet
 // ===================================================================================
 
-test("GATE 4C-C.2: no Fullscreen, Search, or chunk/pagination/virtualization exist yet", () => {
-  // MỞ RỘNG/Expanded were explicitly out of scope for 4C-C.2 itself (still true), but GATE
-  // 4C-D.2 later added Expanded as its own authorized gate — see
-  // test/gate4c-d2/expanded-mode.test.mjs for the up-to-date guard on what's still not built.
-  assert.doesNotMatch(source, /TOÀN MÀN HÌNH/);
-  assert.doesNotMatch(source, /is-fullscreen/);
+test("GATE 4C-C.2: no Search, or chunk/pagination/virtualization exist yet", () => {
+  // MỞ RỘNG/Expanded (4C-D.2) and TOÀN MÀN HÌNH/Fullscreen (4C-E) were explicitly out of scope
+  // for 4C-C.2 itself (still true), but each was later added by its own authorized gate — see
+  // test/gate4c-e/fullscreen.test.mjs for the up-to-date guard on what's still not built.
   assert.doesNotMatch(source, /knPfSearch/);
   assert.doesNotMatch(markupSrc, /requestAnimationFrame|IntersectionObserver|chunk|virtualiz|pagina/i);
 });

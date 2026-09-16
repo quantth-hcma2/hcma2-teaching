@@ -141,6 +141,15 @@ tr:hover td{background:#fafbfc;}
 .kn-pf-expanded .table-wrap{max-height:min(50vh,440px); overflow-y:auto;}
 .kn-pf-expanded .table-wrap thead th{position:sticky; top:0; background:var(--card); z-index:1;}
 
+/* GATE 4C-E: Fullscreen presentation for the Knowledge participant Expanded modal only — an
+   additive .is-fullscreen modifier applied ONLY by knowledgeRenderParticipantsExpanded() to its
+   own modal element (never by openModal() itself), so none of the other 9 features sharing
+   .modal/.modal-lg can ever receive it. height:100vh then height:100dvh is a safe progressive
+   fallback: browsers without dvh support simply ignore the second declaration. */
+.modal.is-fullscreen{width:100vw; height:100vh; height:100dvh; max-width:none; max-height:none; margin:-16px; border-radius:0; overflow:hidden; display:flex; flex-direction:column;}
+.modal.is-fullscreen .kn-pf-expanded{flex:1 1 auto; min-height:0; display:flex; flex-direction:column; overflow:hidden;}
+.modal.is-fullscreen .kn-pf-expanded .table-wrap{flex:1 1 auto; min-height:0; max-height:none; overflow-y:auto;}
+
 /* Badges */
 .badge{display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700;}
 .badge-green{background:#dcfce7; color:#166534;}
@@ -5106,6 +5115,10 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
   // className dropdown below) — these are two independent, AND-combined filter dimensions.
   // search stays '' with no UI until Gate 4C-F.
   let knPfViewState={mode:'compact',fullscreen:false,statusFilter:'all',classFilter:'all',search:''};
+  // GATE 4C-E: the one live document-level listener Fullscreen ever needs. Re-derived from
+  // scratch (removed then conditionally re-added) on every knowledgeRenderParticipantsExpanded()
+  // call, so repeated enter/exit/refresh/filter cycles can never accumulate more than one.
+  let knPfFullscreenEscHandler=null;
   const openerUid=STATE.user.uid;
   c.innerHTML=`<button class="btn btn-ghost btn-sm" id="knBack">← Danh sách</button><div id="knDash" class="mt-14"><div class="center-screen"><span class="spinner"></span></div></div>`;
   $("#knBack").onclick=()=>{window.location.hash=""; if(isAdminView){STATE.adminNav="knowledge";adminRoute("knowledge");}else{STATE.teacherNav="knowledge";teacherRoute();}};
@@ -5321,19 +5334,59 @@ knowledgeRenderAi();
   // pattern already used by openSessionInfoEditor for its own modal-scoped teardown.
   function knowledgeRenderParticipantsExpanded(){
     if(session.collectParticipantProfile!==true||participants===null)return;
+    // GATE 4C-E: captured before the modal is (re)opened below, because that call first executes
+    // whatever modalCloseCleanup was registered by the PREVIOUS render — on a same-modal rerender
+    // (fullscreen toggle, Refresh, filter change) that previous cleanup would otherwise reset
+    // knPfViewState.fullscreen to false before this render gets a chance to apply it. This
+    // snapshot is reasserted onto state further down, exactly mirroring how knPfViewState.mode
+    // has always been unconditionally reasserted to 'expanded' right after that same call.
+    const wantFullscreen=knPfViewState.fullscreen;
     const tableHtml=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter);
-    const host=openModal(`<div class="section-title"><h3>👥 Người tham gia</h3><button class="btn btn-ghost btn-sm" id="knPfExpandClose">✕ Đóng</button></div><div class="kn-pf-expanded">${tableHtml}</div>`,true);
+    const host=openModal(`<div class="section-title"><h3>👥 Người tham gia</h3><div class="flex gap-8"><button class="btn btn-ghost btn-sm" id="knPfFullscreenToggle">${wantFullscreen?'⛝ THOÁT TOÀN MÀN HÌNH':'⛶ TOÀN MÀN HÌNH'}</button><button class="btn btn-ghost btn-sm" id="knPfExpandClose">✕ Đóng</button></div></div><div class="kn-pf-expanded">${tableHtml}</div>`,true);
     knPfViewState.mode='expanded';
+    knPfViewState.fullscreen=wantFullscreen;
     // GATE 4C-D.2 SMOKE FIX: closing Expanded must leave Compact showing current data, not
     // whatever loading state a prior Refresh left it in (the Refresh fetch's spinner write
     // targets #knPfWrap globally, regardless of which mode was active when it fired).
     // Rerendering here is a pure DOM operation against already-in-memory
     // participants/participantCounts — no Firestore read.
-    modalCloseCleanup=()=>{knPfViewState.mode='compact';knowledgeRenderParticipantsCompact();};
+    // GATE 4C-E: a genuine close/replacement must also leave no Fullscreen residue behind —
+    // reset the flag and drop the ESC listener (if one is currently registered) alongside the
+    // existing mode reset, using the same exactly-once runModalCloseCleanup() guarantee.
+    modalCloseCleanup=()=>{
+      knPfViewState.mode='compact';
+      knPfViewState.fullscreen=false;
+      if(knPfFullscreenEscHandler){document.removeEventListener('keydown',knPfFullscreenEscHandler);knPfFullscreenEscHandler=null;}
+      knowledgeRenderParticipantsCompact();
+    };
     const modalEl=host.querySelector('.modal');
     if(!modalEl)return;
+    if(wantFullscreen)modalEl.classList.add('is-fullscreen');
     const closeBtn=modalEl.querySelector('#knPfExpandClose');
     if(closeBtn)closeBtn.onclick=closeModal;
+    const fsBtn=modalEl.querySelector('#knPfFullscreenToggle');
+    if(fsBtn)fsBtn.onclick=()=>{knPfViewState.fullscreen=!knPfViewState.fullscreen;knowledgeRenderParticipantsExpanded();};
+    // GATE 4C-E: re-derive the ESC listener from scratch on every render (removed unconditionally,
+    // then conditionally re-added) so repeated enter/exit/refresh/filter cycles never accumulate
+    // more than one, regardless of which path triggered this render.
+    if(knPfFullscreenEscHandler){document.removeEventListener('keydown',knPfFullscreenEscHandler);knPfFullscreenEscHandler=null;}
+    if(wantFullscreen){
+      knPfFullscreenEscHandler=(e)=>{
+        if(e.key!=='Escape')return;
+        // Fail closed: never act on state alone — prove the modal currently on screen still is
+        // the Knowledge participant Expanded modal, still actually in Fullscreen presentation,
+        // before doing anything. Any mismatch (a different/no modal open) is a silent no-op.
+        if(knPfViewState.mode!=='expanded'||knPfViewState.fullscreen!==true)return;
+        const liveModal=document.querySelector('#globalModal .modal');
+        if(!liveModal||!liveModal.classList.contains('is-fullscreen'))return;
+        if(!liveModal.querySelector('.kn-pf-expanded'))return;
+        e.preventDefault();
+        e.stopPropagation();
+        knPfViewState.fullscreen=false;
+        knowledgeRenderParticipantsExpanded();
+      };
+      document.addEventListener('keydown',knPfFullscreenEscHandler);
+    }
     wireParticipantControls(modalEl,knowledgeRenderParticipantsExpanded);
   }
   // GATE 4C-D.2: the one place that needs to know which view is currently visible — used only

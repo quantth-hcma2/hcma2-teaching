@@ -64,14 +64,12 @@ test("GATE 4C-A source shape: new functions exist, old bare definition does not"
   assert.doesNotMatch(codeOnly, /[^.\w]knowledgeRenderParticipants\(\)/);
 });
 
-test("GATE 4C-A source shape: no future Item 4 controls exist yet (Fullscreen/Search)", () => {
-  assert.doesNotMatch(source, /TOÀN MÀN HÌNH/);
-  assert.doesNotMatch(source, /is-fullscreen/);
-  // knPfViewState (4C-C) and MỞ RỘNG/Expanded (4C-D.2) were explicitly out of scope for 4C-A
-  // itself (still true — this gate's own diff never introduced either), but both were later
-  // added by their own authorized gates, so their absence is no longer part of "future controls
-  // not yet built" — see test/gate4c-d2/expanded-mode.test.mjs for the up-to-date guard on
-  // what's still not built (Fullscreen/Search), which this test's remaining assertions mirror.
+test("GATE 4C-A source shape: no future Item 4 controls exist yet (Search)", () => {
+  // knPfViewState (4C-C), MỞ RỘNG/Expanded (4C-D.2), and TOÀN MÀN HÌNH/Fullscreen (4C-E) were
+  // explicitly out of scope for 4C-A itself (still true — this gate's own diff never introduced
+  // any of them), but each was later added by its own authorized gate, so their absence is no
+  // longer part of "future controls not yet built" — see test/gate4c-e/fullscreen.test.mjs for
+  // the up-to-date guard on what's still not built (Search), which this test mirrors.
   assert.doesNotMatch(source, /knPfSearch/);
 });
 

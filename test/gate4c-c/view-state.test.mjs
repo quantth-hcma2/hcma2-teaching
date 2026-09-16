@@ -53,13 +53,11 @@ test("GATE 4C-C: knPfViewState declared inside knowledgeDashboard(), with initia
 // 3/4/5/6 — Compact remains the only presentation; no Expanded/Fullscreen/Search yet
 // ===================================================================================
 
-test("GATE 4C-C: no Fullscreen or Search UI/implementation exists yet", () => {
-  // MỞ RỘNG/Expanded were explicitly out of scope for 4C-C itself (still true — this gate's
-  // own diff never introduced them), but GATE 4C-D.2 later added Expanded as its own
-  // authorized gate — see test/gate4c-d2/expanded-mode.test.mjs for the up-to-date guard on
-  // what's still not built (Fullscreen/Search).
-  assert.doesNotMatch(source, /TOÀN MÀN HÌNH/);
-  assert.doesNotMatch(source, /is-fullscreen/);
+test("GATE 4C-C: no Search UI/implementation exists yet", () => {
+  // MỞ RỘNG/Expanded (4C-D.2) and TOÀN MÀN HÌNH/Fullscreen (4C-E) were explicitly out of scope
+  // for 4C-C itself (still true — this gate's own diff never introduced either), but each was
+  // later added by its own authorized gate — see test/gate4c-e/fullscreen.test.mjs for the
+  // up-to-date guard on what's still not built (Search).
   assert.doesNotMatch(source, /knPfSearch/);
 });
 

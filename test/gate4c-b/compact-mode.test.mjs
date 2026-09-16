@@ -130,11 +130,9 @@ test("GATE 4C-B: empty state (0 participants) still renders correctly through th
 // 12/13/14/15 — no future Item 4 controls exist yet
 // ===================================================================================
 
-test("GATE 4C-B: no Fullscreen or Search exist yet", () => {
-  assert.doesNotMatch(source, /TOÀN MÀN HÌNH/);
-  assert.doesNotMatch(source, /is-fullscreen/);
-  // knPfViewState (4C-C) and MỞ RỘNG/Expanded (4C-D.2): out of scope for 4C-B itself (still
-  // true), but both were later added by their own authorized gates — see
-  // test/gate4c-d2/expanded-mode.test.mjs for the up-to-date guard on what's still not built.
+test("GATE 4C-B: no Search exists yet", () => {
+  // knPfViewState (4C-C), MỞ RỘNG/Expanded (4C-D.2), and TOÀN MÀN HÌNH/Fullscreen (4C-E): out of
+  // scope for 4C-B itself (still true), but each was later added by its own authorized gate —
+  // see test/gate4c-e/fullscreen.test.mjs for the up-to-date guard on what's still not built.
   assert.doesNotMatch(source, /knPfSearch/);
 });

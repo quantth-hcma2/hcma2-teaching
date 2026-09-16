@@ -157,8 +157,8 @@ test("GATE 4C-D2: neither filter dropdown's onchange, nor Refresh, nor the live 
 // 18/19 — every modal close/replacement path resets mode to 'compact'
 // ===================================================================================
 
-test("GATE 4C-D2: opening Expanded registers modalCloseCleanup that resets mode to 'compact' AND rerenders Compact from current in-memory data (covers backdrop close AND any modal replacement, both of which already call runModalCloseCleanup() inside openModal()/closeModal()) — extended by the GATE 4C-D.2 SMOKE FIX so closing Expanded never leaves Compact stuck on a stale Refresh-in-flight spinner", () => {
-  assert.match(expandedFnSrc, /modalCloseCleanup=\(\)=>\{knPfViewState\.mode='compact';knowledgeRenderParticipantsCompact\(\);\};/);
+test("GATE 4C-D2: opening Expanded registers modalCloseCleanup that resets mode to 'compact' AND rerenders Compact from current in-memory data (covers backdrop close AND any modal replacement, both of which already call runModalCloseCleanup() inside openModal()/closeModal()) — extended by the GATE 4C-D.2 SMOKE FIX so closing Expanded never leaves Compact stuck on a stale Refresh-in-flight spinner; further extended by GATE 4C-E (see test/gate4c-e/fullscreen.test.mjs for the up-to-date, in-depth guard on the Fullscreen-reset additions) so closing never leaves stale Fullscreen state either — this narrows to just the two invariants 4C-D2 itself is responsible for", () => {
+  assert.match(expandedFnSrc, /modalCloseCleanup=\(\)=>\{[\s\S]*?knPfViewState\.mode='compact';[\s\S]*?knowledgeRenderParticipantsCompact\(\);[\s\S]*?\};/);
 });
 
 test("GATE 4C-D2: Expanded's own close button calls the existing closeModal() only — no second close implementation", () => {
@@ -183,12 +183,13 @@ test("GATE 4C-D2: every Expanded (re-)render fully replaces modal content via op
 // 22/23/24 — no Search, no Fullscreen, no pagination/chunking/virtualization
 // ===================================================================================
 
-test("GATE 4C-D2: no Search, Fullscreen, or pagination/chunking/virtualization implementation exists yet", () => {
-  assert.doesNotMatch(source, /TOÀN MÀN HÌNH/);
-  assert.doesNotMatch(source, /is-fullscreen/);
+test("GATE 4C-D2: no Search, or pagination/chunking/virtualization implementation exists yet", () => {
+  // TOÀN MÀN HÌNH/Fullscreen was explicitly out of scope for 4C-D.2 itself (still true — this
+  // gate's own diff never introduced it), but GATE 4C-E later added it as its own authorized
+  // gate — see test/gate4c-e/fullscreen.test.mjs for the up-to-date guard on what's still not
+  // built (Search) and on Fullscreen's own approved scope/ownership rules.
   assert.doesNotMatch(source, /knPfSearch/);
   assert.doesNotMatch(expandedFnSrc, /requestAnimationFrame|IntersectionObserver|chunk|virtualiz|pagina/i);
-  assert.doesNotMatch(expandedFnSrc, /fullscreen|Fullscreen/);
 });
 
 // ===================================================================================

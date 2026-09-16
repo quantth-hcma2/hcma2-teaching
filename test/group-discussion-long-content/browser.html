@@ -1,0 +1,45 @@
+<!doctype html><meta charset="utf-8"><title>Local Group Discussion hotfix checks</title>
+<h1>Local editor checks — synthetic data only</h1><pre id="results">Running…</pre><div id="mount"></div>
+<script type="module">
+import { RichTextEditor } from '../../rich-text-editor.mjs';
+import { richTextToPlainText } from '../../rich-text-contract.mjs';
+const logs = [];
+function check(ok, name) { if (!ok) throw Error(name); logs.push('PASS ' + name); }
+let rejected = 0;
+const editor = new RichTextEditor({container: document.querySelector('#mount'), onLimitExceeded: () => rejected++});
+function caretEnd() {
+  editor.editableEl.focus();
+  const r = document.createRange(); r.selectNodeContents(editor.editableEl.lastChild); r.collapse(false);
+  const s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+}
+function paste(text) {
+  caretEnd();
+  const data = new DataTransfer(); data.setData('text/plain', text);
+  editor.editableEl.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+}
+try {
+  for (const field of ['common instructions', 'per-group topic']) {
+    editor.setPlainText('');
+    paste('ế'.repeat(10000));
+    check(editor.getRichText().ok && editor.getPlainText() === 'ế'.repeat(10000), field + ': real paste handler accepts 10000');
+    check(editor.getRichText().value.blocks[0].runs.length === 20, field + ': exports 20 bounded runs');
+    paste('x');
+    check(editor.getPlainText() === 'ế'.repeat(10000), field + ': rejected paste preserves previous text');
+    editor.setPlainText('');
+    const multiline = '😀'.repeat(600) + '\n\n' + 'Bài tập '.repeat(100);
+    paste(multiline);
+    check(editor.getPlainText() === multiline, field + ': paste preserves line breaks and emoji');
+    const rich = editor.getRichText().value;
+    for (const run of rich.blocks[0].runs) { run.bold = true; run.color = 'blue'; }
+    editor.setRichText(rich);
+    editor._normalizeAllBlocks(); // Same merging path used after actual input and paste.
+    const merged = editor.getRichText();
+    check(merged.ok && richTextToPlainText(merged.value) === multiline && merged.value.blocks[0].runs.every(r => r.bold && r.color === 'blue'), field + ': merged formatted spans export losslessly');
+    editor.setPlainText('a'.repeat(501));
+    editor.editableEl.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'a' }));
+    check(editor.getRichText().ok && editor.getPlainText().length === 501, field + ': typed input normalization accepts long span');
+  }
+  check(rejected === 2, 'over-limit paste callback invoked for both fields');
+  document.querySelector('#results').textContent = logs.join('\n') + '\nTOTAL ' + logs.length + ' PASS';
+} catch (e) { document.querySelector('#results').textContent = logs.join('\n') + '\nFAIL ' + e.stack; }
+</script>

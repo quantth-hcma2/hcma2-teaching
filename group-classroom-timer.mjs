@@ -46,56 +46,50 @@ export async function writeTimer({ db, ref, runTransaction, serverTimestamp }, a
 }
 
 // Exact user assets; this controller is owned by the classroom, never a clock.
-export const TIMER_AUDIO_ASSETS = Object.freeze({
-  countdown: new URL('./assets/audio/countdown-10s.mp3', import.meta.url).href,
-  alarm: new URL('./assets/audio/timer-expired-alarm.mp3', import.meta.url).href
-});
+// One combined asset carries both the countdown and the alarm as a single continuous
+// clip; the alarm is the tail already baked into the file, never a second playback.
+export const TIMER_AUDIO_ASSET_URL = new URL('./assets/audio/timer-expiry-combined.mp3', import.meta.url).href;
 export function createExpirySound(makeAudio = url => new globalThis.Audio(url)) {
-  let enabled = false, disposed = false, generation = 0;
-  const media = {}, attempted = new Set();
-  function stop(kind) { try { media[kind]?.pause(); } catch {} }
-  function halt() { stop('countdown'); stop('alarm'); }
-  function play(kind, offset = 0) {
-    if (!enabled || disposed) return;
+  let enabled = false, disposed = false, generation = 0, media = null, started = false;
+  function stop() { try { media?.pause(); } catch {} }
+  function play(offset = 0) {
+    if (!enabled || disposed || !media) return;
     try {
-      const audio = media[kind];
-      if (!audio) return;
-      audio.currentTime = Math.max(0, offset);
-      Promise.resolve(audio.play()).catch(() => {});
+      media.currentTime = Math.max(0, offset);
+      Promise.resolve(media.play()).catch(() => {});
     } catch { /* blocked playback or seek cannot interrupt the timer */ }
   }
   return {
     async enable(value) {
       const token = ++generation;
-      enabled = false; halt(); attempted.clear();
+      enabled = false; stop(); started = false;
       if (!value || disposed) return;
-      // Unlock both elements in the checkbox's user gesture, silently.
-      await Promise.all(Object.entries(TIMER_AUDIO_ASSETS).map(async ([kind, url]) => {
-        try {
-          const audio = media[kind] ||= makeAudio(url);
-          audio.preload = 'auto'; audio.loop = false; audio.muted = true;
-          await audio.play();
-        } catch {} finally {
-          if (token === generation) { stop(kind); if (media[kind]) media[kind].muted = false; }
-        }
-      }));
+      // Unlock the element in the checkbox's user gesture, silently.
+      try {
+        media ||= makeAudio(TIMER_AUDIO_ASSET_URL);
+        media.preload = 'auto'; media.loop = false; media.muted = true;
+        await media.play();
+      } catch {} finally {
+        if (token === generation) { stop(); if (media) media.muted = false; }
+      }
       if (token !== generation || disposed) return;
       enabled = true;
     },
-    countdown(offset) {
+    start(offset) {
       if (!enabled || disposed) return;
-      const audio = media.countdown;
-      if (!attempted.has('countdown')) { attempted.add('countdown'); play('countdown', offset); }
-      else if (audio && !audio.paused && Math.abs(audio.currentTime - offset) > 0.75) {
-        try { audio.currentTime = offset; } catch {}
+      if (!started) { started = true; play(offset); }
+      else if (media && !media.paused && Math.abs(media.currentTime - offset) > 0.75) {
+        try { media.currentTime = offset; } catch {}
       }
     },
-    pause() { stop('countdown'); attempted.delete('countdown'); },
-    alarm() { this.pause(); if (!attempted.has('alarm')) { attempted.add('alarm'); play('alarm'); } },
-    reset() { halt(); attempted.clear(); },
+    pause() { stop(); started = false; },
+    reset() {
+      stop(); started = false;
+      try { if (media) media.currentTime = 0; } catch {}
+    },
     dispose() {
-      disposed = true; enabled = false; generation++; halt();
-      for (const audio of Object.values(media)) { try { audio.removeAttribute('src'); audio.load(); } catch {} }
+      disposed = true; enabled = false; generation++; stop();
+      try { media?.removeAttribute('src'); media?.load(); } catch {}
     }
   };
 }
@@ -107,19 +101,19 @@ export function createTimerAudioObserver(sound) {
     const run = activity.startedAt?.toMillis ? activity.startedAt.toMillis()
       : running ? new Date(activity.startedAt).getTime() : null;
     const changed = previous && (run !== previous.run || activity.durationSec !== previous.duration);
-    if (changed && remaining > 0) { expired = false; sound.reset(); }
-    const fresh = previous && now >= previous.now && now - previous.now <= 1500;
-    if (!running || !visible || remaining > 10 || remaining <= 0 || expired) sound.pause();
-    else {
+    if (changed) { expired = false; sound.reset(); }
+    // Once the timer reaches zero the media element owns its own completion: only an
+    // explicit Pause (running -> false) or a genuinely new cycle (changed) may touch it
+    // again — never the remaining-seconds value crossing zero. `expired` only guards
+    // against a stale/rolled-back clock re-entering the window within the same cycle.
+    if (!running) sound.pause();
+    else if (remaining > 0 && (!visible || remaining > 10 || expired)) sound.pause();
+    else if (remaining > 0 && remaining <= 10 && !expired) {
       // Use the same rounding boundary as the visual clock: 10 appears at 10.5s.
       const exact = (run + activity.durationSec * 1000 - now) / 1000;
-      sound.countdown(Math.min(9.999, Math.max(0, 10.5 - exact)));
+      sound.start(Math.min(9.999, Math.max(0, 10.5 - exact)));
     }
-    if (remaining <= 0) {
-      if (!expired && previous?.running && previous.remaining > 0 && running &&
-          visible && fresh && !changed) sound.alarm();
-      expired = true;
-    }
+    if (remaining <= 0) expired = true;
     previous = {run, duration: activity.durationSec, remaining, running, now};
   };
 }

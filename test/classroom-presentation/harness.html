@@ -1,0 +1,31 @@
+<!doctype html><html lang="vi"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Local classroom presentation tests</title><link rel="stylesheet" href="../../group-classroom-presentation.css"><style>.hidden{display:none!important}body{font-family:Arial;margin:16px}.btn{padding:10px;border:1px solid #888;border-radius:6px;background:white;color:#123;cursor:pointer}.btn:disabled{opacity:.4}.card{border:1px solid #ddd;padding:16px}.group-timer-float,.group-timer-popup{display:none}</style><div id="root"></div><script type="module">
+import {renderRichText} from '../../rich-text-renderer.mjs';
+import {timerSeconds,writeTimer} from '../../group-classroom-timer.mjs';
+import {mountClassroomPresentation} from '../../group-classroom-presentation.mjs';
+const source=await (await fetch('../../index.html')).text();
+for(const match of source.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)){const style=document.createElement('style');style.textContent=match[1];document.head.append(style);}
+const groupSource=source.slice(source.indexOf('async function groupLive('),source.indexOf('// GATE 2A-AUTH-I2-CORRECTION: owner/admin-only roster'));
+// Execute the production groupLive function, with only its Firestore/host services replaced.
+// No Firebase imports, credentials, external requests, or production identifiers.
+const original={ownerId:'teacher',title:'Thảo luận nhóm — lớp thử',instructions:'Nhiệm vụ chung\nDòng thứ hai',durationSec:900,startedAt:null,pausedRemainingSec:null,status:'open',groupCount:2,joinCode:'LOCAL1'};
+let state=structuredClone(original),subscribers=[],cleanups=[],writes=[];
+const snapshot=()=>({exists:()=>true,data:()=>structuredClone(state)});
+const publish=()=>subscribers.forEach(f=>f(snapshot()));
+const dependencies={
+  clearListeners:()=>{cleanups.forEach(f=>f());cleanups=[];subscribers=[];},track:f=>cleanups.push(f),
+  getDoc:async()=>snapshot(),doc:(_, ...parts)=>parts.join('/'),collection:(_, ...parts)=>parts.join('/'),db:{},GROUP_COLLECTION:'groupActivities',
+  STATE:{user:{uid:'teacher'}},isContractSession:a=>'configRevision'in a,groupJoinLink:()=>'',esc:s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),groupStatusBadge:s=>s,
+  qrImageFor:()=> 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+  $:s=>document.querySelector(s),$$:s=>[...document.querySelectorAll(s)],renderRichText,timerSeconds,writeTimer,mountClassroomPresentation,
+  serverTimestamp:()=>new Date(),runTransaction:async(_,fn)=>fn({get:async()=>snapshot(),update:(_,patch)=>{writes.push(patch);state={...state,...patch};publish();}}),
+  updateDoc:async(_,patch)=>{writes.push(patch);state={...state,...patch};publish();},
+  onSnapshot:(path,fn)=>{if(path==='groupActivities/timer-demo'){subscribers.push(fn);fn(snapshot());}else fn({forEach(){},docs:[]});return()=>{subscribers=subscribers.filter(f=>f!==fn);};},
+  fmtDuration:sec=>`${String(Math.floor(sec/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}`,
+  toast:message=>{window.lastError=message;},mapError:e=>e.message,
+  qrDateValue:()=>0,groupFileAnchorHtml:()=>'',openSessionInfoEditor(){},openGroupMembersManager(){},openQrBig(){},copyQrText(){},openImageViewerSimple(){},adminRoute(){},teacherRoute(){},errorBlock:()=>''
+};
+const live=new Function(...Object.keys(dependencies),'return '+groupSource)(...Object.values(dependencies));
+await live(document.querySelector('#root'),'timer-demo',false);
+window.fixture={state:()=>state,writes:()=>writes,update:patch=>{state={...state,...patch};publish();},dispose:()=>dependencies.clearListeners(),original};
+window.ready=true;
+</script></html>

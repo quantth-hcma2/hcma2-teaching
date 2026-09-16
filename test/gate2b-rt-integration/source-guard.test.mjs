@@ -51,7 +51,7 @@ test("3: exactly 7 renderRichText call sites exist — lecturer common (initial+
 });
 
 test("4: lecturer common-instructions card is rendered via renderRichText on both initial paint and live update, never via innerHTML/textContent with instructions data directly", () => {
-  assert.match(html, /function renderCommonInstructions\(\)\{\s*renderRichText\(\$\("#gLiveInstructions"\), current\.instructionsRich, current\.instructions\|\|""\);\s*\}/);
+  assert.match(html, /function renderCommonInstructions\(\)\{\s*renderRichText\(\$\("#gLiveInstructions"\), current\.instructionsRich, current\.instructions\|\|""\);\s*classroom\.update\(current\);\s*\}/);
   assert.match(html, /renderCommonInstructions\(\);renderTopics\(\);renderPanels\(\);updateTimer\(\);/);
   assert.match(html, /\$\("#gLiveTitle"\)\.textContent=current\.title\|\|"";renderCommonInstructions\(\);/);
   assert.doesNotMatch(html, /\$\("#gLiveInstructions"\)\.textContent=/, "must never set gLiveInstructions via textContent directly — must go through renderRichText");

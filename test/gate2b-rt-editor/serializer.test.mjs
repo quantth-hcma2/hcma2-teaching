@@ -249,7 +249,7 @@ test("15: a stray BR in the middle of real runs (not the sole empty-paragraph pl
 // 16-19: fail-closed on limit violations — whole export fails, nothing is truncated
 // ===================================================================================
 
-test("16: a run exceeding MAX_RUN_TEXT_LENGTH fails the export closed", () => {
+test("16: a long editor span exports as bounded runs without truncation", () => {
   const doc = new FakeDocument();
   const root = doc.createElement("div");
   const block = doc.createElement("div");
@@ -258,8 +258,12 @@ test("16: a run exceeding MAX_RUN_TEXT_LENGTH fails the export closed", () => {
   root.appendChild(block);
 
   const result = serializeToRichText(root);
-  assert.equal(result.ok, false);
-  assert.equal(result.reason, "limit_exceeded");
+  assert.equal(result.ok, true);
+  assert.equal(validateRichTextV1(result.value), true);
+  assert.deepEqual(result.value.blocks[0].runs, [
+    { text: "x".repeat(MAX_RUN_TEXT_LENGTH) }, { text: "x" }
+  ]);
+  assert.equal(block.textContent, "x".repeat(MAX_RUN_TEXT_LENGTH + 1));
 });
 
 test("17: more blocks than MAX_BLOCKS fails the export closed", () => {
@@ -502,7 +506,7 @@ test("39: the serializer module imports validateRichTextV1/normalizeRichTextV1/D
   const { fileURLToPath } = await import("node:url");
   const here = path.dirname(fileURLToPath(import.meta.url));
   const src = readFileSync(path.join(here, "..", "..", "rich-text-editor-serializer.mjs"), "utf8");
-  assert.match(src, /import\s*\{\s*validateRichTextV1,\s*normalizeRichTextV1,\s*DEFAULT_SIZE\s*\}\s*from\s*"\.\/rich-text-contract\.mjs";/);
+  assert.match(src, /import\s*\{\s*validateRichTextV1,\s*normalizeRichTextV1,\s*DEFAULT_SIZE,\s*MAX_RUN_TEXT_LENGTH\s*\}\s*from\s*"\.\/rich-text-contract\.mjs";/);
   assert.doesNotMatch(src, /FONT_TOKENS\s*=/, "must not redefine the font token allowlist");
   assert.doesNotMatch(src, /SIZE_TOKENS\s*=/, "must not redefine the size token allowlist");
   assert.doesNotMatch(src, /COLOR_TOKENS\s*=/, "must not redefine the color token allowlist");

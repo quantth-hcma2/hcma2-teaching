@@ -172,14 +172,21 @@ test('no oscillators, no two-asset references; timer transaction prefix, index, 
   // the three narrow, separately-approved Item 4 participant-panel insertion points.
   assert.equal(stripItem4(read('index.html')),stripItem4(before('index.html')));
 });
+// GATE 4C-D.2 extended this helper — see the identical function (and its full rationale) in
+// test/classroom-presentation/boundaries.test.mjs.
 function stripItem4(source){
   source=source.replace(' class="kn-pf-compact"','');
+  source=source.replace('<button class="btn btn-outline btn-sm" id="knPfExpand">⤢ MỞ RỘNG</button>','');
+  source=source.replace(/\n\s*\/\/ GATE 4C-D\.2: Expanded's own action button[\s\S]*?knowledgeRenderParticipantsExpanded;\n/,'\n');
+  source=source.replace(/\n\s*\/\/ GATE 4C-D\.2: mode-aware — if Expanded is the currently visible view[\s\S]*?hidden Compact card underneath\.\n/,'\n');
+  source=source.replace(/\n\s*\/\/ GATE 4C-D\.2: mode-aware dispatch — Refresh must update[\s\S]*?byte-identical to before this gate\.\n/,'\n');
   const cssStart=source.indexOf('/* GATE 4C-B: Knowledge participant Compact card only');
   if(cssStart!==-1){
     const cssEnd=source.indexOf('\n\n/* Badges */',cssStart);
     source=source.slice(0,cssStart)+source.slice(cssEnd+1);
   }
   source=source.replaceAll('knowledgeRenderParticipantsCompact','knowledgeRenderParticipants');
+  source=source.replaceAll('knowledgeRenderParticipantsCurrentMode','knowledgeRenderParticipants');
   const aStart=source.indexOf('const participantCounts=new Map();\n');
   const aEnd=source.indexOf('  const openerUid=STATE.user.uid;',aStart);
   if(aStart!==-1&&aEnd!==-1)source=source.slice(0,aStart+'const participantCounts=new Map();\n'.length)+source.slice(aEnd);

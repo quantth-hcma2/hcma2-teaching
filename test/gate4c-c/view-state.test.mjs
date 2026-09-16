@@ -28,7 +28,10 @@ function sliceBetween(src, startMarker, endMarker, label) {
 
 const escSrc = sliceBetween(source, "function esc(s){", "\n", "esc()");
 const labelsSrc = sliceBetween(source, "const KN_PARTICIPANT_FIELD_LABELS=", ";", "KN_PARTICIPANT_FIELD_LABELS") + ";";
-const markupSrc = sliceBetween(source, "function knowledgeParticipantsMarkup(", "\n  }\n  // GATE 4C-A: Compact mount", "knowledgeParticipantsMarkup()") + "\n  }";
+// Bounded by a stable CODE token (the function's own last statement), not a neighboring
+// comment, so this never silently over-captures if a nearby comment is reworded.
+const markupSrc = sliceBetween(source, "function knowledgeParticipantsMarkup(", "</tbody></table></div>`;\n  }", "knowledgeParticipantsMarkup()") + "</tbody></table></div>`;\n  }";
+const wireSrc = sliceBetween(source, "function wireParticipantControls(", "if(exportBtn)exportBtn.onclick=knowledgeExportParticipants;\n  }", "wireParticipantControls()") + "if(exportBtn)exportBtn.onclick=knowledgeExportParticipants;\n  }";
 const compactFnSrc = sliceBetween(source, "function knowledgeRenderParticipantsCompact(", "\n  }", "knowledgeRenderParticipantsCompact()") + "\n  }";
 const dashboardSrc = sliceBetween(source, "async function knowledgeDashboard(", "\nfunction knowledgeProfileIsValid(", "knowledgeDashboard() body");
 const cssBlock = sliceBetween(source, ":root{", "\n/* Badges */", "root CSS block");
@@ -50,29 +53,33 @@ test("GATE 4C-C: knPfViewState declared inside knowledgeDashboard(), with initia
 // 3/4/5/6 — Compact remains the only presentation; no Expanded/Fullscreen/Search yet
 // ===================================================================================
 
-test("GATE 4C-C: no Expanded, Fullscreen, or Search UI/implementation exists yet", () => {
-  assert.doesNotMatch(source, /MỞ RỘNG/);
+test("GATE 4C-C: no Fullscreen or Search UI/implementation exists yet", () => {
+  // MỞ RỘNG/Expanded were explicitly out of scope for 4C-C itself (still true — this gate's
+  // own diff never introduced them), but GATE 4C-D.2 later added Expanded as its own
+  // authorized gate — see test/gate4c-d2/expanded-mode.test.mjs for the up-to-date guard on
+  // what's still not built (Fullscreen/Search).
   assert.doesNotMatch(source, /TOÀN MÀN HÌNH/);
   assert.doesNotMatch(source, /is-fullscreen/);
   assert.doesNotMatch(source, /knPfSearch/);
-  assert.doesNotMatch(source, /openModal\([^)]*[Pp]articipant/);
 });
 
 // ===================================================================================
 // 7/8/9 — filter wiring: onchange updates state, render reads state, display stays in sync
 // ===================================================================================
 
-test("GATE 4C-C: status filter dropdown onchange updates knPfViewState (field renamed to statusFilter by GATE 4C-C.2)", () => {
+test("GATE 4C-C: status filter onchange updates knPfViewState (now via the shared wireParticipantControls() helper introduced by GATE 4C-D.2)", () => {
   // Same invariant as originally shipped ("onchange updates persisted state, then re-renders"),
-  // now pointed at the field's current name — see test/gate4c-c2/filter-contract.test.mjs.
-  assert.match(compactFnSrc, /\$\("#knPfFilter"\)\.onchange=\(e\)=>\{knPfViewState\.statusFilter=e\.target\.value;knowledgeRenderParticipantsCompact\(\);\};/);
+  // now factored into the shared helper reused by Expanded — see
+  // test/gate4c-d2/expanded-mode.test.mjs for the up-to-date, in-depth coverage.
+  assert.match(wireSrc, /statusSel\.onchange=\(e\)=>\{knPfViewState\.statusFilter=e\.target\.value;rerender\(\);\};/);
 });
 
-test("GATE 4C-C: Compact render reads its filter from knPfViewState, not the DOM (field renamed to statusFilter by GATE 4C-C.2)", () => {
+test("GATE 4C-C: Compact render reads its filter from knPfViewState, not the DOM (field renamed to statusFilter by GATE 4C-C.2; wiring moved to the shared helper by GATE 4C-D.2)", () => {
   assert.match(compactFnSrc, /knowledgeParticipantsMarkup\(participants,participantCounts,session,knPfViewState\.statusFilter,knPfViewState\.classFilter\)/);
-  assert.match(compactFnSrc, /\$\("#knPfFilter"\)\.value=knPfViewState\.statusFilter;/);
+  assert.match(wireSrc, /statusSel\.value=knPfViewState\.statusFilter;/);
   // the old DOM-read pattern must be gone
   assert.doesNotMatch(compactFnSrc, /\$\("#knPfFilter"\)\?\.value/);
+  assert.doesNotMatch(wireSrc, /\$\("#knPfFilter"\)\?\.value/);
 });
 
 // ===================================================================================
@@ -86,9 +93,10 @@ test("GATE 4C-C: Compact render reads its filter from knPfViewState, not the DOM
 // narrower true statement left to make here. See test/gate4c-c2/filter-contract.test.mjs for
 // the up-to-date, in-depth coverage of this function's actual current behavior.
 
-test("GATE 4C-C: loadParticipants() and knowledgeExportParticipants() unchanged since 4C-B (Refresh/CSV semantics frozen)", () => {
-  const loadSrc = sliceBetween(source, "async function loadParticipants(){", "\n  }", "loadParticipants()") + "\n  }";
-  const checkpointLoad = sliceBetween(checkpointSource, "async function loadParticipants(){", "\n  }", "checkpoint loadParticipants()") + "\n  }";
+test("GATE 4C-C: knowledgeExportParticipants() unchanged since 4C-B; loadParticipants()'s fetch logic unchanged (only its final dispatch line legitimately changed, by GATE 4C-D.2)", () => {
+  const commonTail = "    }\n    participantsLoading=false;\n";
+  const loadSrc = sliceBetween(source, "async function loadParticipants(){", commonTail, "loadParticipants()") + commonTail;
+  const checkpointLoad = sliceBetween(checkpointSource, "async function loadParticipants(){", commonTail, "checkpoint loadParticipants()") + commonTail;
   assert.equal(loadSrc, checkpointLoad);
   const exportSrc = sliceBetween(source, "async function knowledgeExportParticipants(){", "\n  }", "knowledgeExportParticipants()") + "\n  }";
   const checkpointExport = sliceBetween(checkpointSource, "async function knowledgeExportParticipants(){", "\n  }", "checkpoint knowledgeExportParticipants()") + "\n  }";

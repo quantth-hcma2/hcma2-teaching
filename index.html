@@ -5140,7 +5140,9 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
     if($("#knProgressText"))$("#knProgressText").textContent=pct+"%";if($("#knProgressBar"))$("#knProgressBar").style.width=pct+"%";
     // GATE 3D: chỉ TÍNH LẠI tiến độ trên hồ sơ đã có sẵn trong bộ nhớ — không đọc lại
     // participants (PII) chỉ vì submissions vừa thay đổi.
-    if(session&&session.collectParticipantProfile===true&&participants!==null)knowledgeRenderParticipantsCompact();
+    // GATE 4C-D.2: mode-aware — if Expanded is the currently visible view, this live count
+    // update must reach it too, not just the hidden Compact card underneath.
+    if(session&&session.collectParticipantProfile===true&&participants!==null)knowledgeRenderParticipantsCurrentMode();
   },e=>toast(mapError(e),"err")));
   function knowledgeRenderDashboard(){
     const url=knowledgeJoinUrl(session.joinCode);
@@ -5148,7 +5150,7 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
       <div class="grid grid-3"><div class="card knowledge-stat"><strong id="knParticipants">0</strong><span>Học viên</span></div><div class="card knowledge-stat"><strong id="knSubmissions">0</strong><span>Tình huống</span></div><div class="card knowledge-stat"><strong id="knProgressText">0%</strong><span>Mục tiêu ${Number(session.targetSubmissions||1500)}</span></div></div>
       <div class="card"><div class="knowledge-progress"><span id="knProgressBar" style="width:0"></span></div></div>
       <div class="grid grid-2 mt-14"><div class="card"><h3>QR / liên kết công khai</h3><div class="flex gap-14" style="align-items:center;flex-wrap:wrap"><div class="pres-qr-wrap clickable" id="knQrWrap" role="button" tabindex="0" aria-label="Phóng to mã QR"><div id="knQr"></div><div class="pres-qr-hint">🔍 Nhấp để phóng to mã QR</div></div><div style="flex:1;min-width:220px"><input id="knUrl" value="${esc(url)}" readonly><div class="flex gap-8 mt-8"><button class="btn btn-sm" id="knCopy">SAO CHÉP</button><button class="btn btn-sm btn-outline" id="knSessionInfo">SỬA PHIÊN</button><button class="btn btn-sm ${session.status==='open'?'btn-danger':'btn-ok'}" id="knToggle">${session.status==='open'?'ĐÓNG PHIÊN':'MỞ LẠI'}</button></div></div></div></div>
-      ${session.collectParticipantProfile===true?`<div class="card mt-14" id="knPfCard"><div class="section-title"><div><h3>👥 Người tham gia</h3><p class="mut">Thông tin cá nhân chỉ tải khi mở mục này — không cập nhật theo thời gian thực; bấm "Làm mới danh sách" để lấy dữ liệu mới nhất.</p></div></div><div id="knPfWrap" class="kn-pf-compact"><div class="center-screen"><span class="spinner"></span></div></div></div>`:""}
+      ${session.collectParticipantProfile===true?`<div class="card mt-14" id="knPfCard"><div class="section-title"><div><h3>👥 Người tham gia</h3><p class="mut">Thông tin cá nhân chỉ tải khi mở mục này — không cập nhật theo thời gian thực; bấm "Làm mới danh sách" để lấy dữ liệu mới nhất.</p></div><button class="btn btn-outline btn-sm" id="knPfExpand">⤢ MỞ RỘNG</button></div><div id="knPfWrap" class="kn-pf-compact"><div class="center-screen"><span class="spinner"></span></div></div></div>`:""}
       <div class="card"><h3>🤖 AI Analysis — Phase 2</h3><p class="mut">AI đọc bản sao theo lô; dữ liệu gốc không bị sửa hoặc ghi đè.</p><div class="flex gap-8" style="flex-wrap:wrap"><button class="btn" id="knAiRun">PHÂN TÍCH BẰNG AI</button><button class="btn btn-outline" id="knAiRetry" style="display:none">TIẾP TỤC / THỬ LẠI</button><button class="btn btn-outline" id="knAiJson" disabled>XUẤT AI JSON</button><button class="btn btn-outline" id="knAiCsv" disabled>XUẤT AI CSV</button></div><button class="btn btn-outline mt-8" id="knCsv">XUẤT CSV DỮ LIỆU GỐC</button><div id="knAiStatus" class="mt-14"><span class="mut small">Chưa có bản phân tích.</span></div></div></div>
       <div class="card second-brain-card mt-14"><div class="second-brain-head"><span class="second-brain-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 4.5a3 3 0 0 0-3 3v.3A3.2 3.2 0 0 0 4.5 10.8a3.2 3.2 0 0 0 1 5.4A3 3 0 0 0 8.5 20a2.7 2.7 0 0 0 2.5-1.6"/><path d="M15 4.5a3 3 0 0 1 3 3v.3a3.2 3.2 0 0 1 1.5 3 3.2 3.2 0 0 1-1 5.4A3 3 0 0 1 15.5 20a2.7 2.7 0 0 1-2.5-1.6"/><path d="M12 4.5v14"/><circle cx="7.2" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="16.8" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="14.5" r=".9" fill="currentColor" stroke="none"/><circle cx="16" cy="14.5" r=".9" fill="currentColor" stroke="none"/></svg></span><div><h3>SECOND BRAIN LIVE</h3><p>Trình chiếu không gian tri thức được hình thành theo thời gian thực</p></div></div><a class="btn btn-lg" href="https://brain.quantth.vn/knowledge-wall.html" target="_blank" rel="noopener noreferrer">MỞ SECOND BRAIN LIVE<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></svg><span class="sr-only"> (mở trong tab mới)</span></a></div>
       <div id="knAiDashboard" class="mt-14"></div>
@@ -5161,6 +5163,9 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
     $("#knCopy").onclick=()=>navigator.clipboard.writeText(url).then(()=>toast("Đã sao chép liên kết.","ok")).catch(()=>toast("Hãy sao chép liên kết trong ô.","warn"));
     $("#knSessionInfo").onclick=()=>openSessionInfoEditor("knowledgeSessions",sessionId);
     $("#knToggle").onclick=async()=>{try{await updateDoc(sRef,{status:session.status==="open"?"closed":"open",updatedAt:serverTimestamp()});toast("Đã cập nhật trạng thái phiên.","ok");}catch(e){toast(mapError(e),"err");}};
+    // GATE 4C-D.2: Expanded's own action button — lives in the static card header (outside
+    // #knPfWrap, so it survives every Compact re-render) alongside the session's other actions.
+    if($("#knPfExpand"))$("#knPfExpand").onclick=knowledgeRenderParticipantsExpanded;
     // GATE 3D: chỉ tải participants (PII) khi phiên có bật thu thập hồ sơ — không bao giờ
     // với phiên cũ/OFF. Tải lại (getDocs on-demand) chỉ khi chưa có sẵn trong bộ nhớ, để
     // việc phiên tự re-render (vd đổi trạng thái) không gây đọc lại PII không cần thiết.
@@ -5231,7 +5236,10 @@ knowledgeRenderAi();
       return;
     }
     participantsLoading=false;
-    knowledgeRenderParticipantsCompact();
+    // GATE 4C-D.2: mode-aware dispatch — Refresh must update whichever view (Compact or
+    // Expanded) is currently visible, without closing/reopening Expanded and without
+    // resetting either filter. The getDocs() fetch above is byte-identical to before this gate.
+    knowledgeRenderParticipantsCurrentMode();
   }
   // GATE 4C-A: pure markup builder, extracted unchanged from the previous single
   // knowledgeRenderParticipants() so later gates (Expanded/Fullscreen) can mount the exact
@@ -5268,22 +5276,60 @@ knowledgeRenderAi();
         ${filtered.length?filtered.map(r=>`<tr>${activeFields.map(f=>`<td>${esc(r[f]||"—")}</td>`).join("")}<td>${r._count}/${minPer}</td><td>${r._complete?"Hoàn thành":"Chưa hoàn thành"}</td></tr>`).join(""):`<tr><td colspan="${activeFields.length+2}">Không có người tham gia phù hợp.</td></tr>`}
       </tbody></table></div>`;
   }
-  // GATE 4C-A: Compact mount — identical DOM target (#knPfWrap) and identical event-wiring
-  // to the previous knowledgeRenderParticipants(), now built from the shared markup builder.
-  // GATE 4C-C.2: statusFilter/classFilter are read from/written to knPfViewState instead of
-  // the DOM, so every re-render path (either filter changing, Refresh, submissions-driven auto
-  // re-render) shows the same persisted selections — filtering semantics unchanged, just two
-  // independent dimensions now. #knPfClassFilter may not exist (hidden when there's no
-  // meaningful class list), so its wiring is guarded.
+  // GATE 4C-D.2: shared control-wiring helper for both Compact and Expanded. HOST-SCOPED
+  // (host.querySelector, never the document-global $()) — required because when Expanded is
+  // open, Compact's #knPfWrap is still in the DOM (just visually behind the modal backdrop),
+  // so a document-global lookup could silently bind to the wrong (invisible) copy of these
+  // same-id controls. `rerender` is whichever mount function (Compact or Expanded) owns this
+  // host, so a filter change always re-renders the correct, currently-visible view.
+  function wireParticipantControls(host,rerender){
+    const statusSel=host.querySelector('#knPfFilter');
+    if(statusSel){
+      statusSel.value=knPfViewState.statusFilter;
+      statusSel.onchange=(e)=>{knPfViewState.statusFilter=e.target.value;rerender();};
+    }
+    const classSel=host.querySelector('#knPfClassFilter');
+    if(classSel){
+      classSel.value=knPfViewState.classFilter;
+      classSel.onchange=(e)=>{knPfViewState.classFilter=e.target.value;rerender();};
+    }
+    const refreshBtn=host.querySelector('#knPfRefresh');
+    if(refreshBtn)refreshBtn.onclick=()=>{if(!participantsLoading)loadParticipants();};
+    const exportBtn=host.querySelector('#knPfExport');
+    if(exportBtn)exportBtn.onclick=knowledgeExportParticipants;
+  }
+  // GATE 4C-A: Compact mount — identical DOM target (#knPfWrap), built from the shared markup
+  // builder. GATE 4C-D.2: wiring now goes through the shared, host-scoped wireParticipantControls().
   function knowledgeRenderParticipantsCompact(){
     const wrap=$("#knPfWrap");if(!wrap||session.collectParticipantProfile!==true||participants===null)return;
     wrap.innerHTML=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter);
-    $("#knPfFilter").value=knPfViewState.statusFilter;
-    $("#knPfFilter").onchange=(e)=>{knPfViewState.statusFilter=e.target.value;knowledgeRenderParticipantsCompact();};
-    const classSel=$("#knPfClassFilter");
-    if(classSel){classSel.value=knPfViewState.classFilter;classSel.onchange=(e)=>{knPfViewState.classFilter=e.target.value;knowledgeRenderParticipantsCompact();};}
-    $("#knPfRefresh").onclick=()=>{if(!participantsLoading)loadParticipants();};
-    $("#knPfExport").onclick=knowledgeExportParticipants;
+    wireParticipantControls(wrap,knowledgeRenderParticipantsCompact);
+  }
+  // GATE 4C-D.2: Expanded mount — reuses the existing generic openModal(html, true) and the
+  // exact same knowledgeParticipantsMarkup() output as Compact (no 320px kn-pf-compact cap, so
+  // it naturally gets the modal's own max-height:90vh/overflow:auto instead). modalCloseCleanup
+  // is registered so EVERY close path (backdrop click, an explicit close button here, or another
+  // openModal() call replacing this one) resets knPfViewState.mode back to 'compact' — the same
+  // pattern already used by openSessionInfoEditor for its own modal-scoped teardown.
+  function knowledgeRenderParticipantsExpanded(){
+    if(session.collectParticipantProfile!==true||participants===null)return;
+    const tableHtml=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter);
+    const host=openModal(`<div class="section-title"><h3>👥 Người tham gia</h3><button class="btn btn-ghost btn-sm" id="knPfExpandClose">✕ Đóng</button></div>${tableHtml}`,true);
+    knPfViewState.mode='expanded';
+    modalCloseCleanup=()=>{knPfViewState.mode='compact';};
+    const modalEl=host.querySelector('.modal');
+    if(!modalEl)return;
+    const closeBtn=modalEl.querySelector('#knPfExpandClose');
+    if(closeBtn)closeBtn.onclick=closeModal;
+    wireParticipantControls(modalEl,knowledgeRenderParticipantsExpanded);
+  }
+  // GATE 4C-D.2: the one place that needs to know which view is currently visible — used only
+  // by re-render triggers that fire regardless of which mode is active (Refresh, the live
+  // submissions-count listener). Filter dropdown onchange handlers call their own mount function
+  // directly instead, since they already know which host they're wired to.
+  function knowledgeRenderParticipantsCurrentMode(){
+    if(knPfViewState.mode==='expanded')knowledgeRenderParticipantsExpanded();
+    else knowledgeRenderParticipantsCompact();
   }
   // GATE 3D (mục 9): trung hòa formula injection — giá trị bắt đầu bằng = + - @ được
   // thêm dấu ' phía trước để Excel/Sheets luôn hiểu là văn bản, không bao giờ thực thi

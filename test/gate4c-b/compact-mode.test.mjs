@@ -29,7 +29,10 @@ function sliceBetween(src, startMarker, endMarker, label) {
 
 const escSrc = sliceBetween(source, "function esc(s){", "\n", "esc()");
 const labelsSrc = sliceBetween(source, "const KN_PARTICIPANT_FIELD_LABELS=", ";", "KN_PARTICIPANT_FIELD_LABELS") + ";";
-const markupSrc = sliceBetween(source, "function knowledgeParticipantsMarkup(", "\n  }\n  // GATE 4C-A: Compact mount", "knowledgeParticipantsMarkup()") + "\n  }";
+// Bounded by a stable CODE token (the function's own last statement), not a neighboring
+// comment, so this never silently over-captures if a nearby comment is reworded (as happened
+// once GATE 4C-D.2 inserted wireParticipantControls() with its own leading comment).
+const markupSrc = sliceBetween(source, "function knowledgeParticipantsMarkup(", "</tbody></table></div>`;\n  }", "knowledgeParticipantsMarkup()") + "</tbody></table></div>`;\n  }";
 const compactFnSrc = sliceBetween(source, "function knowledgeRenderParticipantsCompact(", "\n  }", "knowledgeRenderParticipantsCompact()") + "\n  }";
 const cssBlock = sliceBetween(source, ":root{", "\n/* Badges */", "root CSS block");
 
@@ -46,23 +49,24 @@ const cssBlock = sliceBetween(source, ":root{", "\n/* Badges */", "root CSS bloc
 // test/gate4c-c2/filter-contract.test.mjs for the up-to-date, in-depth coverage of this
 // function's actual current behavior.
 
-test("GATE 4C-B: knowledgeRenderParticipantsCompact()'s Refresh/Export wiring unchanged since 4C-A checkpoint", () => {
-  // Narrowed at GATE 4C-C: that gate's own explicitly authorized scope was to move this
-  // function's filter-handling lines into knPfViewState (see test/gate4c-c/view-state.test.mjs
-  // for the up-to-date guard on that), so whole-function byte-identity against the 4C-A
-  // checkpoint is no longer the correct invariant here. What 4C-B itself actually touched
-  // (and must stay true) is that it never touched Refresh/Export — verify only that.
-  assert.match(compactFnSrc, /\$\("#knPfRefresh"\)\.onclick=\(\)=>\{if\(!participantsLoading\)loadParticipants\(\);\};/);
-  assert.match(compactFnSrc, /\$\("#knPfExport"\)\.onclick=knowledgeExportParticipants;/);
+test("GATE 4C-B: knowledgeRenderParticipantsCompact() still wires Refresh/Export (now via the shared wireParticipantControls() helper introduced by GATE 4C-D.2)", () => {
+  // Narrowed again at GATE 4C-D.2: that gate factored the inline Refresh/Export wiring into a
+  // shared helper reused by Expanded — the exact behavior is now verified in depth by
+  // test/gate4c-d2/expanded-mode.test.mjs. What 4C-B itself actually touched (and must stay
+  // true) is that Compact still ends up correctly wired, through whatever indirection exists now.
+  assert.match(compactFnSrc, /wireParticipantControls\(wrap,knowledgeRenderParticipantsCompact\)/);
 });
 
 // ===================================================================================
 // 6/17 — CSV export and 16 — loadParticipants(): must still be untouched since origin/main
 // ===================================================================================
 
-test("GATE 4C-B: loadParticipants() and knowledgeExportParticipants() still byte-identical to the 4C-A-verified frozen baseline", () => {
-  const loadSrc = sliceBetween(source, "async function loadParticipants(){", "\n  }", "loadParticipants()") + "\n  }";
-  const checkpointLoad = sliceBetween(checkpointSource, "async function loadParticipants(){", "\n  }", "checkpoint loadParticipants()") + "\n  }";
+test("GATE 4C-B: knowledgeExportParticipants() still byte-identical to the 4C-A-verified frozen baseline; loadParticipants()'s fetch logic unchanged (only its final dispatch line legitimately changed, by GATE 4C-D.2)", () => {
+  // Bounded by the catch-block-close + final participantsLoading=false reset — the last line
+  // every version of loadParticipants() has always shared before its dispatch call.
+  const commonTail = "    }\n    participantsLoading=false;\n";
+  const loadSrc = sliceBetween(source, "async function loadParticipants(){", commonTail, "loadParticipants()") + commonTail;
+  const checkpointLoad = sliceBetween(checkpointSource, "async function loadParticipants(){", commonTail, "checkpoint loadParticipants()") + commonTail;
   assert.equal(loadSrc, checkpointLoad);
   const exportSrc = sliceBetween(source, "async function knowledgeExportParticipants(){", "\n  }", "knowledgeExportParticipants()") + "\n  }";
   const checkpointExport = sliceBetween(checkpointSource, "async function knowledgeExportParticipants(){", "\n  }", "checkpoint knowledgeExportParticipants()") + "\n  }";
@@ -124,11 +128,11 @@ test("GATE 4C-B: empty state (0 participants) still renders correctly through th
 // 12/13/14/15 — no future Item 4 controls exist yet
 // ===================================================================================
 
-test("GATE 4C-B: no Expanded, Fullscreen, or Search exist yet", () => {
-  assert.doesNotMatch(source, /MỞ RỘNG/);
+test("GATE 4C-B: no Fullscreen or Search exist yet", () => {
   assert.doesNotMatch(source, /TOÀN MÀN HÌNH/);
   assert.doesNotMatch(source, /is-fullscreen/);
-  // knPfViewState: out of scope for 4C-B itself (still true), but GATE 4C-C later added it as
-  // its own authorized shared UI state foundation — see test/gate4c-c/view-state.test.mjs.
+  // knPfViewState (4C-C) and MỞ RỘNG/Expanded (4C-D.2): out of scope for 4C-B itself (still
+  // true), but both were later added by their own authorized gates — see
+  // test/gate4c-d2/expanded-mode.test.mjs for the up-to-date guard on what's still not built.
   assert.doesNotMatch(source, /knPfSearch/);
 });

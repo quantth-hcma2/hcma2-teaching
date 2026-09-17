@@ -28,6 +28,8 @@ function sliceBetween(src, startMarker, endMarker, label) {
 
 const escSrc = sliceBetween(source, "function esc(s){", "\n", "esc()");
 const labelsSrc = sliceBetween(source, "const KN_PARTICIPANT_FIELD_LABELS=", ";", "KN_PARTICIPANT_FIELD_LABELS") + ";";
+const normalizeSearchSrc = sliceBetween(source, "function knPfNormalizeSearch(s){", "\n}", "knPfNormalizeSearch") + "\n}";
+const searchableTextSrc = sliceBetween(source, "function knPfSearchableText(r){", "\n}", "knPfSearchableText") + "\n}";
 // Bounded by stable CODE tokens (the function's own last statement), not surrounding comment
 // text, so these extractions never silently drift if a neighboring comment is reworded.
 const markupSrc = sliceBetween(source, "function knowledgeParticipantsMarkup(", "</tbody></table></div>`;\n  }", "knowledgeParticipantsMarkup()") + "</tbody></table></div>`;\n  }";
@@ -51,9 +53,34 @@ test("GATE 4C-D2: knPfViewState shape unchanged (mode/fullscreen/statusFilter/cl
 // getDocs() fetch inside loadParticipants() must be byte-identical to the production baseline
 // ===================================================================================
 
-test("GATE 4C-D2: knowledgeParticipantsMarkup() byte-identical to production baseline (STATUS AND CLASS semantics unchanged)", () => {
+test("GATE 4C-F.4 RECONCILED (was: byte-identical to baseline; category B): knowledgeParticipantsMarkup() equals baseline once EXACTLY the known, frozen GATE 4C-F.2 Search V1 additions are stripped back out — proving nothing else about STATUS/CLASS semantics changed", () => {
   const baselineMarkup = sliceBetween(baselineSource, "function knowledgeParticipantsMarkup(", "</tbody></table></div>`;\n  }", "baseline markup") + "</tbody></table></div>`;\n  }";
-  assert.equal(markupSrc, baselineMarkup);
+  const knownSearchAdditions = [
+    [
+      "function knowledgeParticipantsMarkup(participantsArg,countsArg,sessionArg,statusFilter,classFilter,searchQuery){",
+      "function knowledgeParticipantsMarkup(participantsArg,countsArg,sessionArg,statusFilter,classFilter){",
+    ],
+    [
+      '    // GATE 4C-F.2: Search V1 — simple normalized substring only, deliberately NOT tokenized (a\n' +
+      '    // reordered/partial-token query is not required to match; see test/gate4c-f2 for the frozen\n' +
+      '    // contract). Derived visible-row predicate only — never mutates participantsArg/rows/counts.\n' +
+      '    const normalizedQuery=knPfNormalizeSearch(searchQuery);\n' +
+      '    const filtered=rows.filter(r=>{\n' +
+      '      const searchOk=normalizedQuery===""||knPfSearchableText(r).includes(normalizedQuery);\n',
+      '    const filtered=rows.filter(r=>{\n',
+    ],
+    ["      return searchOk&&statusOk&&classOk;\n", "      return statusOk&&classOk;\n"],
+    [
+      '<input type="text" id="knPfSearch" placeholder="Tìm theo họ tên hoặc lớp..." style="max-width:220px"><select id="knPfFilter">',
+      '<select id="knPfFilter">',
+    ],
+  ];
+  let stripped = markupSrc;
+  for (const [withSearch, withoutSearch] of knownSearchAdditions) {
+    assert.ok(stripped.includes(withSearch), `expected known Search addition not found verbatim: ${JSON.stringify(withSearch.slice(0, 60))}...`);
+    stripped = stripped.split(withSearch).join(withoutSearch);
+  }
+  assert.equal(stripped, baselineMarkup, "after stripping exactly the known Search additions, the function must be byte-identical to baseline (no other change)");
 });
 
 test("GATE 4C-D2: knowledgeExportParticipants() byte-identical to production baseline (full-dataset CSV unchanged)", () => {
@@ -92,7 +119,7 @@ test("GATE 4C-D2: knowledgeRenderParticipantsExpanded() uses openModal(html, tru
 });
 
 test("GATE 4C-D2: knowledgeRenderParticipantsExpanded() reuses knowledgeParticipantsMarkup(...)", () => {
-  assert.match(expandedFnSrc, /knowledgeParticipantsMarkup\(participants,participantCounts,session,knPfViewState\.statusFilter,knPfViewState\.classFilter\)/);
+  assert.match(expandedFnSrc, /knowledgeParticipantsMarkup\(participants,participantCounts,session,knPfViewState\.statusFilter,knPfViewState\.classFilter,knPfViewState\.search\)/);
 });
 
 test("GATE 4C-D2: opening Expanded introduces zero Firestore reads/writes/listeners", () => {
@@ -188,7 +215,11 @@ test("GATE 4C-D2: no Search, or pagination/chunking/virtualization implementatio
   // gate's own diff never introduced it), but GATE 4C-E later added it as its own authorized
   // gate — see test/gate4c-e/fullscreen.test.mjs for the up-to-date guard on what's still not
   // built (Search) and on Fullscreen's own approved scope/ownership rules.
-  assert.doesNotMatch(source, /knPfSearch/);
+  // GATE 4C-F.4 RECONCILED (per GATE 4C-F.2R-approved design, category A): knPfSearch is now the
+  // authorized GATE 4C-F.2 Search V1 implementation (frozen contract + full coverage in
+  // test/gate4c-f2/search.test.mjs) — its presence is no longer a violation of this gate's own
+  // scope. Every OTHER protection this assertion sat alongside (pagination/chunking/virtualization,
+  // etc., where present in this test) is left fully intact below.
   assert.doesNotMatch(expandedFnSrc, /requestAnimationFrame|IntersectionObserver|chunk|virtualiz|pagina/i);
 });
 
@@ -232,7 +263,7 @@ test("GATE 4C-D2: Group Discussion / Classroom Presentation / Timer production f
 function buildMarkupFn() {
   const sandbox = {};
   vm.createContext(sandbox);
-  vm.runInContext(`${escSrc}\n${labelsSrc}\n${markupSrc}\nglobalThis.__markup = knowledgeParticipantsMarkup;`, sandbox);
+  vm.runInContext(`${escSrc}\n${labelsSrc}\n${normalizeSearchSrc}\n${searchableTextSrc}\n${markupSrc}\nglobalThis.__markup = knowledgeParticipantsMarkup;`, sandbox);
   return sandbox.__markup;
 }
 

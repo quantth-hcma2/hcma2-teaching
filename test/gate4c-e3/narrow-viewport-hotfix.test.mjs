@@ -119,8 +119,105 @@ test("GATE 4C-E.3: global input/select width:100% rule is byte-identical to base
 // reads/listeners (all of it is JS, none of it touched).
 // ===================================================================================
 
-test("GATE 4C-E.3: the entire JS module script is byte-identical to the pre-hotfix baseline (pure-CSS hotfix, zero JS change — this alone preserves ESC/Close/Refresh/CSV/Firestore-call-count contracts)", () => {
-  assert.equal(scriptSrc, baselineScriptSrc);
+test("GATE 4C-F.4 RECONCILED (was: entire JS byte-identical to baseline; category F): the JS module script equals baseline once EXACTLY the frozen, authorized GATE 4C-F.2 Search V1 delta is reversed back out — proving no OTHER (unauthorized) JS change exists beyond the two independently-approved, independently-tested features", () => {
+  const knownSearchAdditions = [
+    [
+      'const KN_PARTICIPANT_FIELD_LABELS={fullName:"Họ và tên",className:"Lớp",email:"Email",phone:"Số điện thoại"};\n' +
+      '// GATE 4C-F.2: Search V1 normalization — case/diacritic-insensitive, deterministic, never\n' +
+      '// touches stored participant data or CSV values. NFD decomposition + combining-mark strip\n' +
+      '// handles standard Vietnamese tone marks; đ/Đ is a separate codepoint (doesn\'t decompose via\n' +
+      '// NFD) so it needs its own explicit replace.\n' +
+      'function knPfNormalizeSearch(s){\n' +
+      '  return String(s==null?"":s).trim().toLowerCase().normalize("NFD").replace(/[\\u0300-\\u036f]/g,"").replace(/đ/g,"d");\n' +
+      '}\n' +
+      'function knPfSearchableText(r){\n' +
+      '  return knPfNormalizeSearch(r.fullName)+" "+knPfNormalizeSearch(r.className);\n' +
+      '}\n',
+      'const KN_PARTICIPANT_FIELD_LABELS={fullName:"Họ và tên",className:"Lớp",email:"Email",phone:"Số điện thoại"};\n',
+    ],
+    [
+      "let knPfFullscreenEscHandler=null;\n" +
+      "  // GATE 4C-F.2: the one pending Search debounce timer, if any. Unconditionally cancelled at the\n" +
+      "  // top of wireParticipantControls() (which runs on every participant rerender, from any trigger)\n" +
+      "  // so a stale timer can never later fire against a mode/host that's no longer current.\n" +
+      "  let knPfSearchDebounceTimer=null;\n",
+      "let knPfFullscreenEscHandler=null;\n",
+    ],
+    [
+      "function knowledgeParticipantsMarkup(participantsArg,countsArg,sessionArg,statusFilter,classFilter,searchQuery){",
+      "function knowledgeParticipantsMarkup(participantsArg,countsArg,sessionArg,statusFilter,classFilter){",
+    ],
+    [
+      '    // GATE 4C-F.2: Search V1 — simple normalized substring only, deliberately NOT tokenized (a\n' +
+      '    // reordered/partial-token query is not required to match; see test/gate4c-f2 for the frozen\n' +
+      '    // contract). Derived visible-row predicate only — never mutates participantsArg/rows/counts.\n' +
+      '    const normalizedQuery=knPfNormalizeSearch(searchQuery);\n' +
+      '    const filtered=rows.filter(r=>{\n' +
+      '      const searchOk=normalizedQuery===""||knPfSearchableText(r).includes(normalizedQuery);\n',
+      '    const filtered=rows.filter(r=>{\n',
+    ],
+    ["      return searchOk&&statusOk&&classOk;\n", "      return statusOk&&classOk;\n"],
+    [
+      '<input type="text" id="knPfSearch" placeholder="Tìm theo họ tên hoặc lớp..." style="max-width:220px"><select id="knPfFilter">',
+      '<select id="knPfFilter">',
+    ],
+    [
+      "  function wireParticipantControls(host,rerender){\n" +
+      "    // GATE 4C-F.2: unconditionally cancel any pending Search debounce at the very top of every\n" +
+      "    // participant rerender (this function runs on every one: Compact, Expanded, mode toggle,\n" +
+      "    // Refresh, filter change, submissions rerender). A stale timer can therefore never later fire\n" +
+      "    // against a mode/host that is no longer current — it is superseded by whatever fresh listener\n" +
+      "    // this same call is about to attach below.\n" +
+      "    if(knPfSearchDebounceTimer){clearTimeout(knPfSearchDebounceTimer);knPfSearchDebounceTimer=null;}\n" +
+      "    const searchInput=host.querySelector('#knPfSearch');\n" +
+      "    if(searchInput){\n" +
+      "      searchInput.value=knPfViewState.search;\n" +
+      "      searchInput.oninput=(e)=>{\n" +
+      "        knPfViewState.search=e.target.value;\n" +
+      "        const selStart=e.target.selectionStart,selEnd=e.target.selectionEnd;\n" +
+      "        if(knPfSearchDebounceTimer)clearTimeout(knPfSearchDebounceTimer);\n" +
+      "        knPfSearchDebounceTimer=setTimeout(()=>{\n" +
+      "          knPfSearchDebounceTimer=null;\n" +
+      "          rerender();\n" +
+      "          // Compact's `host` (its persistent #knPfWrap node) is never replaced across rerenders\n" +
+      "          // (knowledgeRenderParticipantsCompact() only ever does wrap.innerHTML=... on the SAME\n" +
+      "          // node), so it is still valid here and needs no re-lookup. Expanded/Fullscreen is the\n" +
+      "          // one case that DOES need a fresh query: rerender() there replaces #globalModal's\n" +
+      "          // entire subtree via openModal(), so the closure-captured `host` (the previous .modal\n" +
+      "          // element) is now detached and can never be focused again. This mirrors\n" +
+      "          // knowledgeRenderParticipantsCurrentMode()'s own mode-based dispatch.\n" +
+      "          const liveHost=knPfViewState.mode==='expanded'?document.querySelector('#globalModal .modal'):host;\n" +
+      "          const freshInput=liveHost?liveHost.querySelector('#knPfSearch'):null;\n" +
+      "          if(freshInput){\n" +
+      "            freshInput.focus();\n" +
+      "            if(selStart!=null&&selEnd!=null){try{freshInput.setSelectionRange(selStart,selEnd);}catch(err){}}\n" +
+      "          }\n" +
+      "        },150);\n" +
+      "      };\n" +
+      "    }\n" +
+      "    const statusSel=host.querySelector('#knPfFilter');",
+      "  function wireParticipantControls(host,rerender){\n" +
+      "    const statusSel=host.querySelector('#knPfFilter');",
+    ],
+    [
+      "if(refreshBtn)refreshBtn.onclick=()=>{if(!participantsLoading){if(knPfSearchDebounceTimer){clearTimeout(knPfSearchDebounceTimer);knPfSearchDebounceTimer=null;}loadParticipants();}};",
+      "if(refreshBtn)refreshBtn.onclick=()=>{if(!participantsLoading)loadParticipants();};",
+    ],
+    [
+      "wrap.innerHTML=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter,knPfViewState.search);",
+      "wrap.innerHTML=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter);",
+    ],
+    [
+      "const tableHtml=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter,knPfViewState.search);",
+      "const tableHtml=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter);",
+    ],
+  ];
+  let stripped = scriptSrc;
+  for (const [withSearch, withoutSearch] of knownSearchAdditions) {
+    assert.ok(stripped.includes(withSearch), `expected known Search addition not found verbatim: ${JSON.stringify(withSearch.slice(0, 80))}...`);
+    stripped = stripped.split(withSearch).join(withoutSearch);
+  }
+  assert.equal(stripped, baselineScriptSrc, "after reversing exactly the known Search delta, the JS must be byte-identical to the pre-hotfix, pre-Search baseline (no other JS change)");
 });
 
 // ===================================================================================
@@ -128,10 +225,10 @@ test("GATE 4C-E.3: the entire JS module script is byte-identical to the pre-hotf
 // never absorb, the separate uncommitted Search V1 candidate)
 // ===================================================================================
 
-test("GATE 4C-E.3: no Search implementation exists in this worktree (knPfSearch absent everywhere)", () => {
-  assert.doesNotMatch(source, /knPfSearch/);
-  assert.doesNotMatch(source, /knPfNormalizeSearch/);
-  assert.doesNotMatch(source, /knPfSearchableText/);
+test("GATE 4C-F.4 RECONCILED (was: no Search implementation exists in this worktree; category E): knPfSearch is now the authorized GATE 4C-F.2 Search V1 implementation (frozen contract + full coverage in test/gate4c-f2/search.test.mjs) — its presence here is expected, not a hotfix-scope violation", () => {
+  assert.match(source, /knPfSearch/);
+  assert.match(source, /knPfNormalizeSearch/);
+  assert.match(source, /knPfSearchableText/);
 });
 
 // ===================================================================================

@@ -29,6 +29,8 @@ function sliceBetween(src, startMarker, endMarker, label) {
 
 const escSrc = sliceBetween(source, "function esc(s){", "\n", "esc()");
 const labelsSrc = sliceBetween(source, "const KN_PARTICIPANT_FIELD_LABELS=", ";", "KN_PARTICIPANT_FIELD_LABELS") + ";";
+const normalizeSearchSrc = sliceBetween(source, "function knPfNormalizeSearch(s){", "\n}", "knPfNormalizeSearch") + "\n}";
+const searchableTextSrc = sliceBetween(source, "function knPfSearchableText(r){", "\n}", "knPfSearchableText") + "\n}";
 // Bounded by a stable CODE token (the function's own last statement), not a neighboring
 // comment, so this never silently over-captures if a nearby comment is reworded (as happened
 // once GATE 4C-D.2 inserted wireParticipantControls() with its own leading comment).
@@ -115,7 +117,7 @@ test("GATE 4C-B: sticky header is scoped to .kn-pf-compact only (requirement 5/9
 function buildMarkupFn() {
   const sandbox = {};
   vm.createContext(sandbox);
-  vm.runInContext(`${escSrc}\n${labelsSrc}\n${markupSrc}\nglobalThis.__markup = knowledgeParticipantsMarkup;`, sandbox);
+  vm.runInContext(`${escSrc}\n${labelsSrc}\n${normalizeSearchSrc}\n${searchableTextSrc}\n${markupSrc}\nglobalThis.__markup = knowledgeParticipantsMarkup;`, sandbox);
   return sandbox.__markup;
 }
 
@@ -134,5 +136,9 @@ test("GATE 4C-B: no Search exists yet", () => {
   // knPfViewState (4C-C), MỞ RỘNG/Expanded (4C-D.2), and TOÀN MÀN HÌNH/Fullscreen (4C-E): out of
   // scope for 4C-B itself (still true), but each was later added by its own authorized gate —
   // see test/gate4c-e/fullscreen.test.mjs for the up-to-date guard on what's still not built.
-  assert.doesNotMatch(source, /knPfSearch/);
+  // GATE 4C-F.4 RECONCILED (per GATE 4C-F.2R-approved design, category A): knPfSearch is now the
+  // authorized GATE 4C-F.2 Search V1 implementation (frozen contract + full coverage in
+  // test/gate4c-f2/search.test.mjs) — its presence is no longer a violation of this gate's own
+  // scope. Every OTHER protection this assertion sat alongside (pagination/chunking/virtualization,
+  // etc., where present in this test) is left fully intact below.
 });

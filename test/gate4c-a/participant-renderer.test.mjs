@@ -27,6 +27,8 @@ function sliceBetween(src, startMarker, endMarker, label) {
 
 const escSrc = sliceBetween(source, "function esc(s){", "\n", "esc()");
 const labelsSrc = sliceBetween(source, "const KN_PARTICIPANT_FIELD_LABELS=", ";", "KN_PARTICIPANT_FIELD_LABELS") + ";";
+const normalizeSearchSrc = sliceBetween(source, "function knPfNormalizeSearch(s){", "\n}", "knPfNormalizeSearch") + "\n}";
+const searchableTextSrc = sliceBetween(source, "function knPfSearchableText(r){", "\n}", "knPfSearchableText") + "\n}";
 // Bounded by a stable CODE token (the function's own last statement) rather than a comment,
 // so this never silently over-captures if a neighboring comment changes wording (as happened
 // here once GATE 4C-D.2 inserted wireParticipantControls() with its own leading comment where
@@ -70,7 +72,11 @@ test("GATE 4C-A source shape: no future Item 4 controls exist yet (Search)", () 
   // any of them), but each was later added by its own authorized gate, so their absence is no
   // longer part of "future controls not yet built" — see test/gate4c-e/fullscreen.test.mjs for
   // the up-to-date guard on what's still not built (Search), which this test mirrors.
-  assert.doesNotMatch(source, /knPfSearch/);
+  // GATE 4C-F.4 RECONCILED (per GATE 4C-F.2R-approved design, category A): knPfSearch is now the
+  // authorized GATE 4C-F.2 Search V1 implementation (frozen contract + full coverage in
+  // test/gate4c-f2/search.test.mjs) — its presence is no longer a violation of this gate's own
+  // scope. Every OTHER protection this assertion sat alongside (pagination/chunking/virtualization,
+  // etc., where present in this test) is left fully intact below.
 });
 
 test("GATE 4C-A source shape: extracted markup function introduces no new Firestore calls", () => {
@@ -80,7 +86,7 @@ test("GATE 4C-A source shape: extracted markup function introduces no new Firest
 function buildMarkupFn() {
   const sandbox = {};
   vm.createContext(sandbox);
-  vm.runInContext(`${escSrc}\n${labelsSrc}\n${markupSrc}\nglobalThis.__markup = knowledgeParticipantsMarkup;`, sandbox);
+  vm.runInContext(`${escSrc}\n${labelsSrc}\n${normalizeSearchSrc}\n${searchableTextSrc}\n${markupSrc}\nglobalThis.__markup = knowledgeParticipantsMarkup;`, sandbox);
   return sandbox.__markup;
 }
 

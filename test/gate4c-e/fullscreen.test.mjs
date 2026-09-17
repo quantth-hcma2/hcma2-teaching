@@ -102,7 +102,11 @@ test("GATE 4C-E: .modal.is-fullscreen CSS is correctly scoped and additive (100v
 // ===================================================================================
 
 test("GATE 4C-E: no Search implementation exists; Expanded region introduces no pagination/chunking/virtualization", () => {
-  assert.doesNotMatch(source, /knPfSearch/);
+  // GATE 4C-F.4 RECONCILED (per GATE 4C-F.2R-approved design, category A): knPfSearch is now the
+  // authorized GATE 4C-F.2 Search V1 implementation (frozen contract + full coverage in
+  // test/gate4c-f2/search.test.mjs) — its presence is no longer a violation of this gate's own
+  // scope. Every OTHER protection this assertion sat alongside (pagination/chunking/virtualization,
+  // etc., where present in this test) is left fully intact below.
   assert.doesNotMatch(expandedFnSrc, /requestAnimationFrame|IntersectionObserver|chunk|virtualiz|pagina/i);
 });
 

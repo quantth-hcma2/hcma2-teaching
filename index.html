@@ -5039,6 +5039,16 @@ async function knowledgePermanentDelete(sessionId,title){
   }catch(e){toast(e.message||mapError(e),"err");}
 }
 const KN_PARTICIPANT_FIELD_LABELS={fullName:"Họ và tên",className:"Lớp",email:"Email",phone:"Số điện thoại"};
+// GATE 4C-F.2: Search V1 normalization — case/diacritic-insensitive, deterministic, never
+// touches stored participant data or CSV values. NFD decomposition + combining-mark strip
+// handles standard Vietnamese tone marks; đ/Đ is a separate codepoint (doesn't decompose via
+// NFD) so it needs its own explicit replace.
+function knPfNormalizeSearch(s){
+  return String(s==null?"":s).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/đ/g,"d");
+}
+function knPfSearchableText(r){
+  return knPfNormalizeSearch(r.fullName)+" "+knPfNormalizeSearch(r.className);
+}
 function knowledgeNormalizeClassOptions(raw){
   const seen=new Set(),out=[];
   (raw||"").split("\n").forEach(line=>{
@@ -5136,6 +5146,10 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
   // scratch (removed then conditionally re-added) on every knowledgeRenderParticipantsExpanded()
   // call, so repeated enter/exit/refresh/filter cycles can never accumulate more than one.
   let knPfFullscreenEscHandler=null;
+  // GATE 4C-F.2: the one pending Search debounce timer, if any. Unconditionally cancelled at the
+  // top of wireParticipantControls() (which runs on every participant rerender, from any trigger)
+  // so a stale timer can never later fire against a mode/host that's no longer current.
+  let knPfSearchDebounceTimer=null;
   const openerUid=STATE.user.uid;
   c.innerHTML=`<button class="btn btn-ghost btn-sm" id="knBack">← Danh sách</button><div id="knDash" class="mt-14"><div class="center-screen"><span class="spinner"></span></div></div>`;
   $("#knBack").onclick=()=>{window.location.hash=""; if(isAdminView){STATE.adminNav="knowledge";adminRoute("knowledge");}else{STATE.teacherNav="knowledge";teacherRoute();}};
@@ -5291,7 +5305,7 @@ knowledgeRenderAi();
   // dropdown is omitted entirely when there is no meaningful configured class list (className
   // field not enabled for this session, or classOptions absent/empty) rather than shown
   // disabled or with a misleading empty option list.
-  function knowledgeParticipantsMarkup(participantsArg,countsArg,sessionArg,statusFilter,classFilter){
+  function knowledgeParticipantsMarkup(participantsArg,countsArg,sessionArg,statusFilter,classFilter,searchQuery){
     const minPer=(Number.isInteger(sessionArg.minimumPerParticipant)&&sessionArg.minimumPerParticipant>=1)?sessionArg.minimumPerParticipant:3;
     const pf=sessionArg.participantFields||{};
     const activeFields=Object.keys(KN_PARTICIPANT_FIELD_LABELS).filter(f=>pf[f]&&pf[f].enabled);
@@ -5302,14 +5316,19 @@ knowledgeRenderAi();
     let orphanCount=0;countsArg.forEach((cnt,pid)=>{if(!knownIds.has(pid))orphanCount++;});
     const classOptions=activeFields.includes("className")&&Array.isArray(sessionArg.classOptions)?sessionArg.classOptions:[];
     const showClassFilter=classOptions.length>0;
+    // GATE 4C-F.2: Search V1 — simple normalized substring only, deliberately NOT tokenized (a
+    // reordered/partial-token query is not required to match; see test/gate4c-f2 for the frozen
+    // contract). Derived visible-row predicate only — never mutates participantsArg/rows/counts.
+    const normalizedQuery=knPfNormalizeSearch(searchQuery);
     const filtered=rows.filter(r=>{
+      const searchOk=normalizedQuery===""||knPfSearchableText(r).includes(normalizedQuery);
       const statusOk=statusFilter==="complete"?r._complete:(statusFilter==="incomplete"?!r._complete:true);
       const classOk=!showClassFilter||classFilter==="all"?true:r.className===classFilter;
-      return statusOk&&classOk;
+      return searchOk&&statusOk&&classOk;
     });
     return `<div class="grid grid-3"><div class="card knowledge-stat"><strong>${total}</strong><span>Đã đăng ký</span></div><div class="card knowledge-stat"><strong>${completed}</strong><span>Đã hoàn thành</span></div><div class="card knowledge-stat"><strong>${incomplete}</strong><span>Chưa hoàn thành</span></div></div>
       ${orphanCount>0?`<p class="small" style="color:#b45309">⚠️ ${orphanCount} lượt gửi không khớp với hồ sơ người tham gia nào — không hiển thị trong bảng dưới đây.</p>`:""}
-      <div class="flex gap-8 mt-8" style="flex-wrap:wrap"><select id="knPfFilter"><option value="all">Tất cả</option><option value="complete">Đã hoàn thành</option><option value="incomplete">Chưa hoàn thành</option></select>${showClassFilter?`<select id="knPfClassFilter"><option value="all">Tất cả lớp</option>${classOptions.map(cl=>`<option value="${esc(cl)}">${esc(cl)}</option>`).join("")}</select>`:""}<button class="btn btn-outline btn-sm" id="knPfRefresh">🔄 Làm mới danh sách</button><button class="btn btn-outline btn-sm" id="knPfExport">XUẤT DANH SÁCH NGƯỜI THAM GIA</button></div>
+      <div class="flex gap-8 mt-8" style="flex-wrap:wrap"><input type="text" id="knPfSearch" placeholder="Tìm theo họ tên hoặc lớp..." style="max-width:220px"><select id="knPfFilter"><option value="all">Tất cả</option><option value="complete">Đã hoàn thành</option><option value="incomplete">Chưa hoàn thành</option></select>${showClassFilter?`<select id="knPfClassFilter"><option value="all">Tất cả lớp</option>${classOptions.map(cl=>`<option value="${esc(cl)}">${esc(cl)}</option>`).join("")}</select>`:""}<button class="btn btn-outline btn-sm" id="knPfRefresh">🔄 Làm mới danh sách</button><button class="btn btn-outline btn-sm" id="knPfExport">XUẤT DANH SÁCH NGƯỜI THAM GIA</button></div>
       <div class="table-wrap mt-8"><table><thead><tr>${activeFields.map(f=>`<th>${esc(KN_PARTICIPANT_FIELD_LABELS[f])}</th>`).join("")}<th>Tiến độ</th><th>Trạng thái</th></tr></thead><tbody>
         ${filtered.length?filtered.map(r=>`<tr>${activeFields.map(f=>`<td>${esc(r[f]||"—")}</td>`).join("")}<td>${r._count}/${minPer}</td><td>${r._complete?"Hoàn thành":"Chưa hoàn thành"}</td></tr>`).join(""):`<tr><td colspan="${activeFields.length+2}">Không có người tham gia phù hợp.</td></tr>`}
       </tbody></table></div>`;
@@ -5321,6 +5340,38 @@ knowledgeRenderAi();
   // same-id controls. `rerender` is whichever mount function (Compact or Expanded) owns this
   // host, so a filter change always re-renders the correct, currently-visible view.
   function wireParticipantControls(host,rerender){
+    // GATE 4C-F.2: unconditionally cancel any pending Search debounce at the very top of every
+    // participant rerender (this function runs on every one: Compact, Expanded, mode toggle,
+    // Refresh, filter change, submissions rerender). A stale timer can therefore never later fire
+    // against a mode/host that is no longer current — it is superseded by whatever fresh listener
+    // this same call is about to attach below.
+    if(knPfSearchDebounceTimer){clearTimeout(knPfSearchDebounceTimer);knPfSearchDebounceTimer=null;}
+    const searchInput=host.querySelector('#knPfSearch');
+    if(searchInput){
+      searchInput.value=knPfViewState.search;
+      searchInput.oninput=(e)=>{
+        knPfViewState.search=e.target.value;
+        const selStart=e.target.selectionStart,selEnd=e.target.selectionEnd;
+        if(knPfSearchDebounceTimer)clearTimeout(knPfSearchDebounceTimer);
+        knPfSearchDebounceTimer=setTimeout(()=>{
+          knPfSearchDebounceTimer=null;
+          rerender();
+          // Compact's `host` (its persistent #knPfWrap node) is never replaced across rerenders
+          // (knowledgeRenderParticipantsCompact() only ever does wrap.innerHTML=... on the SAME
+          // node), so it is still valid here and needs no re-lookup. Expanded/Fullscreen is the
+          // one case that DOES need a fresh query: rerender() there replaces #globalModal's
+          // entire subtree via openModal(), so the closure-captured `host` (the previous .modal
+          // element) is now detached and can never be focused again. This mirrors
+          // knowledgeRenderParticipantsCurrentMode()'s own mode-based dispatch.
+          const liveHost=knPfViewState.mode==='expanded'?document.querySelector('#globalModal .modal'):host;
+          const freshInput=liveHost?liveHost.querySelector('#knPfSearch'):null;
+          if(freshInput){
+            freshInput.focus();
+            if(selStart!=null&&selEnd!=null){try{freshInput.setSelectionRange(selStart,selEnd);}catch(err){}}
+          }
+        },150);
+      };
+    }
     const statusSel=host.querySelector('#knPfFilter');
     if(statusSel){
       statusSel.value=knPfViewState.statusFilter;
@@ -5332,7 +5383,7 @@ knowledgeRenderAi();
       classSel.onchange=(e)=>{knPfViewState.classFilter=e.target.value;rerender();};
     }
     const refreshBtn=host.querySelector('#knPfRefresh');
-    if(refreshBtn)refreshBtn.onclick=()=>{if(!participantsLoading)loadParticipants();};
+    if(refreshBtn)refreshBtn.onclick=()=>{if(!participantsLoading){if(knPfSearchDebounceTimer){clearTimeout(knPfSearchDebounceTimer);knPfSearchDebounceTimer=null;}loadParticipants();}};
     const exportBtn=host.querySelector('#knPfExport');
     if(exportBtn)exportBtn.onclick=knowledgeExportParticipants;
   }
@@ -5340,7 +5391,7 @@ knowledgeRenderAi();
   // builder. GATE 4C-D.2: wiring now goes through the shared, host-scoped wireParticipantControls().
   function knowledgeRenderParticipantsCompact(){
     const wrap=$("#knPfWrap");if(!wrap||session.collectParticipantProfile!==true||participants===null)return;
-    wrap.innerHTML=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter);
+    wrap.innerHTML=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter,knPfViewState.search);
     wireParticipantControls(wrap,knowledgeRenderParticipantsCompact);
   }
   // GATE 4C-D.2: Expanded mount — reuses the existing generic openModal(html, true) and the
@@ -5358,7 +5409,7 @@ knowledgeRenderAi();
     // snapshot is reasserted onto state further down, exactly mirroring how knPfViewState.mode
     // has always been unconditionally reasserted to 'expanded' right after that same call.
     const wantFullscreen=knPfViewState.fullscreen;
-    const tableHtml=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter);
+    const tableHtml=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter,knPfViewState.search);
     const host=openModal(`<div class="section-title"><h3>👥 Người tham gia</h3><div class="flex gap-8"><button class="btn btn-ghost btn-sm" id="knPfFullscreenToggle">${wantFullscreen?'⛝ THOÁT TOÀN MÀN HÌNH':'⛶ TOÀN MÀN HÌNH'}</button><button class="btn btn-ghost btn-sm" id="knPfExpandClose">✕ Đóng</button></div></div><div class="kn-pf-expanded">${tableHtml}</div>`,true);
     knPfViewState.mode='expanded';
     knPfViewState.fullscreen=wantFullscreen;

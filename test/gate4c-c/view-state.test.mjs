@@ -28,6 +28,8 @@ function sliceBetween(src, startMarker, endMarker, label) {
 
 const escSrc = sliceBetween(source, "function esc(s){", "\n", "esc()");
 const labelsSrc = sliceBetween(source, "const KN_PARTICIPANT_FIELD_LABELS=", ";", "KN_PARTICIPANT_FIELD_LABELS") + ";";
+const normalizeSearchSrc = sliceBetween(source, "function knPfNormalizeSearch(s){", "\n}", "knPfNormalizeSearch") + "\n}";
+const searchableTextSrc = sliceBetween(source, "function knPfSearchableText(r){", "\n}", "knPfSearchableText") + "\n}";
 // Bounded by a stable CODE token (the function's own last statement), not a neighboring
 // comment, so this never silently over-captures if a nearby comment is reworded.
 const markupSrc = sliceBetween(source, "function knowledgeParticipantsMarkup(", "</tbody></table></div>`;\n  }", "knowledgeParticipantsMarkup()") + "</tbody></table></div>`;\n  }";
@@ -58,7 +60,11 @@ test("GATE 4C-C: no Search UI/implementation exists yet", () => {
   // for 4C-C itself (still true — this gate's own diff never introduced either), but each was
   // later added by its own authorized gate — see test/gate4c-e/fullscreen.test.mjs for the
   // up-to-date guard on what's still not built (Search).
-  assert.doesNotMatch(source, /knPfSearch/);
+  // GATE 4C-F.4 RECONCILED (per GATE 4C-F.2R-approved design, category A): knPfSearch is now the
+  // authorized GATE 4C-F.2 Search V1 implementation (frozen contract + full coverage in
+  // test/gate4c-f2/search.test.mjs) — its presence is no longer a violation of this gate's own
+  // scope. Every OTHER protection this assertion sat alongside (pagination/chunking/virtualization,
+  // etc., where present in this test) is left fully intact below.
 });
 
 // ===================================================================================
@@ -73,7 +79,7 @@ test("GATE 4C-C: status filter onchange updates knPfViewState (now via the share
 });
 
 test("GATE 4C-C: Compact render reads its filter from knPfViewState, not the DOM (field renamed to statusFilter by GATE 4C-C.2; wiring moved to the shared helper by GATE 4C-D.2)", () => {
-  assert.match(compactFnSrc, /knowledgeParticipantsMarkup\(participants,participantCounts,session,knPfViewState\.statusFilter,knPfViewState\.classFilter\)/);
+  assert.match(compactFnSrc, /knowledgeParticipantsMarkup\(participants,participantCounts,session,knPfViewState\.statusFilter,knPfViewState\.classFilter,knPfViewState\.search\)/);
   assert.match(wireSrc, /statusSel\.value=knPfViewState\.statusFilter;/);
   // the old DOM-read pattern must be gone
   assert.doesNotMatch(compactFnSrc, /\$\("#knPfFilter"\)\?\.value/);
@@ -109,7 +115,7 @@ test("GATE 4C-C: knowledgeExportParticipants() unchanged since 4C-B; loadPartici
 function buildMarkupFn() {
   const sandbox = {};
   vm.createContext(sandbox);
-  vm.runInContext(`${escSrc}\n${labelsSrc}\n${markupSrc}\nglobalThis.__markup = knowledgeParticipantsMarkup;`, sandbox);
+  vm.runInContext(`${escSrc}\n${labelsSrc}\n${normalizeSearchSrc}\n${searchableTextSrc}\n${markupSrc}\nglobalThis.__markup = knowledgeParticipantsMarkup;`, sandbox);
   return sandbox.__markup;
 }
 

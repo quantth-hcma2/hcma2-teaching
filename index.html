@@ -150,6 +150,23 @@ tr:hover td{background:#fafbfc;}
 .modal.is-fullscreen .kn-pf-expanded{flex:1 1 auto; min-height:0; display:flex; flex-direction:column; overflow:hidden;}
 .modal.is-fullscreen .kn-pf-expanded .table-wrap{flex:1 1 auto; min-height:0; max-height:none; overflow-y:auto;}
 
+/* GATE 4C-E.3: narrow-viewport hotfix — at phone heights (~390-412px wide, up to ~844-915px
+   tall) with all 4 participant fields enabled, the pre-existing global single-column .grid-3
+   stacking (below 600px width) plus the pre-existing global select/input width:100% forcing
+   each filter control onto its own wrapped row together consumed nearly all of
+   .kn-pf-expanded's available height, leaving .table-wrap with ~34px (in practice unusable —
+   smaller than the sticky header alone). Both overrides below require the compound
+   .modal.is-fullscreen .kn-pf-expanded ancestor chain, so they can only ever match the
+   Knowledge participant Fullscreen view: never Compact (no .modal ancestor at all), never
+   normal non-Fullscreen Expanded (.modal-lg without .is-fullscreen), and never any of the other
+   9 features sharing .modal/.modal-lg (none use .kn-pf-expanded). No existing rule is modified
+   or removed — these are purely additive, narrowly-scoped overrides. */
+.modal.is-fullscreen .kn-pf-expanded .grid.grid-3{grid-template-columns:repeat(3,1fr); gap:8px;}
+.modal.is-fullscreen .kn-pf-expanded .grid.grid-3 .card.knowledge-stat{padding:10px;}
+.modal.is-fullscreen .kn-pf-expanded .grid.grid-3 .card.knowledge-stat strong{font-size:20px;}
+.modal.is-fullscreen .kn-pf-expanded > .flex.gap-8.mt-8 > select,
+.modal.is-fullscreen .kn-pf-expanded > .flex.gap-8.mt-8 > input[type=text]{width:auto; flex:1 1 150px; min-width:120px;}
+
 /* Badges */
 .badge{display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700;}
 .badge-green{background:#dcfce7; color:#166534;}

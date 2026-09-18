@@ -5303,25 +5303,18 @@ knowledgeRenderAi();
     }
     runClassroomStart(false);
   }
+  // GATE 5F.C FIX1 — classroomController.start() now checks window.open() BEFORE any network
+  // call (see classroom-projection-launch.mjs), so a blocked popup is just another `!result.ok`
+  // failure (code POPUP_BLOCKED) with its own mapped Vietnamese message — no separate modal/
+  // retry-with-the-same-token flow is needed or possible any more (no token was ever requested).
+  // The lecturer simply allows popups and clicks "Trình chiếu Second Brain" again.
   async function runClassroomStart(confirmed){
     renderSecondBrainAction(); // reflect "starting" immediately (button disabled) while the request is in flight
     const result=await classroomController.start(session,{confirmed});
     if(result.needsConfirmation){ renderSecondBrainAction(); return; } // guarded above; defensive only
     if(!result.ok){ toast(result.message,"err"); renderSecondBrainAction(); return; }
-    if(result.popupBlocked){ showClassroomPopupBlockedModal(result.bootstrapUrl); }
-    else { toast("Đã mở Trình chiếu Second Brain.","ok"); }
+    toast("Đã mở Trình chiếu Second Brain.","ok");
     renderSecondBrainAction();
-  }
-  // GATE 5F.C Part H — smallest safe fallback: the bootstrap token/URL is held only in this
-  // closure (never logged, never shown as text), and only a FRESH user click on this modal's own
-  // button ever calls window.open() again — never automatically/on a timer.
-  function showClassroomPopupBlockedModal(bootstrapUrl){
-    openModal(`<h3>Trình duyệt đã chặn cửa sổ mới</h3><p class="mut">Trình chiếu đã sẵn sàng. Nhấn nút bên dưới để mở trong tab mới.</p><div class="flex-between mt-14"><button class="btn btn-ghost" id="knPopupCancel">ĐÓNG</button><button class="btn" id="knPopupOpen">MỞ TRÌNH CHIẾU</button></div>`);
-    $("#knPopupOpen").onclick=()=>{
-      const win=classroomController.openBlockedPopup(bootstrapUrl);
-      if(win){ closeModal(); } else { toast("Trình duyệt vẫn đang chặn cửa sổ mới. Vui lòng cho phép popup cho trang này rồi thử lại.","warn"); }
-    };
-    $("#knPopupCancel").onclick=closeModal;
   }
   async function onClassroomCloseClick(){
     const btn=$("#knClassroomClose"); if(btn)btn.disabled=true;

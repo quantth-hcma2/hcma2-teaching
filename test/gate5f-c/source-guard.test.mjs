@@ -93,3 +93,35 @@ test("SCOPE LOCK: Firestore Rules and indexes files are untouched by this gate",
     assert.ok(!changed.includes(forbidden), `${forbidden} must not be modified by this gate`);
   }
 });
+
+// ===================================================================================
+// GATE 5F.C FIX1 — the old "popup blocked after a successful Start" fallback (modal + a URL/token
+// held for a second click) is now unreachable by construction (popup-blocked is always detected
+// BEFORE any network call) and was removed rather than left as dead/misleading code.
+// ===================================================================================
+const moduleSrc = readFileSync(path.join(repoRoot, "classroom-projection-launch.mjs"), "utf8").replace(/\r\n/g, "\n");
+
+test("FIX1 SOURCE GUARD: the dead post-success popup-blocked fallback (openBlockedPopup, showClassroomPopupBlockedModal) is fully removed", () => {
+  assert.ok(!moduleSrc.includes("openBlockedPopup"), "openBlockedPopup() is unreachable now that popup-blocked is detected before any network call — must be removed, not left dead");
+  assert.ok(!html.includes("showClassroomPopupBlockedModal"), "the fallback modal function is unreachable now — must be removed from index.html");
+  assert.ok(!html.includes("knPopupOpen") && !html.includes("knPopupCancel"), "the fallback modal's button ids must no longer appear anywhere");
+});
+
+test("FIX1 SOURCE GUARD: start() checks window.open() before generating an idempotencyKey or mutating state", () => {
+  const m = moduleSrc.match(/start\(session, \{ confirmed = false \} = \{\}\) \{[\s\S]*?\n    \},/);
+  assert.ok(m, "could not locate start() in classroom-projection-launch.mjs");
+  const body = m[0];
+  const winIdx = body.indexOf("windowOpenImpl(");
+  const stateIdx = body.indexOf('state = "starting"');
+  const keyIdx = body.indexOf("generateIdempotencyKey(");
+  assert.ok(winIdx > -1 && stateIdx > -1 && keyIdx > -1, "could not locate the expected calls inside start()");
+  assert.ok(winIdx < stateIdx, "windowOpenImpl() must be called before state is mutated to 'starting'");
+  assert.ok(winIdx < keyIdx, "windowOpenImpl() must be called before an idempotencyKey is generated");
+});
+
+test("FIX1 SOURCE GUARD: doStart() closes the window on every failure path via closeQuietly()", () => {
+  const m = moduleSrc.match(/async function doStart\(session, win, idempotencyKey\) \{[\s\S]*?\n  \}/);
+  assert.ok(m, "could not locate doStart() in classroom-projection-launch.mjs");
+  const occurrences = (m[0].match(/closeQuietly\(win\)/g) || []).length;
+  assert.ok(occurrences >= 2, `expected closeQuietly(win) on both the invalid-bootstrapUrl path and the catch block, found ${occurrences}`);
+});

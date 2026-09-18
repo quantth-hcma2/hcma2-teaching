@@ -220,21 +220,66 @@ test("REGRESSION: no localStorage/sessionStorage/document.cookie usage anywhere 
   assert.ok(!src.includes("document.cookie"), "must never read/write cookies directly — the __Host-cbp cookie is set only by the Classroom origin itself");
 });
 
-test("popup blocked: start() proceeds with the network call, does not navigate, and hands back the bootstrapUrl for a caller-driven fallback (never auto-opened)", async () => {
-  let secondWindowOpenCalls = 0;
-  const { controller } = fakeController({ windowOpenImpl: () => null }); // simulates a blocked popup
+// -----------------------------------------------------------------------------------
+// GATE 5F.C FIX1 — popup-blocked MUST be detected and handled entirely before any network call.
+// -----------------------------------------------------------------------------------
+test("FIX1 (1,2,3): popup null -> zero getIdToken calls, zero fetch calls, zero /projections/start calls", async () => {
+  let getIdTokenCalls = 0;
+  let fetchCalls = 0;
+  const { controller } = fakeController({
+    windowOpenImpl: () => null, // simulates a blocked popup
+    getIdToken: async () => { getIdTokenCalls++; return "synthetic-id-token"; },
+    fetchImpl: async (url) => { fetchCalls++; return { ok: true, json: async () => ({ bootstrapUrl: `${CLASSROOM_ORIGIN}/classroom/bootstrap?b=t`, projectionSessionId: "p1" }) }; },
+  });
   const result = await controller.start(SYNTHETIC_SESSION);
-  assert.equal(result.ok, true);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "POPUP_BLOCKED");
   assert.equal(result.popupBlocked, true);
-  assert.equal(result.bootstrapUrl, `${CLASSROOM_ORIGIN}/classroom/bootstrap?b=synthetic-token`);
-  assert.equal(controller.getState(), "active", "the projection itself DID start server-side even though the popup was blocked");
+  assert.equal(getIdTokenCalls, 0, "getIdToken() must never be called when the popup was blocked");
+  assert.equal(fetchCalls, 0, "no /projections/start (or any) fetch must occur when the popup was blocked");
 });
 
-test("openBlockedPopup() is the only path that opens the real bootstrapUrl — a separate, caller-invoked, fresh-gesture action", () => {
-  let openedWith = null;
-  const { controller } = fakeController({ windowOpenImpl: (url) => { openedWith = url; return { closed: false }; } });
-  controller.openBlockedPopup("https://classroom.quantth.vn/classroom/bootstrap?b=x");
-  assert.equal(openedWith, "https://classroom.quantth.vn/classroom/bootstrap?b=x");
+test("FIX1 (4): popup null -> no new projectionSessionId, state left exactly as it was before the call", async () => {
+  const { controller } = fakeController({ windowOpenImpl: () => null });
+  assert.equal(controller.getState(), "idle");
+  const result = await controller.start(SYNTHETIC_SESSION);
+  assert.equal(result.ok, false);
+  assert.equal(controller.getProjectionSessionId(), null);
+  assert.equal(controller.getState(), "idle", "state must remain idle, never transition to starting/active for a request that was never sent");
+});
+
+test("FIX1 (5,6): a confirmed restart whose popup is blocked never calls /projections/start, so the previously-active projection is never revoked", async () => {
+  let windowOpenCallCount = 0;
+  let startFetchCalls = 0;
+  const windowOpenImpl = () => {
+    windowOpenCallCount++;
+    // First call (the original, successful Start) opens fine; the second call (the confirmed
+    // restart attempt) simulates the browser now blocking the popup.
+    return windowOpenCallCount === 1 ? { location: { href: null }, close() {} } : null;
+  };
+  const { controller } = fakeController({
+    windowOpenImpl,
+    fetchImpl: async (url) => { if (url.endsWith("/projections/start")) startFetchCalls++; return { ok: true, json: async () => ({ bootstrapUrl: `${CLASSROOM_ORIGIN}/classroom/bootstrap?b=t`, projectionSessionId: "original-proj" }) }; },
+  });
+  await controller.start(SYNTHETIC_SESSION);
+  assert.equal(controller.getState(), "active");
+  assert.equal(controller.getProjectionSessionId(), "original-proj");
+  assert.equal(startFetchCalls, 1, "sanity: exactly one Start request for the original successful launch");
+
+  const restartResult = await controller.start(SYNTHETIC_SESSION, { confirmed: true });
+  assert.equal(restartResult.ok, false);
+  assert.equal(restartResult.code, "POPUP_BLOCKED");
+  assert.equal(startFetchCalls, 1, "NO /projections/start request must occur for the blocked restart attempt");
+  assert.equal(controller.getState(), "active", "the OLD projection must remain the controller's active state — nothing revoked it");
+  assert.equal(controller.getProjectionSessionId(), "original-proj", "the original projectionSessionId must be completely untouched");
+});
+
+test("FIX1 (7): a successful popup still preserves window-open-before-getIdToken/fetch ordering (unchanged from the accepted flow)", async () => {
+  const { controller, calls } = fakeController();
+  const result = await controller.start(SYNTHETIC_SESSION);
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls.slice(0, 1), ["windowOpen"]);
+  assert.ok(calls.indexOf("windowOpen") < calls.indexOf("getIdToken"));
 });
 
 test("invalid bootstrapUrl from the server: the opened blank window is closed, start reports a failure, state returns to idle", async () => {
@@ -296,6 +341,40 @@ test("network failure during Start maps to the NETWORK error code and resets sta
   assert.equal(result.ok, false);
   assert.equal(result.code, "NETWORK");
   assert.equal(controller.getState(), "idle");
+});
+
+test("FIX1 (8): a network failure AFTER the popup opened successfully still closes the now-orphaned blank window", async () => {
+  let closedCalled = false;
+  const { controller } = fakeController({
+    windowOpenImpl: () => ({ location: { href: null }, close() { closedCalled = true; } }),
+    fetchImpl: async () => { throw new Error("fetch failed"); },
+  });
+  const result = await controller.start(SYNTHETIC_SESSION);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "NETWORK");
+  assert.equal(closedCalled, true, "the pre-opened blank tab must be closed rather than left as an orphan empty tab");
+});
+
+test("FIX1 (8): a backend rejection (e.g. FORBIDDEN) AFTER the popup opened successfully also closes the blank window", async () => {
+  let closedCalled = false;
+  const { controller } = fakeController({
+    windowOpenImpl: () => ({ location: { href: null }, close() { closedCalled = true; } }),
+    fetchImpl: async () => ({ ok: false, json: async () => ({ error: { code: "FORBIDDEN", message: "no" } }) }),
+  });
+  const result = await controller.start(SYNTHETIC_SESSION);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "FORBIDDEN");
+  assert.equal(closedCalled, true);
+});
+
+test("FIX1: window.close() throwing during cleanup does not mask the real error being reported", async () => {
+  const { controller } = fakeController({
+    windowOpenImpl: () => ({ location: { href: null }, close() { throw new Error("cannot close this window"); } }),
+    fetchImpl: async () => { throw new Error("fetch failed"); },
+  });
+  const result = await controller.start(SYNTHETIC_SESSION);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "NETWORK", "the original network-failure code must still be reported, not swallowed by the close() failure");
 });
 
 test("server error codes (e.g. SESSION_DELETED) pass through to a mapped Vietnamese message, not a raw code", async () => {

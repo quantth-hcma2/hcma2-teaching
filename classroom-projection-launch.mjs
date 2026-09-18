@@ -83,7 +83,7 @@ const ERROR_MESSAGES = {
   BAD_IDEMPOTENCY_KEY: "Lỗi kỹ thuật khi khởi tạo yêu cầu. Vui lòng thử lại.",
   NETWORK: "Không thể kết nối tới máy chủ Trình chiếu. Vui lòng kiểm tra Internet và thử lại.",
   INVALID_BOOTSTRAP_URL: "Máy chủ trả về liên kết trình chiếu không hợp lệ. Vui lòng thử lại hoặc liên hệ quản trị viên.",
-  POPUP_BLOCKED: "Trình duyệt đã chặn cửa sổ mới. Nhấn nút bên dưới để mở trình chiếu.",
+  POPUP_BLOCKED: "Trình duyệt đã chặn cửa sổ mới. Vui lòng cho phép cửa sổ bật lên (popup) cho trang này rồi nhấn lại \"Trình chiếu Second Brain\".",
 };
 const DEFAULT_ERROR_MESSAGE = "Không thể thực hiện thao tác. Vui lòng thử lại.";
 
@@ -130,6 +130,10 @@ export function createClassroomLaunchController({ windowOpenImpl, fetchImpl, get
     return json;
   }
 
+  // GATE 5F.C FIX1 — by the time this runs, `win` is ALWAYS a real, already-open window (start()
+  // below only ever calls this after windowOpenImpl succeeded) — never null. There is therefore no
+  // "popup blocked after a successful Start" case to handle here any more: popup-blocked is
+  // detected and handled entirely BEFORE any network call, in start() itself.
   async function doStart(session, win, idempotencyKey) {
     try {
       const idToken = await getIdToken();
@@ -137,30 +141,37 @@ export function createClassroomLaunchController({ windowOpenImpl, fetchImpl, get
       const { bootstrapUrl, projectionSessionId: newProjectionSessionId } = await postJson("/projections/start", idToken, body);
 
       if (!validateBootstrapUrl(bootstrapUrl, origin)) {
-        if (win) win.close();
+        closeQuietly(win);
         state = "idle";
         return { ok: false, code: "INVALID_BOOTSTRAP_URL", message: classroomErrorMessage("INVALID_BOOTSTRAP_URL") };
       }
 
       projectionSessionId = newProjectionSessionId;
       state = "active";
-
-      if (win) {
-        // Already-open window from the trusted click — navigating it now needs no fresh gesture.
-        win.location.href = bootstrapUrl;
-        return { ok: true, projectionSessionId, popupBlocked: false };
-      }
-      // GATE 5F.C Part H — popup was blocked at open time. The bootstrap token is still valid
-      // (single-use is enforced server-side only at the actual /classroom/bootstrap exchange, not
-      // at issuance) — hand the URL back so the caller can offer ONE user-gesture retry button,
-      // never logging/displaying the token itself. Caller is responsible for the fallback UI.
-      return { ok: true, projectionSessionId, popupBlocked: true, bootstrapUrl };
+      // Already-open window from the trusted click — navigating it now needs no fresh gesture.
+      win.location.href = bootstrapUrl;
+      return { ok: true, projectionSessionId };
     } catch (err) {
+      // GATE 5F.C FIX1 — the blank window was already opened before this failed (token
+      // acquisition, network/CORS, or a backend rejection) — never leave it as an orphan empty
+      // tab. Does NOT touch any existing projection: a failed startProjection() call never
+      // revokes the previous grant server-side (Gate 5C's transaction only revokes as part of a
+      // SUCCESSFUL new Start), so there is nothing to undo here beyond closing this tab.
+      closeQuietly(win);
       state = "idle";
       const code = err.classroomCode || "NETWORK";
       return { ok: false, code, message: classroomErrorMessage(code) };
     } finally {
       inFlightStartPromise = null;
+    }
+  }
+
+  function closeQuietly(win) {
+    try {
+      win.close();
+    } catch {
+      // Best-effort — some browsers restrict script-closing in edge cases; never let cleanup
+      // itself throw and mask the real error being reported to the caller.
     }
   }
 
@@ -172,6 +183,14 @@ export function createClassroomLaunchController({ windowOpenImpl, fetchImpl, get
      * GATE 5F.C Part G/I/L. `confirmed` must be explicitly true to restart an already-active
      * projection (Part L) — the caller owns showing that confirmation (e.g. native confirm()),
      * matching this codebase's existing convention; this function never prompts itself.
+     *
+     * GATE 5F.C FIX1 — window.open() is checked BEFORE any state mutation, before generating an
+     * idempotencyKey, and before any network call. If it is blocked (returns a falsy value), this
+     * returns immediately: no getIdToken(), no fetch, no POST /projections/start, no
+     * idempotencyKey generated, `state` and any existing active projection are left completely
+     * untouched (a confirmed restart whose popup is blocked therefore never revokes the old
+     * projection — the revoke only ever happens as a side effect of a SUCCESSFUL new
+     * startProjection() transaction on the Classroom backend, which this path never reaches).
      */
     start(session, { confirmed = false } = {}) {
       if (state === "starting") return inFlightStartPromise; // double-click dedupe: same in-flight request, same idempotencyKey
@@ -182,16 +201,13 @@ export function createClassroomLaunchController({ windowOpenImpl, fetchImpl, get
       // preceding await, so it runs synchronously within the caller's trusted click-event call
       // stack regardless of state becoming an async function here.
       const win = windowOpenImpl("about:blank", "_blank");
+      if (!win) {
+        return Promise.resolve({ ok: false, code: "POPUP_BLOCKED", message: classroomErrorMessage("POPUP_BLOCKED"), popupBlocked: true });
+      }
       state = "starting";
       const idempotencyKey = generateIdempotencyKey(randomUUID);
       inFlightStartPromise = doStart(session, win, idempotencyKey);
       return inFlightStartPromise;
-    },
-
-    /** GATE 5F.C Part H — the fallback modal's own button calls this directly (a fresh user
-     * gesture), never automatically. */
-    openBlockedPopup(bootstrapUrl) {
-      return windowOpenImpl(bootstrapUrl, "_blank");
     },
 
     async close(session) {

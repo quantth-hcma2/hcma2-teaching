@@ -1,7 +1,7 @@
 import { renderRichText } from './rich-text-renderer.mjs';
 import { timerSeconds, minutesToSeconds, createExpirySound, createTimerAudioObserver } from './group-classroom-timer.mjs';
 
-export function mountClassroomPresentation({ root, initial, write, onError, now = Date.now, sound = createExpirySound() }) {
+export function mountClassroomPresentation({ root, initial, write, onError, resolveImageUrl, imageContext, now = Date.now, sound = createExpirySound() }) {
   const doc = root.ownerDocument;
   const observeAudio = createTimerAudioObserver(sound);
   let current = initial, busy = false, disposed = false;
@@ -24,7 +24,7 @@ export function mountClassroomPresentation({ root, initial, write, onError, now 
   dialog.innerHTML = `<header><h2 id="classroom-title">Nhiệm vụ chung</h2><button class="btn btn-outline" data-close autofocus>Đóng ✕</button></header><div data-clock class="classroom-clock" role="timer" aria-label="Thời gian còn lại"></div><div data-expiry role="status"></div><div data-content class="classroom-content"></div>`;
   root.append(dialog);
   const content = dialog.querySelector('[data-content]');
-  function renderContent() { renderRichText(content, current.instructionsRich, current.instructions || ''); }
+  function renderContent() { renderRichText(content, current.instructionsRich, current.instructions || '', undefined, { resolveImageUrl, imageContext }); }
   open.onclick = () => { renderContent(); tick(); dialog.showModal(); };
   dialog.querySelector('[data-close]').onclick = () => dialog.close();
   dialog.addEventListener('close', () => open.focus());

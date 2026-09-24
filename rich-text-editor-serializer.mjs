@@ -30,7 +30,7 @@
 // text still passes through the exact same normalize + validate + fail-closed pipeline as anything
 // else, so a hostile/oversized result still fails closed rather than being silently accepted.
 
-import { validateRichTextV1, normalizeRichTextV1, DEFAULT_SIZE, MAX_RUN_TEXT_LENGTH } from "./rich-text-contract.mjs";
+import { validateRichText, normalizeRichText, DEFAULT_SIZE, MAX_RUN_TEXT_LENGTH } from "./rich-text-contract.mjs";
 import { FONT_CSS_MAP, SIZE_CSS_MAP, COLOR_CSS_MAP } from "./rich-text-renderer.mjs";
 
 export const DATA_BLOCK_ATTR = "data-rt-block";
@@ -40,6 +40,10 @@ export const DATA_ITALIC_ATTR = "data-rt-italic";
 export const DATA_FONT_ATTR = "data-rt-font";
 export const DATA_SIZE_ATTR = "data-rt-size";
 export const DATA_COLOR_ATTR = "data-rt-color";
+export const DATA_IMAGE_PATH_ATTR = "data-rt-image-path";
+export const DATA_IMAGE_MIME_ATTR = "data-rt-image-mime";
+export const DATA_IMAGE_SIZE_ATTR = "data-rt-image-size";
+export const DATA_TABLE_ATTR = "data-rt-table";
 
 // ---------------- DOM writing (RichText -> editor DOM). createElement/textContent/setAttribute
 // only — never innerHTML, matching the safe renderer's hard rule. ----------------
@@ -74,6 +78,7 @@ export function createRunSpan(doc, run) {
 function createBlockElement(doc) {
   const el = doc.createElement("div");
   el.setAttribute(DATA_BLOCK_ATTR, "paragraph");
+  el.setAttribute("contenteditable", "true");
   return el;
 }
 
@@ -90,6 +95,23 @@ function appendRunsOrPlaceholder(doc, blockEl, runs) {
 export function richTextToDom(doc, richValue) {
   const frag = doc.createDocumentFragment();
   for (const block of richValue.blocks) {
+    if (block.type === "image") {
+      const el = doc.createElement("div"); el.setAttribute(DATA_BLOCK_ATTR, "image");
+      el.setAttribute(DATA_IMAGE_PATH_ATTR, block.storagePath); el.setAttribute(DATA_IMAGE_MIME_ATTR, block.mimeType); el.setAttribute(DATA_IMAGE_SIZE_ATTR, String(block.size));
+      const label = doc.createElement("span"); label.textContent = "Ảnh: ";
+      const alt = doc.createElement("input"); alt.type = "text"; alt.maxLength = 300; alt.value = block.alt; alt.setAttribute("data-rt-image-alt", "1");
+      const remove=doc.createElement("button"); remove.type="button"; remove.textContent="Xóa ảnh"; remove.setAttribute("data-rt-remove-block","1");
+      el.appendChild(label); el.appendChild(alt); el.appendChild(remove); frag.appendChild(el); continue;
+    }
+    if (block.type === "table") {
+      const el = doc.createElement("div"); el.setAttribute(DATA_BLOCK_ATTR, "table"); el.setAttribute(DATA_TABLE_ATTR, "1");
+      const table = doc.createElement("table"); const tbody = doc.createElement("tbody");
+      block.rows.forEach(row => { const tr=doc.createElement("tr"); row.cells.forEach(cell => { const td=doc.createElement("td"); const input=doc.createElement("div"); input.contentEditable="true"; input.setAttribute("role","textbox"); input.setAttribute("data-rt-cell","1"); appendRunsOrPlaceholder(doc,input,typeof cell === "string" ? (cell ? [{text:cell}] : []) : cell.runs); td.appendChild(input); tr.appendChild(td); }); tbody.appendChild(tr); });
+      table.appendChild(tbody); el.appendChild(table);
+      for (const [action,label] of [["row","+ Hàng"],["column","+ Cột"],["remove-row","− Hàng"],["remove-column","− Cột"]]) { const button=doc.createElement("button"); button.type="button"; button.textContent=label; button.setAttribute(`data-rt-table-${action}`,"1"); el.appendChild(button); }
+      const remove=doc.createElement("button"); remove.type="button"; remove.textContent="Xóa bảng"; remove.setAttribute("data-rt-remove-block","1"); el.appendChild(remove);
+      frag.appendChild(el); continue;
+    }
     const blockEl = createBlockElement(doc);
     appendRunsOrPlaceholder(doc, blockEl, block.runs);
     frag.appendChild(blockEl);
@@ -219,6 +241,14 @@ function domToRichTextIntermediate(rootEl) {
       blocks.push({ type: "paragraph", runs: readRunsFromBlock(child) });
       continue;
     }
+    if (isElement(child) && child.tagName === "DIV" && child.getAttribute(DATA_BLOCK_ATTR) === "image") {
+      blocks.push({ type:"image", storagePath:child.getAttribute(DATA_IMAGE_PATH_ATTR)||"", alt:child.querySelector('[data-rt-image-alt="1"]')?.value||"", mimeType:child.getAttribute(DATA_IMAGE_MIME_ATTR)||"", size:Number(child.getAttribute(DATA_IMAGE_SIZE_ATTR)||0) });
+      continue;
+    }
+    if (isElement(child) && child.tagName === "DIV" && child.getAttribute(DATA_BLOCK_ATTR) === "table") {
+      const rows=Array.from(child.querySelectorAll("tr")).map(tr=>({cells:Array.from(tr.querySelectorAll('[data-rt-cell="1"]')).map(input=>({runs:readRunsFromBlock(input)}))}));
+      blocks.push({ type:"table", rows }); continue;
+    }
     // Unexpected top-level node (not a recognized block div) — hostile-DOM policy: treat its
     // whole textContent as its own single-run paragraph (or an empty paragraph if blank), rather
     // than dropping it or aborting the export.
@@ -226,7 +256,7 @@ function domToRichTextIntermediate(rootEl) {
     blocks.push({ type: "paragraph", runs: text.length > 0 ? [inertTextRun(text)] : [] });
   }
   if (blocks.length === 0) blocks.push({ type: "paragraph", runs: [] });
-  return { version: 1, blocks };
+  return { version: blocks.some(block => block.type !== "paragraph") ? 2 : 1, blocks };
 }
 
 // The trusted export function. Never throws for routine "content exceeds limits" cases — that is
@@ -238,13 +268,14 @@ export function serializeToRichText(rootEl) {
   const intermediate = domToRichTextIntermediate(rootEl);
   let normalized;
   try {
-    normalized = normalizeRichTextV1(intermediate);
+    normalized = normalizeRichText(intermediate);
     // Editing merges same-format spans and paste/legacy loading can create long spans.
     // A DOM span is not a storage run: partition its text without changing paragraphs,
     // formatting, or the live DOM/caret. Array.from preserves whole Unicode code points.
     // Validate AFTER partitioning so run-count, total-text and byte limits still fail
     // closed, with no truncation or weakening of the stored RichText contract.
     for (const block of normalized.blocks) {
+      if (block.type !== "paragraph") continue;
       block.runs = block.runs.flatMap(run => {
         const points = Array.from(run.text);
         if (points.length <= MAX_RUN_TEXT_LENGTH) return [run];
@@ -258,7 +289,7 @@ export function serializeToRichText(rootEl) {
   } catch (error) {
     return { ok: false, reason: "internal_error", error };
   }
-  if (!validateRichTextV1(normalized)) {
+  if (!validateRichText(normalized)) {
     return { ok: false, reason: "limit_exceeded" };
   }
   return { ok: true, value: normalized };

@@ -18,7 +18,7 @@
 //
 // NOT wired into index.html or any Firestore field in this gate — standalone, isolated module only.
 
-import { validateRichTextV1, richTextToPlainText, DEFAULT_SIZE } from "./rich-text-contract.mjs";
+import { validateRichText, richTextToPlainText, DEFAULT_SIZE, MAX_TABLE_ROWS, MAX_TABLE_COLUMNS } from "./rich-text-contract.mjs";
 import {
   DATA_BLOCK_ATTR,
   DATA_RUN_ATTR,
@@ -38,7 +38,8 @@ import {
 const DEFAULT_RUN_FORMAT = Object.freeze({ bold: false, italic: false, font: "default", size: DEFAULT_SIZE, color: "default" });
 
 function isBlockEl(node) {
-  return !!node && node.nodeType === 1 && node.tagName === "DIV" && node.getAttribute(DATA_BLOCK_ATTR) === "paragraph";
+  return !!node && node.nodeType === 1 && node.tagName === "DIV" &&
+    (node.getAttribute(DATA_BLOCK_ATTR) === "paragraph" || node.getAttribute("data-rt-cell") === "1");
 }
 function isRunSpan(node) {
   return !!node && node.nodeType === 1 && node.tagName === "SPAN" && node.getAttribute(DATA_RUN_ATTR) === "1";
@@ -57,6 +58,8 @@ export class RichTextEditor {
     this.ariaLabel = opts.ariaLabel || "Rich text content";
     this.onLimitExceeded = typeof opts.onLimitExceeded === "function" ? opts.onLimitExceeded : () => {};
     this.onChange = typeof opts.onChange === "function" ? opts.onChange : () => {};
+    this.onImageUpload = typeof opts.onImageUpload === "function" ? opts.onImageUpload : null;
+    this.resolveImageUrl = typeof opts.resolveImageUrl === "function" ? opts.resolveImageUrl : null;
 
     this._pendingFormat = { ...DEFAULT_RUN_FORMAT };
     this._isComposing = false;
@@ -123,17 +126,23 @@ export class RichTextEditor {
       this.colorSelect.appendChild(opt);
     }
 
+    this.imageBtn = doc.createElement("button"); this.imageBtn.type="button"; this.imageBtn.textContent="Chèn ảnh"; this.imageBtn.setAttribute("data-rt-action","image");
+    this.imageInput = doc.createElement("input"); this.imageInput.type="file"; this.imageInput.accept="image/jpeg,image/png,image/webp"; this.imageInput.hidden=true;
+    this.tableBtn = doc.createElement("button"); this.tableBtn.type="button"; this.tableBtn.textContent="Chèn bảng 3×3"; this.tableBtn.setAttribute("data-rt-action","table");
+
     this.toolbarEl.appendChild(this.boldBtn);
     this.toolbarEl.appendChild(this.italicBtn);
     this.toolbarEl.appendChild(this.fontSelect);
     this.toolbarEl.appendChild(this.sizeSelect);
     this.toolbarEl.appendChild(this.colorSelect);
+    this.toolbarEl.appendChild(this.imageBtn);
+    this.toolbarEl.appendChild(this.tableBtn);
+    this.toolbarEl.appendChild(this.imageInput);
 
     this.editableEl = doc.createElement("div");
     this.editableEl.setAttribute("data-rt-editable", "1");
-    this.editableEl.setAttribute("contenteditable", "true");
-    this.editableEl.setAttribute("role", "textbox");
-    this.editableEl.setAttribute("aria-multiline", "true");
+    this.editableEl.setAttribute("contenteditable", "false");
+    this.editableEl.setAttribute("role", "group");
     this.editableEl.setAttribute("aria-label", this.ariaLabel);
 
     this.rootEl.appendChild(this.toolbarEl);
@@ -190,12 +199,31 @@ export class RichTextEditor {
     this._onFontChange = () => this._applyExplicitFormat("font", this.fontSelect.value);
     this._onSizeChange = () => this._applyExplicitFormat("size", Number(this.sizeSelect.value));
     this._onColorChange = () => this._applyExplicitFormat("color", this.colorSelect.value);
+    this._onImageClick = () => { if (this.onImageUpload) this.imageInput.click(); };
+    this._onImageChange = async () => { const file=this.imageInput.files?.[0]; this.imageInput.value=""; if(!file||!this.onImageUpload)return; this.imageBtn.disabled=true; try { const block=await this.onImageUpload(file); if(block) this.insertBlock(block); } finally { this.imageBtn.disabled=false; } };
+    this._onTableClick = () => this.insertBlock({type:"table",rows:Array.from({length:3},()=>({cells:Array.from({length:3},()=>({runs:[]}))}))});
+    this._onEditorClick = e => {
+      const target=e.target;
+      if(target?.hasAttribute?.("data-rt-remove-block")){ target.closest(`[${DATA_BLOCK_ATTR}]`)?.remove(); this._ensureParagraph(); this.onChange(); return; }
+      const block=target?.closest?.(`[${DATA_BLOCK_ATTR}="table"]`); if(!block)return;
+      const rows=Array.from(block.querySelectorAll("tr")); const width=rows[0]?.querySelectorAll('[data-rt-cell="1"]').length||0;
+      if(target.hasAttribute("data-rt-table-row") && rows.length<MAX_TABLE_ROWS){ const tr=this.doc.createElement("tr"); for(let i=0;i<width;i++)tr.appendChild(this._newCell()); block.querySelector("tbody").appendChild(tr); }
+      else if(target.hasAttribute("data-rt-table-column") && width<MAX_TABLE_COLUMNS) rows.forEach(tr=>tr.appendChild(this._newCell()));
+      else if(target.hasAttribute("data-rt-table-remove-row") && rows.length>1) rows.at(-1).remove();
+      else if(target.hasAttribute("data-rt-table-remove-column") && width>1) rows.forEach(tr=>tr.lastElementChild.remove());
+      else return;
+      this.onChange();
+    };
 
     this.boldBtn.addEventListener("click", this._onBoldClick);
     this.italicBtn.addEventListener("click", this._onItalicClick);
     this.fontSelect.addEventListener("change", this._onFontChange);
     this.sizeSelect.addEventListener("change", this._onSizeChange);
     this.colorSelect.addEventListener("change", this._onColorChange);
+    this.imageBtn.addEventListener("click", this._onImageClick);
+    this.imageInput.addEventListener("change", this._onImageChange);
+    this.tableBtn.addEventListener("click", this._onTableClick);
+    this.editableEl.addEventListener("click", this._onEditorClick);
   }
 
   // Returns the Selection object with a live Range restored into the editable region, using a
@@ -230,6 +258,10 @@ export class RichTextEditor {
     this.fontSelect.removeEventListener("change", this._onFontChange);
     this.sizeSelect.removeEventListener("change", this._onSizeChange);
     this.colorSelect.removeEventListener("change", this._onColorChange);
+    this.imageBtn.removeEventListener("click", this._onImageClick);
+    this.imageInput.removeEventListener("change", this._onImageChange);
+    this.tableBtn.removeEventListener("click", this._onTableClick);
+    this.editableEl.removeEventListener("click", this._onEditorClick);
     this.fontSelect.removeEventListener("mousedown", this._onSelectMouseDown);
     this.sizeSelect.removeEventListener("mousedown", this._onSelectMouseDown);
     this.colorSelect.removeEventListener("mousedown", this._onSelectMouseDown);
@@ -257,9 +289,10 @@ export class RichTextEditor {
   }
 
   setRichText(value) {
-    if (!validateRichTextV1(value)) return { ok: false, reason: "invalid_value" };
+    if (!validateRichText(value)) return { ok: false, reason: "invalid_value" };
     this._clearEditable();
     this.editableEl.appendChild(richTextToDom(this.doc, value));
+    this._hydrateImages();
     this._pendingFormat = { ...DEFAULT_RUN_FORMAT };
     this._refreshToolbarFromSelection();
     this.onChange();
@@ -281,6 +314,22 @@ export class RichTextEditor {
 
   _clearEditable() {
     while (this.editableEl.firstChild) this.editableEl.removeChild(this.editableEl.firstChild);
+  }
+
+  _newCell() { const td=this.doc.createElement("td"), input=this.doc.createElement("div"); input.contentEditable="true"; input.setAttribute("role","textbox"); input.setAttribute("data-rt-cell","1"); input.appendChild(this.doc.createElement("br")); td.appendChild(input); return td; }
+
+  _ensureParagraph() { if(!this.editableEl.querySelector(`[${DATA_BLOCK_ATTR}="paragraph"]`)) this.editableEl.appendChild(createEmptyDocumentDom(this.doc)); }
+
+  insertBlock(block) {
+    const candidate={version:2,blocks:[block]};
+    if(!validateRichText(candidate)) return {ok:false,reason:"invalid_value"};
+    this.editableEl.appendChild(richTextToDom(this.doc,candidate)); this._hydrateImages();
+    this._ensureParagraph(); this.onChange(); return {ok:true};
+  }
+
+  _hydrateImages(){
+    if(!this.resolveImageUrl)return;
+    this.editableEl.querySelectorAll('[data-rt-block="image"]').forEach(el=>{if(el.querySelector("img"))return;const img=this.doc.createElement("img");img.alt=el.querySelector('[data-rt-image-alt="1"]')?.value||"";img.style.maxWidth="100%";img.style.display="block";img.style.margin="8px auto";el.prepend(img);Promise.resolve(this.resolveImageUrl(el.getAttribute("data-rt-image-path"))).then(url=>{if(typeof url==="string"&&/^(?:https?:\/\/|blob:)/i.test(url)&&img.isConnected){img.src=url;if(/^blob:/i.test(url)&&typeof img.addEventListener==="function"){const revoke=()=>URL.revokeObjectURL(url);img.addEventListener("load",revoke,{once:true});img.addEventListener("error",revoke,{once:true});}}}).catch(()=>{img.alt="Không tải được ảnh";});});
   }
 
   // ---------------- Selection helpers ----------------
@@ -518,7 +567,7 @@ export class RichTextEditor {
   }
 
   _mergeAdjacentRunsEverywhere() {
-    const blocks = Array.from(this.editableEl.children).filter(isBlockEl);
+    const blocks = Array.from(this.editableEl.querySelectorAll(`[${DATA_BLOCK_ATTR}="paragraph"],[data-rt-cell="1"]`));
     for (const block of blocks) this._mergeAdjacentRunsInBlock(block);
   }
 
@@ -615,6 +664,9 @@ export class RichTextEditor {
   _handleKeyDown(e) {
     if (e.key === "Enter") {
       e.preventDefault();
+      const sel=this._getSelection();
+      const cell=sel?.rangeCount ? (sel.getRangeAt(0).startContainer.nodeType===1?sel.getRangeAt(0).startContainer:sel.getRangeAt(0).startContainer.parentNode)?.closest?.('[data-rt-cell="1"]') : null;
+      if(cell){ this._insertTextAtCaret("\n"); return; }
       this._insertParagraphBreakAtCaret();
     }
   }
@@ -734,10 +786,9 @@ export class RichTextEditor {
   // time — cheap at the classroom-scale content sizes this contract allows (<=20 blocks, <=20
   // runs/block).
   _normalizeAllBlocks() {
-    const blocks = Array.from(this.editableEl.children).filter(isBlockEl);
-    if (blocks.length === 0) {
+    const blocks = Array.from(this.editableEl.querySelectorAll(`[${DATA_BLOCK_ATTR}="paragraph"],[data-rt-cell="1"]`));
+    if (!this.editableEl.querySelector(`[${DATA_BLOCK_ATTR}="paragraph"]`)) {
       this.editableEl.appendChild(createEmptyDocumentDom(this.doc));
-      return;
     }
     for (const block of blocks) this._normalizeBlock(block);
   }

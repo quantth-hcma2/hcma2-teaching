@@ -86,6 +86,15 @@ textarea{min-height:88px; resize:vertical;}
 .rt-editor-host [data-rt-toolbar] select{width:auto; min-height:30px; padding:2px 6px;}
 .rt-editor-host [data-rt-editable]{min-height:88px; padding:11px 12px; outline:none;}
 .rt-editor-host [data-rt-editable]:focus{box-shadow:inset 0 0 0 2px var(--brand);}
+.rt-editor-host [data-rt-block="image"],.rt-editor-host [data-rt-block="table"]{margin:10px 0;padding:10px;border:1px dashed var(--border);border-radius:8px;background:#f8fafc;}
+.rt-editor-host [data-rt-block="image"] input{width:min(420px,70%);margin:0 8px;}
+.rt-editor-host [data-rt-block="table"]{overflow:auto;}
+.rt-editor-host [data-rt-block="table"] table{min-width:100%;border-collapse:collapse;margin-bottom:8px;}
+.rt-editor-host [data-rt-block="table"] td{border:1px solid var(--border);padding:3px;}
+.rt-editor-host [data-rt-block="table"] [data-rt-cell]{min-width:120px;min-height:48px;outline:none;padding:6px;white-space:pre-wrap;}
+.rt-editor-host [data-rt-block] button{width:auto;margin:4px;padding:4px 8px;}
+.rt-image{margin:12px 0;text-align:center}.rt-image img{display:block;max-width:100%;height:auto;margin:auto;border-radius:8px}.rt-image figcaption{font-size:13px;color:var(--mut);margin-top:5px}.rt-image-error:before{content:"Không tải được ảnh";color:var(--danger)}
+.rt-table-wrap{max-width:100%;overflow-x:auto;margin:12px 0}.rt-table{border-collapse:collapse;min-width:320px}.rt-table td{border:1px solid var(--border);padding:8px;white-space:pre-wrap;vertical-align:top}
 .hint{font-size:12.5px; color:var(--text-mute); margin-top:4px;}
 .error-text{font-size:13px; color:var(--danger); margin-top:6px;}
 
@@ -507,6 +516,7 @@ tr:hover td{background:#fafbfc;}
 <!-- ============================================================
      APP SCRIPT — loaded as ES module (Firebase v10 modular SDK)
      ============================================================ -->
+<script src="./vendor/xlsx.full.min.js"></script>
 <script type="module">
 /* ============================================================
    HCMA2 - TEACHING — Application Script
@@ -519,18 +529,20 @@ import {
   getAnalytics, isSupported as analyticsIsSupported
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-analytics.js";
 import {
-  getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword,
+  getAuth, connectAuthEmulator, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword,
   signOut, sendPasswordResetEmail, signInAnonymously, updateProfile, setPersistence,
   browserLocalPersistence
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import {
   getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, getDoc, getDocs,
   query, where, orderBy, limit, onSnapshot, serverTimestamp, Timestamp, writeBatch, increment,
-  getCountFromServer, collectionGroup, runTransaction
+  getCountFromServer, collectionGroup, runTransaction, connectFirestoreEmulator
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 import {
-  getStorage, ref as storageRef, uploadBytes, getDownloadURL, deleteObject
+  getStorage, ref as storageRef, uploadBytes, getBytes, deleteObject, connectStorageEmulator
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
+import { cloneRichTextImages, rollbackGroupAssets } from "./group-clone.mjs";
+import { normalizeStudentName, buildGroupRosterWorkbook } from "./group-roster.mjs";
 // Gate 1B.1 — reader-only. No document in this shape exists in production yet; see
 // docs/READER-CONTRACT.md. This import is additive: every legacy session (i.e. every real
 // session today) has no editContractVersion field, so isContractSession() is false for all of
@@ -561,34 +573,35 @@ import { validStoredGroup, ensureGroupMembership } from "./group-membership.mjs"
 // GATE 2B-RT-INTEGRATION: RichText V1 for Group Discussion's common instructions + per-group
 // topic authoring/rendering only. Reuses the approved contract/renderer/editor modules exactly
 // as built in GATE 2B-RT-CONTRACT/GATE 2B-RT-EDITOR — no parallel validation or rendering logic.
-import { validateRichTextV1, richTextToPlainText } from "./rich-text-contract.mjs";
-import { renderRichText } from "./rich-text-renderer.mjs";
+import { validateRichText, richTextToPlainText, IMAGE_MIME_TYPES, MAX_IMAGE_BYTES, imagePathMatchesContext } from "./rich-text-contract.mjs";
+import { renderRichText } from "./rich-text-renderer.mjs?v=20260923-e2e-fixes";
 import { timerSeconds, writeTimer } from "./group-classroom-timer.mjs";
 import { mountClassroomPresentation } from "./group-classroom-presentation.mjs";
-import { RichTextEditor } from "./rich-text-editor.mjs";
+import { RichTextEditor } from "./rich-text-editor.mjs?v=20260923-e2e-fixes";
+import { resolveCandidateEnvironment, candidateGroupJoinUrl } from "./app-environment.mjs?v=20260923-e2e-fixes";
 // GATE 2B-RT-FIX1: key-order-independent deep equality + the session-info save conflict check —
 // see session-info-compare.mjs for the production-bug root cause and full contract.
 import { valuesEqualDeep, findConflictKey } from "./session-info-compare.mjs";
+import { uploadThenCreateGroupSubmission } from "./group-submission-upload.mjs";
 
 /* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
-const firebaseConfig = {
-  apiKey: "AIzaSyCLApl_uMpJFttUFjy4ZgFIyIq3y9XA8ZA",
-  authDomain: "bo-phieu-hcma2.firebaseapp.com",
-  projectId: "bo-phieu-hcma2",
-  storageBucket: "bo-phieu-hcma2.firebasestorage.app",
-  messagingSenderId: "233841168130",
-  appId: "1:233841168130:web:a5fbe30520c55c4fae3c1b",
-  measurementId: "G-GH9TNBMN4M"
-};
+const APP_ENV=await resolveCandidateEnvironment(window.location);
+const firebaseConfig=APP_ENV.firebaseConfig;
 
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
 const db = getFirestore(fbApp);
 const storage = getStorage(fbApp);
+if(APP_ENV.useEmulators){
+  connectAuthEmulator(auth,APP_ENV.emulator.authUrl,{disableWarnings:true});
+  connectFirestoreEmulator(db,APP_ENV.emulator.firestoreHost,APP_ENV.emulator.firestorePort);
+  connectStorageEmulator(storage,APP_ENV.emulator.storageHost,APP_ENV.emulator.storagePort);
+}
 
 // Phase 2: chỉ là URL gateway. API key/model 9Router tuyệt đối nằm ở server.
 // Sau khi deploy Functions, thay PROJECT_ID/REGION nếu anh dùng giá trị khác.
-const AI_GATEWAY_URL = "https://asia-southeast1-bo-phieu-hcma2.cloudfunctions.net/aiGateway";
+// Candidate Emulator is intentionally isolated from every deployed backend.
+const AI_GATEWAY_URL = APP_ENV.aiGatewayUrl;
 setPersistence(auth, browserLocalPersistence).catch(()=>{});
 
 // ---------------- App Firebase THỨ HAI — dành riêng cho Học viên & Trình chiếu ----------------
@@ -604,13 +617,72 @@ const publicApp = initializeApp(firebaseConfig, "public");
 const publicAuth = getAuth(publicApp);
 const publicDb = getFirestore(publicApp);
 const publicStorage = getStorage(publicApp);
+if(APP_ENV.useEmulators){
+  connectAuthEmulator(publicAuth,APP_ENV.emulator.authUrl,{disableWarnings:true});
+  connectFirestoreEmulator(publicDb,APP_ENV.emulator.firestoreHost,APP_ENV.emulator.firestorePort);
+  connectStorageEmulator(publicStorage,APP_ENV.emulator.storageHost,APP_ENV.emulator.storagePort);
+}
 setPersistence(publicAuth, browserLocalPersistence).catch(()=>{});
 
 // Analytics: chỉ dùng để thống kê sử dụng, KHÔNG dùng để lưu dữ liệu bỏ phiếu.
 // Nếu môi trường không hỗ trợ (ví dụ bị chặn bởi trình chặn quảng cáo), app vẫn chạy bình thường.
 let analytics = null;
-analyticsIsSupported().then((ok) => { if (ok) { try { analytics = getAnalytics(fbApp); } catch (e) { /* bỏ qua */ } } }).catch(()=>{});
 function logEvent_(name, params){ try{ if(analytics){ import("https://www.gstatic.com/firebasejs/10.12.5/firebase-analytics.js").then(m=>m.logEvent(analytics,name,params||{})); } }catch(e){} }
+
+async function richImageUrl(path,usePublic=false,imageContext){
+  if(!imagePathMatchesContext(path,{...imageContext,allowLegacy:!usePublic && imageContext?.allowLegacy===true})) throw new Error("Đường dẫn ảnh không đúng phạm vi");
+  // RichText images are fetched through the authenticated Storage SDK so every display request
+  // is re-authorized by Rules. A process-local blob URL is not a durable Firebase download URL
+  // and cannot be shared to bypass membership after a group reassignment.
+  const bytes=await getBytes(storageRef(usePublic?publicStorage:storage,path),MAX_IMAGE_BYTES);
+  return URL.createObjectURL(new Blob([bytes]));
+}
+async function uploadRichImage(file,activityId,{scope,group=null}){
+  if(!IMAGE_MIME_TYPES.includes(file.type) || file.size<=0 || file.size>MAX_IMAGE_BYTES) throw new Error("Chỉ nhận JPEG/PNG/WebP tối đa 5MB.");
+  if(scope!=="common" && !(scope==="group" && Number.isInteger(group) && group>=1 && group<=12)) throw new Error("Phạm vi ảnh không hợp lệ.");
+  const ext=file.type==="image/jpeg"?"jpg":file.type.split("/")[1];
+  const assetId=crypto.randomUUID().replaceAll("-","");
+  const scopePath=scope==="common"?"common":`groups/${group}`;
+  const path=`groupActivityContent/${STATE.user.uid}/${activityId}/${scopePath}/${assetId}.${ext}`;
+  const metadata={ownerId:STATE.user.uid,activityId,scope}; if(scope==="group")metadata.groupId=String(group);
+  await uploadBytes(storageRef(storage,path),file,{contentType:file.type,customMetadata:metadata});
+  return {type:"image",storagePath:path,alt:file.name.replace(/\.[^.]+$/,"").slice(0,300),mimeType:file.type,size:file.size};
+}
+
+const MAX_GROUP_FILE_BYTES=10*1024*1024;
+function groupSubmissionAssetPath({ownerId,activityId,group,participantId,submissionId,file}){
+  const allowed=file.type.startsWith("image/")?IMAGE_MIME_TYPES.includes(file.type):true;
+  if(!allowed) throw new Error("Ảnh chỉ nhận JPEG/PNG/WebP.");
+  const rawExt=(file.name.split(".").pop()||"").toLowerCase();
+  const ext=file.type==="image/jpeg"?"jpg":file.type==="image/png"?"png":file.type==="image/webp"?"webp":rawExt.replace(/[^a-z0-9]/g,"").slice(0,10);
+  if(!ext) throw new Error("Không xác định được loại tệp.");
+  const assetId=crypto.randomUUID().replaceAll("-","");
+  return `groupActivitySubmissions/${ownerId}/${activityId}/groups/${group}/${participantId}/${submissionId}/${assetId}.${ext}`;
+}
+async function groupSubmissionBlobUrl(path,usePublic,maxBytes=MAX_GROUP_FILE_BYTES){
+  if(typeof path!=="string" || !/^groupActivitySubmissions\/[^/]+\/[^/]+\/groups\/[1-9][0-9]*\/[^/]+\/[^/]+\/[^/]+$/.test(path)) throw new Error("Đường dẫn bài gửi không hợp lệ.");
+  const bytes=await getBytes(storageRef(usePublic?publicStorage:storage,path),maxBytes);
+  return URL.createObjectURL(new Blob([bytes]));
+}
+function revokeGroupSubmissionUrls(urls){for(const url of urls){try{URL.revokeObjectURL(url);}catch(e){}}urls.clear();}
+async function downloadGroupSubmission(path,name,usePublic){
+  const url=await groupSubmissionBlobUrl(path,usePublic);
+  const a=document.createElement("a");a.href=url;a.download=name||"tep";document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),30000);
+}
+async function createGroupAssetSubmission({activity,group,file,kind}){
+  const participantId=publicAuth.currentUser.uid;
+  const submissionRef=doc(collection(publicDb,GROUP_COLLECTION,activity.id,kind==="photo"?"photos":"files"));
+  const storagePath=groupSubmissionAssetPath({ownerId:activity.ownerId,activityId:activity.id,group,participantId,submissionId:submissionRef.id,file});
+  const metadata={ownerId:activity.ownerId,activityId:activity.id,groupId:String(group),participantId,submissionId:submissionRef.id,kind};
+  await uploadThenCreateGroupSubmission({
+    path:storagePath,
+    upload:path=>uploadBytes(storageRef(publicStorage,path),file,{contentType:file.type||"application/octet-stream",customMetadata:metadata}),
+    create:()=>setDoc(submissionRef,{group,name:file.name,storagePath,size:file.size,contentType:file.type||"application/octet-stream",participantId,createdAt:serverTimestamp()}),
+    remove:path=>deleteObject(storageRef(publicStorage,path))
+  });
+  return submissionRef.id;
+}
 
 /* ---------------- Base URL (tự xác định, tương thích subdirectory GitHub Pages) ---------------- */
 
@@ -932,9 +1004,11 @@ async function openSessionInfoEditor(kind,id,onSaved){
         const richKey=RICH_ROW_KEY[key];
         if(!richKey) return;
         const mount=host.querySelector(`#si-${i}-${key}-rt`);
-        const editor=new RichTextEditor({container:mount, ariaLabel:esc(labels[key])});
+        const uploadScope=key==="instructions"?{scope:"common"}:{scope:"group",group:Number(row.group)};
+        const imageContext={ownerId:model.rows[0].original.ownerId,activityId:id,scope:uploadScope.scope,...(uploadScope.scope==="group"?{groupId:uploadScope.group}:{}) ,allowLegacy:true};
+        const editor=new RichTextEditor({container:mount, ariaLabel:esc(labels[key]), onImageUpload:file=>uploadRichImage(file,id,uploadScope),resolveImageUrl:path=>richImageUrl(path,false,imageContext)});
         const stored=row.original?.[richKey];
-        if(stored!==undefined && stored!==null && validateRichTextV1(stored)) editor.setRichText(stored);
+        if(stored!==undefined && stored!==null && validateRichText(stored,imageContext)) editor.setRichText(stored);
         else editor.setPlainText(row.original?.[key] ?? "");
         // Baseline = what THIS editor would export right now, immediately after loading and
         // before any user interaction. Comparing save-time export against this (not against the
@@ -1803,7 +1877,7 @@ function groupRandCode(len=6){
   return s;
 }
 function groupJoinLink(code){
-  return window.location.origin + window.location.pathname + "?group=" + encodeURIComponent(code);
+  return candidateGroupJoinUrl(window.location,code,APP_ENV);
 }
 function groupStatusBadge(s){
   const m={draft:["Nháp","badge"],open:["Đang mở","badge badge-green"],closed:["Đã đóng","badge badge-gray"]};
@@ -1816,6 +1890,41 @@ async function groupUniqueCode(){
     if(!snap.exists()) return code;
   }
   return groupRandCode(8);
+}
+
+async function cloneGroupRichImages(rich,{sourceActivityId,targetActivityId,scope,group=null,copied,uploadedPaths}){
+  if(!validateRichText(rich)) throw new Error("Nội dung nguồn không hợp lệ; chưa thể nhân bản an toàn.");
+  const sourcePrefix=`groupActivityContent/${STATE.user.uid}/${sourceActivityId}/`;
+  const targetPrefix=`groupActivityContent/${STATE.user.uid}/${targetActivityId}/`;
+  return cloneRichTextImages({rich,sourcePrefix,targetPrefix,copied,
+    makeTargetPath:sourcePath=>{
+      const ext=(sourcePath.split(".").pop()||"png").toLowerCase();
+      const assetId=(crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`).replaceAll("-","");
+      return `${targetPrefix}${scope==="common"?"common":`groups/${group}`}/${assetId}.${ext}`;
+    },
+    copyAsset:async(sourcePath,targetPath,block)=>{
+      const bytes=await getBytes(storageRef(storage,sourcePath),MAX_IMAGE_BYTES);
+      const metadata={ownerId:STATE.user.uid,activityId:targetActivityId,scope}; if(scope==="group")metadata.groupId=String(group);
+      await uploadBytes(storageRef(storage,targetPath),bytes,{contentType:block.mimeType,customMetadata:metadata});
+      uploadedPaths.add(targetPath); copied.set(sourcePath,targetPath);
+    }
+  });
+}
+
+async function rollbackNewGroupAssets(paths,targetActivityId){
+  // Fail closed: rollback may only delete objects inside this newly allocated activity.
+  const prefix=`groupActivityContent/${STATE.user.uid}/${targetActivityId}/`;
+  return rollbackGroupAssets({paths,targetPrefix:prefix,deleteAsset:path=>deleteObject(storageRef(storage,path))});
+}
+
+async function openGroupCloneForm(c,id){
+  const activitySnap=await getDoc(doc(db,GROUP_COLLECTION,id));
+  if(!activitySnap.exists()) throw new Error("Hoạt động gốc không còn tồn tại.");
+  const activity=activitySnap.data();
+  if(activity.ownerId!==STATE.user.uid) throw {code:"permission-denied"};
+  const topicSnap=await getDocs(collection(db,GROUP_COLLECTION,id,"topics"));
+  const topics={}; topicSnap.forEach(item=>topics[item.id]=item.data());
+  return openGroupCreateForm(c,{sourceActivityId:id,activity,topics});
 }
 
 async function groupModule(c,isAdminView){
@@ -1856,11 +1965,12 @@ async function groupModule(c,isAdminView){
         ${isAdminView?`<td>${esc(ownerMap[x.ownerId]?.name||"—")}<div class="group-admin-owner">${esc(ownerMap[x.ownerId]?.email||"")}</div></td>`:""}
         <td>${esc(x.className||"—")}</td><td>${x.groupCount||0}</td><td><b>${esc(x.joinCode||"")}</b></td><td>${groupStatusBadge(x.status)}</td>
         <td>${fmtDateShort(x.createdAt)}</td>
-        <td><div class="flex gap-8" style="flex-wrap:wrap"><button class="btn btn-sm btn-outline" data-group-open="${x.id}">MỞ</button><button class="btn btn-sm btn-outline" data-group-info="${x.id}">SỬA PHIÊN</button>
+        <td><div class="flex gap-8" style="flex-wrap:wrap"><button class="btn btn-sm btn-outline" data-group-open="${x.id}">MỞ</button><button class="btn btn-sm btn-outline" data-group-info="${x.id}">SỬA PHIÊN</button>${!isAdminView?`<button class="btn btn-sm btn-outline" data-group-clone="${x.id}">NHÂN BẢN</button>`:""}
         ${(isAdminView || x.ownerId===STATE.user.uid)?`<button class="btn btn-sm btn-danger" data-group-del="${x.id}" data-title="${esc(x.title||"")}">XÓA</button>`:""}</div></td>
       </tr>`).join("")}</tbody></table>`;
     $$("[data-group-info]").forEach(b=>b.onclick=()=>openSessionInfoEditor("groupActivities",b.dataset.groupInfo));
     $$("[data-group-open]").forEach(b=>b.onclick=()=>{window.location.hash="#/group/"+encodeURIComponent(b.dataset.groupOpen);});
+    $$("[data-group-clone]").forEach(b=>b.onclick=()=>openGroupCloneForm(c,b.dataset.groupClone).catch(e=>toast(mapError(e),"err")));
     $$("[data-group-del]").forEach(b=>b.onclick=async()=>{
       const id=b.dataset.groupDel;
       if(!confirm(`Xóa hoạt động nhóm “${b.dataset.title}”? Ý kiến, ảnh và tệp đã gửi cũng sẽ bị xóa.`)) return;
@@ -1876,29 +1986,60 @@ async function groupModule(c,isAdminView){
   track(unsub);
 }
 
-async function openGroupCreateForm(c){
+async function openGroupCreateForm(c,preset=null){
   let classes=[];
   try{
     const snap=await getDocs(query(collection(db,"classes"),where("ownerId","==",STATE.user.uid)));
     classes=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.name||"").localeCompare(b.name||"","vi"));
   }catch(e){}
-  openModal(`<h3>👥 Tạo hoạt động thảo luận nhóm</h3>
-    <div class="field"><label>Tên hoạt động *</label><input id="gTitle" placeholder="Ví dụ: Thảo luận nhóm - Giải pháp nâng cao chất lượng học tập"></div>
+  const aRef=doc(collection(db,GROUP_COLLECTION));
+  const source=preset?.activity||null;
+  const sourceActivityId=preset?.sourceActivityId||null;
+  const uploadedPaths=new Set(); let committed=false;
+  const commonUploader=async file=>{const block=await uploadRichImage(file,aRef.id,{scope:"common"});uploadedPaths.add(block.storagePath);return block;};
+  const host=openModal(`<h3>👥 ${source?"Nhân bản hoạt động nhóm":"Tạo hoạt động thảo luận nhóm"}</h3>
+    ${source?`<p class="mut">Đây là phiên mới. Anh có thể sửa toàn bộ nội dung trước khi tạo; học viên, bài nộp, kết quả và trạng thái đồng hồ không được sao chép.</p>`:""}
+    <div class="field"><label for="gTitle">Tên hoạt động *</label><textarea id="gTitle" rows="2" maxlength="120" style="width:100%;min-height:64px;resize:vertical;overflow-wrap:anywhere" placeholder="Ví dụ: Thảo luận nhóm - Giải pháp nâng cao chất lượng học tập">${esc(source?.title||"")}</textarea></div>
     <div class="field"><label>Lớp học</label><select id="gClass"><option value="">— Không gắn lớp —</option>${classes.map(x=>`<option value="${x.id}">${esc(x.name||x.code||x.id)}</option>`).join("")}</select></div>
     <div class="grid grid-2">
-      <div class="field"><label>Số nhóm (2-12)</label><input id="gCount" type="number" min="2" max="12" value="6"></div>
-      <div class="field"><label>Thời gian thảo luận (phút)</label><input id="gMinutes" type="number" min="1" max="180" value="15"></div>
+      <div class="field"><label>Số nhóm (2-12)</label><input id="gCount" type="number" min="2" max="12" value="${Math.max(2,Math.min(12,Number(source?.groupCount)||6))}"></div>
+      <div class="field"><label>Thời gian thảo luận (phút)</label><input id="gMinutes" type="number" min="1" max="180" value="${Math.max(1,Math.min(180,Math.round(Number(source?.durationSec||900)/60)))}"></div>
     </div>
-    <div class="field"><label>Nhiệm vụ / hướng dẫn chung</label><textarea id="gInstructions" placeholder="Nội dung yêu cầu học viên thực hiện…"></textarea></div>
+    <div class="field"><label>Nhiệm vụ / hướng dẫn chung</label><div id="gInstructionsEditor" class="rt-editor-host"></div></div>
+    <div class="field"><label>Nhiệm vụ từng nhóm</label><div id="gTopicEditors"></div></div>
     <div class="field"><label>Cho phép học viên gửi</label>
       <div class="flex gap-12" style="flex-wrap:wrap">
-        <label><input type="checkbox" id="gAllowText" checked style="width:auto;min-height:auto"> Ý kiến văn bản</label>
-        <label><input type="checkbox" id="gAllowPhoto" checked style="width:auto;min-height:auto"> Ảnh</label>
-        <label><input type="checkbox" id="gAllowFile" checked style="width:auto;min-height:auto"> File / link</label>
+        <label><input type="checkbox" id="gAllowText" ${source?.allowText===false?"":"checked"} style="width:auto;min-height:auto"> Ý kiến văn bản</label>
+        <label><input type="checkbox" id="gAllowPhoto" ${source?.allowPhoto===false?"":"checked"} style="width:auto;min-height:auto"> Ảnh</label>
+        <label><input type="checkbox" id="gAllowFile" ${source?.allowFile===false?"":"checked"} style="width:auto;min-height:auto"> File / link</label>
       </div>
     </div>
+    <div class="field"><label><input type="checkbox" id="gCollectNames" ${source?.collectStudentNames===true?"checked":""} style="width:auto;min-height:auto"> Thu thập tên học viên</label><div class="small mut">Mặc định Tắt. Khi bật, học viên phải xác nhận họ tên trước khi chọn nhóm.</div></div>
     <div id="gCreateErr" class="error-text hidden"></div>
-    <div class="flex-between mt-14"><button class="btn btn-ghost" id="gCancel">HỦY</button><button class="btn" id="gCreate">TẠO HOẠT ĐỘNG</button></div>`, true);
+    <div class="flex-between mt-14"><button class="btn btn-ghost" id="gCancel">HỦY</button><button class="btn" id="gCreate">${source?"TẠO BẢN NHÂN":"TẠO HOẠT ĐỘNG"}</button></div>`, true);
+  const commonImageContext={ownerId:STATE.user.uid,activityId:aRef.id,scope:"common",allowLegacy:true};
+  const commonSourceImageContext={ownerId:STATE.user.uid,activityId:sourceActivityId||aRef.id,scope:"common",allowLegacy:true};
+  const commonEditor=new RichTextEditor({container:host.querySelector("#gInstructionsEditor"),ariaLabel:"Nhiệm vụ chung",onImageUpload:commonUploader,resolveImageUrl:path=>richImageUrl(path,false,source?commonSourceImageContext:commonImageContext)});
+  if(source){
+    host.querySelector("#gClass").value=classes.some(x=>x.id===source.classId)?source.classId:"";
+    if(validateRichText(source.instructionsRich,commonSourceImageContext)) commonEditor.setRichText(source.instructionsRich);
+    else commonEditor.setPlainText(source.instructions||"");
+  }
+  let topicEditors=[];
+  let topicDrafts=Array.from({length:Number(source?.groupCount)||6},(_,index)=>{
+    const item=preset?.topics?.[String(index+1)]||{};
+    const context={ownerId:STATE.user.uid,activityId:sourceActivityId||aRef.id,scope:"group",groupId:index+1,allowLegacy:true};
+    return validateRichText(item.topicRich,context)?item.topicRich:{version:1,blocks:[{type:"paragraph",runs:item.topic?[{text:item.topic}]:[]}]};
+  });
+  function renderCreateTopicEditors(){
+    if(topicEditors.length) topicDrafts=topicEditors.map((editor,index)=>{const result=editor.getRichText();return result.ok?result.value:topicDrafts[index];});
+    topicEditors.forEach(x=>x.destroy()); topicEditors=[];
+    const wrap=host.querySelector("#gTopicEditors"); while(wrap.firstChild)wrap.removeChild(wrap.firstChild);
+    const count=Math.max(2,Math.min(12,Number(host.querySelector("#gCount").value)||6));
+    for(let i=1;i<=count;i++){const field=document.createElement("div");field.className="field";const label=document.createElement("label");label.textContent=`Nhóm ${i}`;const mount=document.createElement("div");mount.className="rt-editor-host";field.append(label,mount);wrap.appendChild(field);const uploader=async file=>{const block=await uploadRichImage(file,aRef.id,{scope:"group",group:i});uploadedPaths.add(block.storagePath);return block;};const imageContext={ownerId:STATE.user.uid,activityId:aRef.id,scope:"group",groupId:i,allowLegacy:true};const sourceImageContext={ownerId:STATE.user.uid,activityId:sourceActivityId||aRef.id,scope:"group",groupId:i,allowLegacy:true};const editor=new RichTextEditor({container:mount,ariaLabel:`Nhiệm vụ nhóm ${i}`,onImageUpload:uploader,resolveImageUrl:path=>richImageUrl(path,false,source?sourceImageContext:imageContext)});if(validateRichText(topicDrafts[i-1],source?sourceImageContext:imageContext))editor.setRichText(topicDrafts[i-1]);topicEditors.push(editor);}
+  }
+  renderCreateTopicEditors(); host.querySelector("#gCount").addEventListener("change",renderCreateTopicEditors);
+  modalCloseCleanup=()=>{commonEditor.destroy();topicEditors.forEach(x=>x.destroy());if(!committed)void rollbackNewGroupAssets(uploadedPaths,aRef.id).then(leftovers=>{if(leftovers.length)toast(`Không thể dọn ${leftovers.length} ảnh thử nghiệm: ${leftovers.join(", ")}`,"err");});};
   $("#gCancel").onclick=closeModal;
   $("#gCreate").onclick=async()=>{
     const title=$("#gTitle").value.trim();
@@ -1909,23 +2050,40 @@ async function openGroupCreateForm(c){
     const cls=classes.find(x=>x.id===classId);
     $("#gCreate").disabled=true;
     try{
+      const commonResult=commonEditor.getRichText(); const topicResults=topicEditors.map(editor=>editor.getRichText());
+      if(!commonResult.ok || topicResults.some(result=>!result.ok)) throw new Error("Nội dung nhiệm vụ vượt giới hạn cho phép.");
       const code=await groupUniqueCode();
-      const aRef=doc(collection(db,GROUP_COLLECTION));
+      let commonRich=commonResult.value;
+      let topicRichValues=topicResults.map(result=>result.value);
+      if(sourceActivityId){
+        commonRich=await cloneGroupRichImages(commonRich,{sourceActivityId,targetActivityId:aRef.id,scope:"common",copied:new Map(),uploadedPaths});
+        topicRichValues=[];
+        for(let index=0;index<topicResults.length;index++) topicRichValues.push(await cloneGroupRichImages(topicResults[index].value,{sourceActivityId,targetActivityId:aRef.id,scope:"group",group:index+1,copied:new Map(),uploadedPaths}));
+      }
+      if(!validateRichText(commonRich,commonImageContext) || topicRichValues.some((rich,index)=>!validateRichText(rich,{ownerId:STATE.user.uid,activityId:aRef.id,scope:"group",groupId:index+1,allowLegacy:true}))) throw new Error("Nội dung sau khi sao chép không đúng phạm vi phiên mới.");
       const batch=writeBatch(db);
       batch.set(aRef,{
         ownerId:STATE.user.uid,
         classId:classId||null,className:cls?.name||cls?.code||"",
-        title,instructions:$("#gInstructions").value.trim(),groupCount:count,durationSec:Math.round(minutes*60),
+        title,instructions:richTextToPlainText(commonRich),instructionsRich:commonRich,groupCount:count,durationSec:Math.round(minutes*60),
         allowText:$("#gAllowText").checked,allowPhoto:$("#gAllowPhoto").checked,allowFile:$("#gAllowFile").checked,
+        collectStudentNames:$("#gCollectNames").checked,
         joinCode:code,status:"draft",startedAt:null,createdAt:serverTimestamp(),updatedAt:serverTimestamp()
       });
       batch.set(doc(db,GROUP_JOIN_COLLECTION,code),{activityId:aRef.id,ownerId:STATE.user.uid,createdAt:serverTimestamp()});
       for(let i=1;i<=count;i++){
-        batch.set(doc(db,GROUP_COLLECTION,aRef.id,"topics",String(i)),{group:i,topic:"",updatedAt:serverTimestamp()});
+        const rich=topicRichValues[i-1];
+        batch.set(doc(db,GROUP_COLLECTION,aRef.id,"topics",String(i)),{group:i,topic:richTextToPlainText(rich),topicRich:rich,updatedAt:serverTimestamp()});
       }
       await batch.commit();
+      committed=true;
       closeModal(); window.location.hash="#/group/"+encodeURIComponent(aRef.id);
-    }catch(e){$("#gCreateErr").textContent=mapError(e);$("#gCreateErr").classList.remove("hidden");}
+    }catch(e){
+      const leftovers=await rollbackNewGroupAssets(uploadedPaths,aRef.id);
+      uploadedPaths.clear(); leftovers.forEach(path=>uploadedPaths.add(path));
+      const detail=leftovers.length?` Tệp thử nghiệm còn sót cần dọn an toàn: ${leftovers.join(", ")}`:"";
+      $("#gCreateErr").textContent=mapError(e)+detail;$("#gCreateErr").classList.remove("hidden");
+    }
     finally{$("#gCreate") && ($("#gCreate").disabled=false);}
   };
 }
@@ -1953,10 +2111,12 @@ function groupFileAnchorHtml(f){
   if(f.link){
     const safeHref=safeGroupFileLinkUrl(f.link);
     return safeHref
-      ? `<a class="group-file" href="${esc(safeHref)}" target="_blank" rel="noopener">🔗 ${esc(f.name||"Liên kết")}</a>`
+      ? `<a class="group-file" href="${esc(safeHref)}" target="_blank" rel="noopener noreferrer">🔗 ${esc(f.name||"Liên kết ngoài")} <span class="small mut">(quyền truy cập do dịch vụ đích quản lý)</span></a>`
       : `<span class="group-file group-file-unsafe">⚠️ Liên kết không hợp lệ hoặc không an toàn</span>`;
   }
-  return `<a class="group-file" href="${f.url||f.dataUrl}" download="${esc(f.name||"tep")}">📄 ${esc(f.name||"Tệp")}</a>`;
+  if(f.storagePath && /^groupActivitySubmissions\/[^/]+\/[^/]+\/groups\/[1-9][0-9]*\/[^/]+\/[^/]+\/[^/]+$/.test(f.storagePath)) return `<button type="button" class="group-file btn btn-sm btn-outline" data-gfile-path="${esc(f.storagePath)}" data-gfile-name="${esc(f.name||"tep")}">📄 Tải ${esc(f.name||"Tệp")}</button>`;
+  if(f.storagePath) return `<span class="group-file group-file-unsafe">⚠️ ${esc(f.name||"Tệp cũ")} chưa được chuyển sang vùng lưu trữ an toàn</span>`;
+  return `<span class="group-file group-file-unsafe">⚠️ Tệp cũ chưa được chuyển sang vùng lưu trữ an toàn</span>`;
 }
 
 async function groupLive(c,id,isAdminView){
@@ -1978,7 +2138,7 @@ async function groupLive(c,id,isAdminView){
       <button class="btn btn-outline" id="gSessionInfo">SỬA PHIÊN</button><button class="btn btn-outline" id="gClose">ĐÓNG HOẠT ĐỘNG</button>
     </div>
   </div>
-  <div class="card mt-14 ${a.instructions?"":"hidden"}" id="gInstructionsCard"><b>Nhiệm vụ chung:</b><div class="mt-8" id="gLiveInstructions"></div></div>
+  <div class="card mt-14 ${(a.instructions||richTextToPlainText(a.instructionsRich))?"":"hidden"}" id="gInstructionsCard"><b>Nhiệm vụ chung:</b><div class="mt-8" id="gLiveInstructions"></div></div>
   <div class="grid grid-2 mt-14">
     <div class="card">
       <div class="flex-between"><div><h3 style="margin:0">QR tham gia</h3><div class="small mut">Học viên quét QR → chọn nhóm → gửi kết quả.</div></div>
@@ -2026,27 +2186,32 @@ async function groupLive(c,id,isAdminView){
   $("#gSessionInfo").onclick=()=>openSessionInfoEditor("groupActivities",id);
   $("#gClose").onclick=()=>updateDoc(doc(db,GROUP_COLLECTION,id),{status:"closed",updatedAt:serverTimestamp()}).catch(e=>toast(mapError(e),"err"));
   let current=a, notes=[],photos=[],files=[],topics={};
+  const panelAssetUrls=new Set(); track(()=>revokeGroupSubmissionUrls(panelAssetUrls));
   const classroom=mountClassroomPresentation({root:c,initial:a,
     write:(action,seconds)=>writeTimer({db,ref:doc(db,GROUP_COLLECTION,id),runTransaction,serverTimestamp},action,seconds),
+    resolveImageUrl:path=>richImageUrl(path,false,{ownerId:current.ownerId,activityId:id,scope:"common",allowLegacy:true}),
+    imageContext:{ownerId:a.ownerId,activityId:id,scope:"common",allowLegacy:true},
     onError:e=>toast(e.code?mapError(e):e.message,"err")});
   track(()=>classroom.dispose());
   // GATE 2B-RT-INTEGRATION: same shared safe renderer for the common instructions card, both at
   // initial paint and on every live update — no separate HTML renderer, never innerHTML with
   // stored rich content.
   function renderCommonInstructions(){
-    renderRichText($("#gLiveInstructions"), current.instructionsRich, current.instructions||"");
+    const imageContext={ownerId:current.ownerId,activityId:id,scope:"common",allowLegacy:true};
+    renderRichText($("#gLiveInstructions"), current.instructionsRich, current.instructions||"", undefined, {imageContext,resolveImageUrl:path=>richImageUrl(path,false,imageContext)});
     classroom.update(current);
   }
   function renderTopics(){
     $("#gTopics").innerHTML=Array.from({length:current.groupCount||6},(_,k)=>k+1).map(i=>
-      `<div class="field" style="margin-bottom:8px"><label>Nhóm ${i}</label><div data-topic-mount="${i}" style="white-space:pre-wrap">${topics[String(i)]?.topic?"":"Chưa có nhiệm vụ"}</div></div>`).join("");
+      `<div class="field" style="margin-bottom:8px"><label>Nhóm ${i}</label><div data-topic-mount="${i}" style="white-space:pre-wrap">${(topics[String(i)]?.topic||richTextToPlainText(topics[String(i)]?.topicRich))?"":"Chưa có nhiệm vụ"}</div></div>`).join("");
     Array.from({length:current.groupCount||6},(_,k)=>k+1).forEach(i=>{
-      if(topics[String(i)]?.topic) renderRichText($(`[data-topic-mount="${i}"]`), topics[String(i)]?.topicRich, topics[String(i)].topic);
+      if(topics[String(i)]?.topic||richTextToPlainText(topics[String(i)]?.topicRich)){const imageContext={ownerId:current.ownerId,activityId:id,scope:"group",groupId:i,allowLegacy:true};renderRichText($(`[data-topic-mount="${i}"]`), topics[String(i)]?.topicRich, topics[String(i)].topic||"", undefined, {imageContext,resolveImageUrl:path=>richImageUrl(path,false,imageContext)});}
     });
   }
   $("#gSaveTopics").onclick=()=>openSessionInfoEditor("groupActivities",id);
-  $("#gManageMembers").onclick=()=>openGroupMembersManager(id,current.groupCount||6);
+  $("#gManageMembers").onclick=()=>openGroupMembersManager(current);
   function renderPanels(){
+    revokeGroupSubmissionUrls(panelAssetUrls);
     let total=0;
     $("#gPanels").innerHTML=Array.from({length:current.groupCount||6},(_,k)=>k+1).map(i=>{
       const ns=notes.filter(x=>Number(x.group)===i).sort((x,y)=>qrDateValue(x.createdAt)-qrDateValue(y.createdAt));
@@ -2054,17 +2219,18 @@ async function groupLive(c,id,isAdminView){
       const fs=files.filter(x=>Number(x.group)===i);
       total+=ns.length+ps.length+fs.length;
       return `<div class="group-panel" data-group-panel="${i}"><h4>Nhóm ${i}</h4>
-        ${topics[String(i)]?.topic?`<div class="group-topic">📌 <span data-panel-topic-mount="${i}"></span></div>`:""}
+        ${(topics[String(i)]?.topic||richTextToPlainText(topics[String(i)]?.topicRich))?`<div class="group-topic">📌 <span data-panel-topic-mount="${i}"></span></div>`:""}
         <div>${ns.length?ns.map(n=>`<div class="group-note">${esc(n.text||"")}</div>`).join(""):`<div class="mut small">Đang chờ ý kiến…</div>`}</div>
-        ${ps.length?`<div class="group-media">${ps.map(p=>`<img src="${p.url||p.dataUrl}" data-gphoto="${p.id}" alt="Ảnh nhóm ${i}">`).join("")}</div>`:""}
+        ${ps.length?`<div class="group-media">${ps.map(p=>`<img data-gphoto="${p.id}" data-gphoto-path="${esc(p.storagePath||"")}" alt="Ảnh nhóm ${i}">`).join("")}</div>`:""}
         ${fs.length?`<div>${fs.map(f=>groupFileAnchorHtml(f)).join("")}</div>`:""}
       </div>`;
     }).join("");
     $("#gRespCount").textContent=`${total} nội dung đã gửi`;
     Array.from({length:current.groupCount||6},(_,k)=>k+1).forEach(i=>{
-      if(topics[String(i)]?.topic) renderRichText($(`[data-panel-topic-mount="${i}"]`), topics[String(i)]?.topicRich, topics[String(i)].topic);
+      if(topics[String(i)]?.topic||richTextToPlainText(topics[String(i)]?.topicRich)){const imageContext={ownerId:current.ownerId,activityId:id,scope:"group",groupId:i,allowLegacy:true};renderRichText($(`[data-panel-topic-mount="${i}"]`), topics[String(i)]?.topicRich, topics[String(i)].topic||"", undefined, {imageContext,resolveImageUrl:path=>richImageUrl(path,false,imageContext)});}
     });
-    $$("[data-gphoto]").forEach(img=>img.onclick=e=>{e.stopPropagation();const p=photos.find(x=>x.id===img.dataset.gphoto);if(p)openImageViewerSimple(p.url||p.dataUrl);});
+    $$("[data-gphoto-path]").forEach(async img=>{try{const url=await groupSubmissionBlobUrl(img.dataset.gphotoPath,false,MAX_IMAGE_BYTES);if(!img.isConnected){URL.revokeObjectURL(url);return;}panelAssetUrls.add(url);img.src=url;img.onclick=e=>{e.stopPropagation();openImageViewerSimple(url);};}catch(e){img.alt="Không tải được ảnh";}});
+    $$("[data-gfile-path]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();downloadGroupSubmission(btn.dataset.gfilePath,btn.dataset.gfileName,false).catch(err=>toast(mapError(err),"err"));});
     $$("[data-group-panel]").forEach(panel=>panel.onclick=()=>{
       const i=Number(panel.dataset.groupPanel);
       const ns=notes.filter(x=>Number(x.group)===i).sort((x,y)=>qrDateValue(x.createdAt)-qrDateValue(y.createdAt));
@@ -2072,14 +2238,15 @@ async function groupLive(c,id,isAdminView){
       const fs=files.filter(x=>Number(x.group)===i);
       $("#groupPanelPopupInner").innerHTML=`
         <h2>Nhóm ${i}</h2>
-        ${topics[String(i)]?.topic?`<div class="group-topic">📌 <span id="groupPanelPopupTopic"></span></div>`:""}
+        ${(topics[String(i)]?.topic||richTextToPlainText(topics[String(i)]?.topicRich))?`<div class="group-topic">📌 <span id="groupPanelPopupTopic"></span></div>`:""}
         <div class="small mut" style="margin-bottom:12px">${ns.length} ý kiến · ${ps.length} ảnh · ${fs.length} tệp/link</div>
         ${ns.length?ns.map(n=>`<div class="group-note">${esc(n.text||"")}</div>`).join(""):`<div class="mut">Đang chờ ý kiến…</div>`}
-        ${ps.length?`<div class="group-media mt-14">${ps.map(p=>`<img src="${p.dataUrl}" data-popup-photo="${p.id}" alt="Ảnh nhóm ${i}">`).join("")}</div>`:""}
+        ${ps.length?`<div class="group-media mt-14">${ps.map(p=>`<img data-popup-photo="${p.id}" data-gphoto-path="${esc(p.storagePath||"")}" alt="Ảnh nhóm ${i}">`).join("")}</div>`:""}
         ${fs.length?`<div class="mt-14">${fs.map(f=>groupFileAnchorHtml(f)).join("")}</div>`:""}`;
-      if(topics[String(i)]?.topic) renderRichText($("#groupPanelPopupTopic"), topics[String(i)]?.topicRich, topics[String(i)].topic);
+      if(topics[String(i)]?.topic||richTextToPlainText(topics[String(i)]?.topicRich)){const imageContext={ownerId:current.ownerId,activityId:id,scope:"group",groupId:i,allowLegacy:true};renderRichText($("#groupPanelPopupTopic"), topics[String(i)]?.topicRich, topics[String(i)].topic||"", undefined, {imageContext,resolveImageUrl:path=>richImageUrl(path,false,imageContext)});}
       $("#groupPanelPopup").classList.remove("hidden");
-      $$("[data-popup-photo]").forEach(img=>img.onclick=e=>{e.stopPropagation();const p=photos.find(x=>x.id===img.dataset.popupPhoto);if(p)openImageViewerSimple(p.url||p.dataUrl);});
+      $$("[data-popup-photo]").forEach(async img=>{try{const url=await groupSubmissionBlobUrl(img.dataset.gphotoPath,false,MAX_IMAGE_BYTES);if(!img.isConnected){URL.revokeObjectURL(url);return;}panelAssetUrls.add(url);img.src=url;img.onclick=e=>{e.stopPropagation();openImageViewerSimple(url);};}catch(e){img.alt="Không tải được ảnh";}});
+      $$("[data-gfile-path]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();downloadGroupSubmission(btn.dataset.gfilePath,btn.dataset.gfileName,false).catch(err=>toast(mapError(err),"err"));});
     });
   }
   function updateTimer(){
@@ -2103,7 +2270,7 @@ async function groupLive(c,id,isAdminView){
   };
   document.addEventListener("keydown",groupKeyHandler); track(()=>document.removeEventListener("keydown",groupKeyHandler));
 
-  track(onSnapshot(doc(db,GROUP_COLLECTION,id),s=>{if(!s.exists())return;current={id,...s.data()};$("#gLiveTitle").textContent=current.title||"";renderCommonInstructions();$("#gInstructionsCard").classList.toggle("hidden",!current.instructions);$("#gStatusBadge").innerHTML=groupStatusBadge(current.status);renderPanels();updateTimer();}));
+  track(onSnapshot(doc(db,GROUP_COLLECTION,id),s=>{if(!s.exists())return;current={id,...s.data()};$("#gLiveTitle").textContent=current.title||"";renderCommonInstructions();$("#gInstructionsCard").classList.toggle("hidden",!(current.instructions||richTextToPlainText(current.instructionsRich)));$("#gStatusBadge").innerHTML=groupStatusBadge(current.status);renderPanels();updateTimer();}));
   track(onSnapshot(collection(db,GROUP_COLLECTION,id,"topics"),s=>{topics={};s.forEach(d=>topics[d.id]=d.data());renderTopics();renderPanels();}));
   track(onSnapshot(collection(db,GROUP_COLLECTION,id,"notes"),s=>{notes=s.docs.map(d=>({id:d.id,...d.data()}));renderPanels();}));
   track(onSnapshot(collection(db,GROUP_COLLECTION,id,"photos"),s=>{photos=s.docs.map(d=>({id:d.id,...d.data()}));renderPanels();}));
@@ -2116,18 +2283,26 @@ async function groupLive(c,id,isAdminView){
 // list at all); writes via a single-field updateDoc(), never a full document rewrite, so
 // joinCode/joinedAt stay exactly as Rules require regardless of what this UI sends. No PII is
 // displayed or stored — the label is derived purely from the opaque uid.
-async function openGroupMembersManager(activityId,groupCount){
-  const host=openModal(`<h3>Quản lý nhóm học viên</h3><p class="mut">Xem và điều chỉnh nhóm của học viên đã tham gia hoạt động này.</p><div id="gmmList"><div class="mut small">Đang tải…</div></div><div class="flex-between mt-14"><button class="btn btn-ghost" id="gmmClose">ĐÓNG</button></div>`,true);
+function exportGroupRosterXlsx(activity,members){
+  if(activity.collectStudentNames!==true) throw new Error("Phiên này không bật Thu thập tên học viên nên không có họ tên để xuất.");
+  const {workbook}=buildGroupRosterWorkbook(window.XLSX,activity,members);
+  const safeCode=String(activity.joinCode||"phien").replace(/[^A-Za-z0-9_-]/g,"");
+  window.XLSX.writeFile(workbook,`danh-sach-thao-luan-${safeCode}.xlsx`,{compression:true});
+}
+
+async function openGroupMembersManager(activity){
+  const activityId=activity.id,groupCount=activity.groupCount||6,collectNames=activity.collectStudentNames===true;
+  const host=openModal(`<h3>Quản lý nhóm học viên</h3><p class="mut">Xem và điều chỉnh nhóm hiện tại của từng học viên.${collectNames?" Họ tên gắn với mã học viên, nên người trùng tên vẫn là hai người riêng biệt.":" Phiên này không thu thập họ tên."}</p><div id="gmmList"><div class="mut small">Đang tải…</div></div><div class="flex-between mt-14"><button class="btn btn-ghost" id="gmmClose">ĐÓNG</button><button class="btn btn-outline" id="gmmExport" ${collectNames?"":"disabled"}>XUẤT DANH SÁCH EXCEL</button></div><div id="gmmExportMsg" class="small mut mt-8">${collectNames?"Một tệp .xlsx, mỗi nhóm một sheet.":"Chỉ xuất được họ tên với phiên đã bật Thu thập tên học viên."}</div>`,true);
   host.querySelector("#gmmClose").onclick=closeModal;
   const list=host.querySelector("#gmmList");
   try{
     const snap=await getDocs(collection(db,GROUP_COLLECTION,activityId,"members"));
-    if(snap.empty){list.innerHTML=`<div class="mut small">Chưa có học viên nào tham gia.</div>`;return;}
     const rows=snap.docs.map(d=>({uid:d.id,...d.data()})).sort((x,y)=>(x.group||0)-(y.group||0));
-    list.innerHTML=rows.map(r=>{
-      const label="Học viên "+shortStudentCode(r.uid);
+    list.innerHTML=rows.length?rows.map(r=>{
+      const label=collectNames&&r.displayName?r.displayName:"Học viên "+shortStudentCode(r.uid);
       return `<div class="flex-between mt-8" data-gmm-row="${esc(r.uid)}"><div>${esc(label)}</div><div class="flex gap-8" style="align-items:center"><select data-gmm-select>${Array.from({length:groupCount||6},(_,k)=>`<option value="${k+1}" ${r.group===k+1?"selected":""}>Nhóm ${k+1}</option>`).join("")}</select><button class="btn btn-sm btn-outline" data-gmm-save>LƯU</button></div></div>`;
-    }).join("");
+    }).join(""):`<div class="mut small">Chưa có học viên nào tham gia.</div>`;
+    host.querySelector("#gmmExport").onclick=()=>{try{exportGroupRosterXlsx(activity,rows);host.querySelector("#gmmExportMsg").textContent=`Đã tạo tệp Excel gồm ${groupCount} sheet.`;}catch(e){host.querySelector("#gmmExportMsg").textContent=e.message||mapError(e);}};
     list.querySelectorAll("[data-gmm-row]").forEach(row=>{
       const uid=row.dataset.gmmRow, rec=rows.find(r=>r.uid===uid), saveBtn=row.querySelector("[data-gmm-save]"), sel=row.querySelector("[data-gmm-select]");
       let busy=false;
@@ -2196,12 +2371,16 @@ async function renderGroupStudentEntry(){
     // membership is immutable to the student by design).
     const existingMemberSnap=await getDoc(doc(publicDb,GROUP_COLLECTION,id,"members",publicAuth.currentUser.uid));
     let membershipGroup=null;
-    if(existingMemberSnap.exists()) membershipGroup=validStoredGroup(existingMemberSnap.data(),a.groupCount);
+    const existingMember=existingMemberSnap.exists()?existingMemberSnap.data():null;
+    if(existingMember) membershipGroup=validStoredGroup(existingMember,a.groupCount);
+    const collectStudentNames=a.collectStudentNames===true;
+    let confirmedName=collectStudentNames&&existingMember?.displayName?existingMember.displayName:"";
 
     appRoot().innerHTML=`<div class="group-student-wrap">
       <div class="center"><div class="eyebrow">HCMA2 - TEACHING</div><h1 id="gsLiveTitle">👥 ${esc(a.title||"Thảo luận nhóm")}</h1><div class="mut" id="gsLiveInstructions"></div></div>
       <div class="group-student-card"><div class="flex-between"><div><b>Mã phòng: ${esc(code)}</b><div class="small mut" id="gsStatus"></div><div class="small mut mt-8">Mã học viên: <b>${esc(shortStudentCode(publicAuth.currentUser.uid))}</b> — nếu cần đổi nhóm, hãy báo mã này cho giảng viên.</div></div><div class="group-timer" id="gsTimer">--:--</div></div>
-        <div class="field mt-14"><label>${membershipGroup?"Nhóm của anh/chị":"Chọn nhóm của anh/chị *"}</label><select id="gsGroup" ${membershipGroup?"disabled":""}><option value="">— Chọn nhóm —</option>${Array.from({length:a.groupCount||6},(_,k)=>`<option value="${k+1}" ${membershipGroup===k+1?"selected":""}>Nhóm ${k+1}</option>`).join("")}</select><div class="small mut mt-8" id="gsJoinMsg">${membershipGroup?"Bạn đã tham gia nhóm này — không thể đổi nhóm.":""}</div></div>
+        ${collectStudentNames?`<div class="field mt-14"><label for="gsFullName">Họ và tên *</label><div class="flex gap-8"><input id="gsFullName" maxlength="100" value="${esc(confirmedName)}" ${membershipGroup?"readonly":""} placeholder="Nhập họ và tên"><button class="btn btn-outline" id="gsConfirmName" ${membershipGroup?"disabled":""}>${membershipGroup?"ĐÃ XÁC NHẬN":"XÁC NHẬN"}</button></div><div class="small mut mt-8" id="gsNameMsg">${membershipGroup?"Họ tên đã gắn với mã học viên này.":"Xác nhận họ tên trước khi chọn nhóm."}</div></div>`:""}
+        <div class="field mt-14"><label>${membershipGroup?"Nhóm của anh/chị":"Chọn nhóm của anh/chị *"}</label><select id="gsGroup" ${membershipGroup||(collectStudentNames&&!confirmedName)?"disabled":""}><option value="">— Chọn nhóm —</option>${Array.from({length:a.groupCount||6},(_,k)=>`<option value="${k+1}" ${membershipGroup===k+1?"selected":""}>Nhóm ${k+1}</option>`).join("")}</select><div class="small mut mt-8" id="gsJoinMsg">${membershipGroup?"Bạn đã tham gia nhóm này — không thể đổi nhóm.":""}</div></div>
         <div id="gsTopic" class="group-topic hidden"><span id="gsTopicLabel"></span><div id="gsTopicContent"></div></div>
       </div>
       <div class="group-student-card hidden" id="gsSubmitCard">
@@ -2210,26 +2389,44 @@ async function renderGroupStudentEntry(){
         ${a.allowFile!==false?`<hr class="mt-16"><div class="field"><label>Gửi file nhỏ DOC/DOCX/PPT/PPTX/PDF (tối đa khoảng 650KB)</label><input id="gsFile" type="file" accept=".doc,.docx,.ppt,.pptx,.pdf"></div><button class="btn btn-outline" id="gsSendFile">GỬI FILE</button>
           <div class="field mt-14"><label>Hoặc gửi link Google Drive / OneDrive</label><input id="gsLink" type="url" placeholder="https://..."></div><button class="btn btn-outline" id="gsSendLink">GỬI LINK</button><div id="gsFileMsg" class="small mt-8"></div>`:""}
       </div>
-      <div class="group-student-card"><h3>Ý kiến đã gửi của nhóm</h3><div id="gsMyNotes"><div class="mut small">${membershipGroup?"Đang tải…":"Chọn nhóm để xem."}</div></div></div>
+      <div class="group-student-card"><h3>Nội dung đã gửi của nhóm</h3><div id="gsMyNotes"><div class="mut small">${membershipGroup?"Đang tải…":"Chọn nhóm để xem."}</div></div></div>
     </div>`;
     // GATE 2B-RT-INTEGRATION: same shared safe renderer as the lecturer view, at initial paint
     // and on every live update (see the activity onSnapshot listener below).
-    renderRichText($("#gsLiveInstructions"), a.instructionsRich, a.instructions||"");
+    {const imageContext={ownerId:a.ownerId,activityId:id,scope:"common"};renderRichText($("#gsLiveInstructions"), a.instructionsRich, a.instructions||"", undefined, {imageContext,resolveImageUrl:path=>richImageUrl(path,true,imageContext)});}
 
-    let currentTopic=null, notes=[], joinBusy=false, unsubTopic=null, unsubNotes=null, membershipListenerAttached=false, wasOpen=true, contentGeneration=0;
+    if(collectStudentNames && !membershipGroup){
+      $("#gsConfirmName").onclick=()=>{
+        try{
+          confirmedName=normalizeStudentName($("#gsFullName").value);
+          $("#gsFullName").value=confirmedName;$("#gsFullName").readOnly=true;$("#gsConfirmName").disabled=true;
+          $("#gsConfirmName").textContent="ĐÃ XÁC NHẬN";$("#gsNameMsg").textContent="Đã xác nhận. Bây giờ anh/chị có thể chọn nhóm.";$("#gsGroup").disabled=false;
+        }catch(e){$("#gsNameMsg").textContent=e.message;}
+      };
+    }
+
+    let currentTopic=null, notes=[], photos=[], files=[], joinBusy=false, unsubTopic=null, unsubNotes=null, unsubPhotos=null, unsubFiles=null, membershipListenerAttached=false, wasOpen=true, contentGeneration=0,removedFromActivity=false;
+    const studentAssetUrls=new Set();track(()=>revokeGroupSubmissionUrls(studentAssetUrls));
 
     function updateTopicDisplay(){
       const t=currentTopic?.topic||""; const el=$("#gsTopic");
       el.classList.toggle("hidden",!t);
       if(t){
         $("#gsTopicLabel").textContent=`📌 Chủ đề nhóm ${membershipGroup}: `;
-        renderRichText($("#gsTopicContent"), currentTopic?.topicRich, t);
+        const imageContext={ownerId:a.ownerId,activityId:id,scope:"group",groupId:membershipGroup};
+        renderRichText($("#gsTopicContent"), currentTopic?.topicRich, t, undefined, {imageContext,resolveImageUrl:path=>richImageUrl(path,true,imageContext)});
       }
     }
     function renderMyNotes(){
       if(!membershipGroup){$("#gsMyNotes").innerHTML=`<div class="mut small">Chọn nhóm để xem.</div>`;return;}
       const arr=notes.slice().sort((x,y)=>qrDateValue(x.createdAt)-qrDateValue(y.createdAt));
-      $("#gsMyNotes").innerHTML=arr.length?arr.map(n=>`<div class="group-note">${esc(n.text||"")}</div>`).join(""):`<div class="mut small">Chưa có ý kiến nào.</div>`;
+      revokeGroupSubmissionUrls(studentAssetUrls);
+      $("#gsMyNotes").innerHTML=`
+        ${arr.length?arr.map(n=>`<div class="group-note">${esc(n.text||"")}</div>`).join(""):`<div class="mut small">Chưa có ý kiến nào.</div>`}
+        ${photos.length?`<div class="group-media mt-14">${photos.map(p=>`<img data-student-photo-path="${esc(p.storagePath||"")}" alt="Ảnh nhóm ${membershipGroup}">`).join("")}</div>`:""}
+        ${files.length?`<div class="mt-14">${files.map(f=>groupFileAnchorHtml(f)).join("")}</div>`:""}`;
+      $$("[data-student-photo-path]").forEach(async img=>{try{const url=await groupSubmissionBlobUrl(img.dataset.studentPhotoPath,true,MAX_IMAGE_BYTES);if(!img.isConnected){URL.revokeObjectURL(url);return;}studentAssetUrls.add(url);img.src=url;img.onclick=()=>openImageViewerSimple(url);}catch(e){img.alt="Không tải được ảnh";}});
+      $$("#gsMyNotes [data-gfile-path]").forEach(btn=>btn.onclick=()=>downloadGroupSubmission(btn.dataset.gfilePath,btn.dataset.gfileName,true).catch(err=>toast(mapError(err),"err")));
     }
     function updateStudentState(){
       $("#gsStatus").textContent=a.status==="open"?"Phòng đang mở — có thể gửi kết quả.":a.status==="closed"?"Phòng đã đóng.":"Phòng chưa mở.";
@@ -2250,7 +2447,10 @@ async function renderGroupStudentEntry(){
       contentGeneration++;
       if(unsubTopic){unsubTopic();unsubTopic=null;}
       if(unsubNotes){unsubNotes();unsubNotes=null;}
-      currentTopic=null; notes=[];
+      if(unsubPhotos){unsubPhotos();unsubPhotos=null;}
+      if(unsubFiles){unsubFiles();unsubFiles=null;}
+      revokeGroupSubmissionUrls(studentAssetUrls);
+      currentTopic=null; notes=[];photos=[];files=[];
       updateTopicDisplay(); renderMyNotes();
     }
     function attachScopedListeners(group){
@@ -2264,8 +2464,16 @@ async function renderGroupStudentEntry(){
         if(myGen!==contentGeneration)return;
         notes=s.docs.map(d=>({id:d.id,...d.data()}));renderMyNotes();
       });
+      unsubPhotos=onSnapshot(query(collection(publicDb,GROUP_COLLECTION,id,"photos"),where("group","==",group)),s=>{
+        if(myGen!==contentGeneration)return;
+        photos=s.docs.map(d=>({id:d.id,...d.data()}));renderMyNotes();
+      });
+      unsubFiles=onSnapshot(query(collection(publicDb,GROUP_COLLECTION,id,"files"),where("group","==",group)),s=>{
+        if(myGen!==contentGeneration)return;
+        files=s.docs.map(d=>({id:d.id,...d.data()}));renderMyNotes();
+      });
     }
-    track(()=>{if(unsubTopic)unsubTopic();if(unsubNotes)unsubNotes();});
+    track(()=>{if(unsubTopic)unsubTopic();if(unsubNotes)unsubNotes();if(unsubPhotos)unsubPhotos();if(unsubFiles)unsubFiles();});
     // GATE 2A-AUTH-I2-CORRECTION-FIX: required ordering — detach the OLD group's listeners and
     // clear their rendered content FIRST (attachScopedListeners' own first action), and only
     // THEN update the authoritative membershipGroup and the visible group label. The previous
@@ -2285,7 +2493,12 @@ async function renderGroupStudentEntry(){
       if(!membershipListenerAttached){
         membershipListenerAttached=true;
         track(onSnapshot(doc(publicDb,GROUP_COLLECTION,id,"members",publicAuth.currentUser.uid),s=>{
-          if(!s.exists())return;
+          if(!s.exists()){
+            removedFromActivity=true;detachScopedListeners();membershipGroup=null;
+            $("#gsGroup").value="";$("#gsGroup").disabled=true;
+            const msg=$("#gsJoinMsg");if(msg)msg.textContent="Bạn đã được gỡ khỏi phiên. Hãy liên hệ giảng viên nếu cần tham gia lại.";
+            updateStudentState();return;
+          }
           let newGroup;
           try{newGroup=validStoredGroup(s.data(),a.groupCount);}catch(e){return;}
           if(newGroup===membershipGroup)return;
@@ -2305,24 +2518,13 @@ async function renderGroupStudentEntry(){
       if(!s.exists())return;
       a={id,...s.data()};
       $("#gsLiveTitle").textContent="👥 "+(a.title||"Thảo luận nhóm");
-      renderRichText($("#gsLiveInstructions"), a.instructionsRich, a.instructions||"");
       if(wasOpen && a.status!=="open"){
         wasOpen=false;detachScopedListeners();
-      }else if(!wasOpen && a.status==="open"){
-        // GATE 2A-AUTH-I3-UI-FIX: the matching CLOSED -> OPEN half of the transition above —
-        // without this branch a student whose page stayed open through a close/reopen cycle
-        // never regains live content until a full reload, even though membership and server
-        // authorization are already correct again the instant the activity reopens. Re-fetches
-        // the caller's OWN membership fresh (never trusts the possibly-stale in-memory value) so
-        // a membership removed while closed simply stays in the already-cleared, no-content state
-        // set by detachScopedListeners() above — fail-closed, no authorization invented here.
-        wasOpen=true;
-        const freshSnap=await getDoc(doc(publicDb,GROUP_COLLECTION,id,"members",publicAuth.currentUser.uid));
-        if(freshSnap.exists()){
-          let freshGroup; try{freshGroup=validStoredGroup(freshSnap.data(),a.groupCount);}catch(e){freshGroup=null;}
-          if(freshGroup) revealParticipation(freshGroup);
-        }
+        clearListeners();
+        appRoot().innerHTML=`<div class="group-student-wrap"><div class="center-screen"><div class="ic" style="font-size:48px">🔒</div><h2>${esc(a.title||"Thảo luận nhóm")}</h2><p class="mut">${a.status==="closed"?"Phòng đã đóng.":"Phòng chưa mở."}</p></div></div>`;
+        return;
       }
+      {const imageContext={ownerId:a.ownerId,activityId:id,scope:"common"};renderRichText($("#gsLiveInstructions"), a.instructionsRich, a.instructions||"", undefined, {imageContext,resolveImageUrl:path=>richImageUrl(path,true,imageContext)});}
       updateStudentState();
     });
     track(unsubA);
@@ -2336,7 +2538,8 @@ async function renderGroupStudentEntry(){
         joinBusy=true; $("#gsGroup").disabled=true;
         const msg=$("#gsJoinMsg"); if(msg) msg.textContent="Đang tham gia nhóm…";
         try{
-          const finalGroup=await ensureGroupMembership({db:publicDb,firestore:groupMembershipFirestore,activityId:id,uid:publicAuth.currentUser.uid,joinCode:code,groupCount:a.groupCount||6,selectedGroup:chosen});
+          if(collectStudentNames&&!confirmedName) throw new Error("Vui lòng xác nhận họ tên trước khi chọn nhóm.");
+          const finalGroup=await ensureGroupMembership({db:publicDb,firestore:groupMembershipFirestore,activityId:id,uid:publicAuth.currentUser.uid,joinCode:code,groupCount:a.groupCount||6,selectedGroup:chosen,collectStudentNames,displayName:confirmedName});
           if(msg) msg.textContent=finalGroup===chosen?"":`Bạn đã được ghi nhận ở Nhóm ${finalGroup} (đã tham gia trước đó).`;
           revealParticipation(finalGroup);
         }catch(e){
@@ -2351,30 +2554,24 @@ async function renderGroupStudentEntry(){
       try{await addDoc(collection(publicDb,GROUP_COLLECTION,id,"notes"),{group:membershipGroup,text,participantId:publicAuth.currentUser.uid,createdAt:serverTimestamp()});$("#gsText").value="";$("#gsChar").textContent="0/1500";msg.textContent="Đã gửi ✓";}catch(e){msg.textContent=mapError(e);}
     };
     if($("#gsSendPhoto")) $("#gsSendPhoto").onclick=async()=>{
-      const f=$("#gsPhoto").files[0],msg=$("#gsPhotoMsg"); if(!f){msg.textContent="Vui lòng chọn ảnh.";return;} if(f.size>5*1024*1024){msg.textContent="Ảnh quá lớn. Giới hạn 5MB.";return;} if(!f.type.startsWith("image/")){msg.textContent="Tệp đã chọn không phải ảnh.";return;}
+      const f=$("#gsPhoto").files[0],msg=$("#gsPhotoMsg"); if(!f){msg.textContent="Vui lòng chọn ảnh.";return;} if(f.size>MAX_IMAGE_BYTES){msg.textContent="Ảnh quá lớn. Giới hạn 5MB.";return;} if(!IMAGE_MIME_TYPES.includes(f.type)){msg.textContent="Chỉ nhận ảnh JPEG, PNG hoặc WebP.";return;}
       try{
         msg.textContent="Đang tải ảnh…";
-        const uid=publicAuth.currentUser.uid, safe=f.name.replace(/[^a-zA-Z0-9._-]/g,"_");
-        const path=`groupActivities/${id}/photos/${uid}/${Date.now()}_${safe}`;
-        const sr=storageRef(publicStorage,path); await uploadBytes(sr,f,{contentType:f.type}); const url=await getDownloadURL(sr);
-        await addDoc(collection(publicDb,GROUP_COLLECTION,id,"photos"),{group:membershipGroup,name:f.name,url,storagePath:path,size:f.size,contentType:f.type,participantId:uid,createdAt:serverTimestamp()});
+        await createGroupAssetSubmission({activity:a,group:membershipGroup,file:f,kind:"photo"});
         $("#gsPhoto").value="";msg.textContent="Đã gửi ảnh ✓";
-      }catch(e){msg.textContent=mapError(e);}
+      }catch(e){msg.textContent=mapError(e)+(e.submissionAssetLeftover?` Tệp còn sót cần dọn an toàn: ${e.submissionAssetLeftover}`:"");}
     };
     if($("#gsSendFile")) $("#gsSendFile").onclick=async()=>{
-      const f=$("#gsFile").files[0],msg=$("#gsFileMsg"); if(!f){msg.textContent="Vui lòng chọn file.";return;} if(f.size>10*1024*1024){msg.textContent="File quá lớn. Giới hạn 10MB; file lớn hơn hãy gửi link Drive/OneDrive.";return;}
+      const f=$("#gsFile").files[0],msg=$("#gsFileMsg"); if(!f){msg.textContent="Vui lòng chọn file.";return;} if(f.size>MAX_GROUP_FILE_BYTES){msg.textContent="File quá lớn. Giới hạn 10MB; file lớn hơn hãy gửi link Drive/OneDrive.";return;}
       try{
         msg.textContent="Đang tải file…";
-        const uid=publicAuth.currentUser.uid,safe=f.name.replace(/[^a-zA-Z0-9._-]/g,"_");
-        const path=`groupActivities/${id}/files/${uid}/${Date.now()}_${safe}`;
-        const sr=storageRef(publicStorage,path);await uploadBytes(sr,f,{contentType:f.type||"application/octet-stream"});const url=await getDownloadURL(sr);
-        await addDoc(collection(publicDb,GROUP_COLLECTION,id,"files"),{group:membershipGroup,name:f.name,url,storagePath:path,size:f.size,contentType:f.type||"",link:null,participantId:uid,createdAt:serverTimestamp()});
+        await createGroupAssetSubmission({activity:a,group:membershipGroup,file:f,kind:"file"});
         $("#gsFile").value="";msg.textContent="Đã gửi file ✓";
-      }catch(e){msg.textContent=mapError(e);}
+      }catch(e){msg.textContent=mapError(e)+(e.submissionAssetLeftover?` Tệp còn sót cần dọn an toàn: ${e.submissionAssetLeftover}`:"");}
     };
     if($("#gsSendLink")) $("#gsSendLink").onclick=async()=>{
       const raw=$("#gsLink").value.trim(),msg=$("#gsFileMsg"),url=qrNormalizeUrl(raw);if(!url){msg.textContent="Liên kết không hợp lệ.";return;}
-      try{await addDoc(collection(publicDb,GROUP_COLLECTION,id,"files"),{group:membershipGroup,name:"Liên kết nhóm",dataUrl:null,link:url,participantId:publicAuth.currentUser.uid,createdAt:serverTimestamp()});$("#gsLink").value="";msg.textContent="Đã gửi link ✓";}catch(e){msg.textContent=mapError(e);}
+      try{await addDoc(collection(publicDb,GROUP_COLLECTION,id,"files"),{group:membershipGroup,name:"Liên kết nhóm",link:url,participantId:publicAuth.currentUser.uid,createdAt:serverTimestamp()});$("#gsLink").value="";msg.textContent="Đã gửi liên kết ngoài ✓";}catch(e){msg.textContent=mapError(e);}
     };
     const timer=setInterval(()=>{
       const el=$("#gsTimer"); if(!el)return;

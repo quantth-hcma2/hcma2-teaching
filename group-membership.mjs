@@ -32,13 +32,15 @@ export function validStoredGroup(data, groupCount) {
  * An existing record always wins over `selectedGroup` (membership is immutable to the student;
  * see Gate 2A-AUTH-DESIGN Task D) and is never overwritten here.
  */
-export async function ensureGroupMembership({ db, firestore, activityId, uid, joinCode, groupCount, selectedGroup }) {
+export async function ensureGroupMembership({ db, firestore, activityId, uid, joinCode, groupCount, selectedGroup, collectStudentNames=false, displayName="" }) {
   const { doc, getDoc, setDoc, serverTimestamp } = firestore;
   const memberRef = doc(db, "groupActivities", activityId, "members", uid);
   const existing = await getDoc(memberRef);
   if (existing.exists()) return validStoredGroup(existing.data(), groupCount);
   try {
-    await setDoc(memberRef, { group: selectedGroup, joinedAt: serverTimestamp(), joinCode });
+    const payload={ group: selectedGroup, joinedAt: serverTimestamp(), joinCode };
+    if(collectStudentNames) payload.displayName=displayName;
+    await setDoc(memberRef, payload);
     return selectedGroup;
   } catch (writeErr) {
     // Race: another tab/device for the same uid may have created the membership between our

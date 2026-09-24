@@ -19,7 +19,7 @@
 //   - builds every node via createElement(); every piece of user text is written via
 //     .textContent only.
 
-import { validateRichTextV1 } from "./rich-text-contract.mjs";
+import { validateRichText, legacyImageTextFallback } from "./rich-text-contract.mjs";
 
 // Fixed lookup maps — the ONLY way a formatting token can ever influence a CSS property. A token
 // not present here (which validateRichTextV1 should already have rejected upstream) is simply
@@ -97,17 +97,51 @@ function renderRun(run, doc) {
  * @param {*} [doc] - optional Document-like object (for non-browser/test environments); defaults
  *   to the global `document` when available.
  */
-export function renderRichText(container, richValue, legacyPlainText, doc) {
+export function renderRichText(container, richValue, legacyPlainText, doc, options = {}) {
   const d = resolveDoc(doc);
   clearContainer(container);
 
-  const isValid = richValue !== null && richValue !== undefined && validateRichTextV1(richValue);
+  const isValid = richValue !== null && richValue !== undefined && validateRichText(richValue, options.imageContext);
   if (!isValid) {
-    renderLegacyPlainText(container, legacyPlainText, d);
+    const compatibleText=legacyImageTextFallback(richValue,options.imageContext);
+    renderLegacyPlainText(container, compatibleText ?? legacyPlainText, d);
     return;
   }
 
   for (const block of richValue.blocks) {
+    if (block.type === "image") {
+      const figure = d.createElement("figure");
+      figure.className = "rt-image";
+      const img = d.createElement("img");
+      img.alt = block.alt;
+      img.loading = "lazy";
+      figure.appendChild(img);
+      if (block.alt) { const caption = d.createElement("figcaption"); caption.textContent = block.alt; figure.appendChild(caption); }
+      container.appendChild(figure);
+      if (typeof options.resolveImageUrl === "function") {
+        Promise.resolve(options.resolveImageUrl(block.storagePath)).then(url => {
+          if (typeof url === "string" && /^(?:https?:\/\/|blob:)/i.test(url) && img.isConnected) {
+            img.src = url;
+            // Blob URLs come only from the trusted resolver after an authenticated Storage read.
+            // Revoke after the image has loaded/failed so the capability is process-local and
+            // short-lived; stored RichText never controls a URL or attribute directly.
+            if (/^blob:/i.test(url) && typeof img.addEventListener === "function") {
+              const revoke=()=>URL.revokeObjectURL(url);
+              img.addEventListener("load",revoke,{once:true}); img.addEventListener("error",revoke,{once:true});
+            }
+          }
+        }).catch(error => { figure.classList.add("rt-image-error"); figure.dataset.imageError=String(error?.code||"load-failed").slice(0,80); });
+      }
+      continue;
+    }
+    if (block.type === "table") {
+      const wrap = d.createElement("div"); wrap.className = "rt-table-wrap";
+      const table = d.createElement("table"); table.className = "rt-table";
+      const tbody = d.createElement("tbody");
+      block.rows.forEach(row => { const tr = d.createElement("tr"); row.cells.forEach(cell => { const td = d.createElement("td"); if(typeof cell === "string") td.textContent = cell; else cell.runs.forEach(run=>td.appendChild(renderRun(run,d))); tr.appendChild(td); }); tbody.appendChild(tr); });
+      table.appendChild(tbody); wrap.appendChild(table); container.appendChild(wrap);
+      continue;
+    }
     const p = d.createElement("p");
     p.style.whiteSpace = "pre-wrap";
     p.style.margin = "0 0 0.5em 0";

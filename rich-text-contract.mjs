@@ -20,11 +20,13 @@
 // color token. No links, no HTML, no images, no tables, no lists, no arbitrary CSS/attributes.
 
 export const RICH_TEXT_VERSION = 1;
+export const RICH_TEXT_VERSION_V2 = 2;
 
 // ---------------- Contract limits (classroom-scale, deliberately conservative — see GATE
 // 2B-RT-DESIGN §17/§18; these are PRODUCT limits, not derived from Firestore's 1 MiB document
 // limit, which is far larger and not relied upon here). ----------------
 export const MAX_BLOCKS = 20;
+export const MAX_V2_BLOCKS = 40;
 export const MAX_RUNS_PER_BLOCK = 20;
 export const MAX_RUN_TEXT_LENGTH = 500;
 export const MAX_TOTAL_TEXT_LENGTH = 10000;
@@ -40,9 +42,17 @@ export const ALLOWED_BLOCK_TYPES = Object.freeze(["paragraph"]);
 export const FONT_TOKENS = Object.freeze(["default", "arial", "times", "roboto"]);
 export const SIZE_TOKENS = Object.freeze([14, 16, 18, 20, 24]);
 export const COLOR_TOKENS = Object.freeze(["default", "red", "blue", "green", "orange", "purple"]);
+export const MAX_TABLE_ROWS = 10;
+export const MAX_TABLE_COLUMNS = 8;
+export const MAX_TABLE_CELL_LENGTH = 1000;
+export const MAX_IMAGES = 10;
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+export const IMAGE_MIME_TYPES = Object.freeze(["image/jpeg", "image/png", "image/webp"]);
 
 const TOP_LEVEL_KEYS = new Set(["version", "blocks"]);
 const BLOCK_KEYS = new Set(["type", "runs"]);
+const IMAGE_BLOCK_KEYS = new Set(["type", "storagePath", "alt", "mimeType", "size"]);
+const TABLE_BLOCK_KEYS = new Set(["type", "rows"]);
 const RUN_KEYS = new Set(["text", "bold", "italic", "font", "size", "color"]);
 const FONT_TOKEN_SET = new Set(FONT_TOKENS);
 const SIZE_TOKEN_SET = new Set(SIZE_TOKENS);
@@ -104,6 +114,61 @@ function isValidBlock(block) {
   return block.runs.every(isValidRun);
 }
 
+export function parseRichImageStoragePath(storagePath) {
+  if (typeof storagePath !== "string") return null;
+  const parts = storagePath.split("/");
+  if (parts[0] !== "groupActivityContent" || parts.length < 4) return null;
+  const token = /^[A-Za-z0-9_-]{1,128}$/;
+  const asset = /^[A-Za-z0-9_-]{1,128}\.(?:jpg|jpeg|png|webp)$/;
+  const ownerId = parts[1], activityId = parts[2];
+  if (!token.test(ownerId) || !token.test(activityId)) return null;
+  if (parts.length === 4 && asset.test(parts[3])) return { ownerId, activityId, scope: "legacy", assetName: parts[3] };
+  if (parts.length === 5 && parts[3] === "common" && asset.test(parts[4])) return { ownerId, activityId, scope: "common", assetName: parts[4] };
+  if (parts.length === 6 && parts[3] === "groups" && token.test(parts[4]) && asset.test(parts[5])) {
+    return { ownerId, activityId, scope: "group", groupId: parts[4], assetName: parts[5] };
+  }
+  return null;
+}
+
+export function imagePathMatchesContext(storagePath, context) {
+  const parsed = parseRichImageStoragePath(storagePath);
+  if (!parsed) return false;
+  if (!context) return true; // structural/classification mode; no authorization is inferred
+  if (parsed.ownerId !== String(context.ownerId) || parsed.activityId !== String(context.activityId)) return false;
+  if (parsed.scope === "legacy") return context.allowLegacy === true;
+  if (context.scope === "common") return parsed.scope === "common";
+  if (context.scope === "group") return parsed.scope === "group" && parsed.groupId === String(context.groupId);
+  return false;
+}
+
+function isValidV2Block(block, imageContext) {
+  if (!isPlainObject(block) || typeof block.type !== "string") return false;
+  if (block.type === "paragraph") return isValidBlock(block);
+  if (block.type === "image") {
+    return hasOnlyKeys(block, IMAGE_BLOCK_KEYS) &&
+      typeof block.storagePath === "string" &&
+      imagePathMatchesContext(block.storagePath, imageContext) &&
+      typeof block.alt === "string" && codePointLength(block.alt) <= 300 &&
+      IMAGE_MIME_TYPES.includes(block.mimeType) &&
+      Number.isInteger(block.size) && block.size > 0 && block.size <= MAX_IMAGE_BYTES;
+  }
+  if (block.type === "table") {
+    if (!hasOnlyKeys(block, TABLE_BLOCK_KEYS) || !Array.isArray(block.rows) || block.rows.length < 1 || block.rows.length > MAX_TABLE_ROWS) return false;
+    const width = isPlainObject(block.rows[0]) && Array.isArray(block.rows[0].cells) ? block.rows[0].cells.length : 0;
+    return width >= 1 && width <= MAX_TABLE_COLUMNS && block.rows.every(row =>
+      isPlainObject(row) && hasOnlyKeys(row,new Set(["cells"])) && Array.isArray(row.cells) && row.cells.length === width && row.cells.every(cell => {
+        // Early V2 candidate tables stored cells as strings. Keep reading them; newly edited
+        // cells use the same safe run model as paragraphs so toolbar formatting works in-table.
+        if (typeof cell === "string") return codePointLength(cell) <= MAX_TABLE_CELL_LENGTH;
+        return isPlainObject(cell) && hasOnlyKeys(cell,new Set(["runs"])) && Array.isArray(cell.runs) &&
+          cell.runs.length <= MAX_RUNS_PER_BLOCK && cell.runs.every(isValidRun) &&
+          cell.runs.reduce((sum,run)=>sum+codePointLength(run.text),0) <= MAX_TABLE_CELL_LENGTH;
+      })
+    );
+  }
+  return false;
+}
+
 // Strict, whole-document validator. A document is valid ONLY if every block and every run
 // satisfies the contract exactly — there is no partial validity. An unknown field ANYWHERE
 // (top level, block level, or run level) makes the WHOLE document invalid, matching the
@@ -133,6 +198,21 @@ export function validateRichTextV1(value) {
   return true;
 }
 
+export function validateRichText(value, imageContext) {
+  if (value?.version === RICH_TEXT_VERSION) return validateRichTextV1(value);
+  if (!isPlainObject(value) || !hasOnlyKeys(value, TOP_LEVEL_KEYS) || value.version !== RICH_TEXT_VERSION_V2 || !Array.isArray(value.blocks) || value.blocks.length < 1 || value.blocks.length > MAX_V2_BLOCKS) return false;
+  if (!value.blocks.every(block => isValidV2Block(block, imageContext))) return false;
+  if (value.blocks.filter(block => block.type === "image").length > MAX_IMAGES) return false;
+  let totalTextLength = 0;
+  for (const block of value.blocks) {
+    if (block.type === "paragraph") for (const run of block.runs) totalTextLength += codePointLength(run.text);
+    if (block.type === "table") for (const row of block.rows) for (const cell of row.cells)
+      totalTextLength += typeof cell === "string" ? codePointLength(cell) : cell.runs.reduce((sum,run)=>sum+codePointLength(run.text),0);
+  }
+  if (totalTextLength > MAX_TOTAL_TEXT_LENGTH) return false;
+  return new TextEncoder().encode(JSON.stringify(value)).length <= MAX_SERIALIZED_BYTE_LENGTH;
+}
+
 // ---------------- Normalization (canonicalization) — separate from validation. ----------------
 // Normalization is for the TRUSTED future editor serializer to call BEFORE a write, to produce a
 // deterministic canonical shape. It is NOT a repair function for hostile/malformed storage, and it
@@ -154,6 +234,19 @@ export function normalizeRichTextV1(value) {
   if (value.version !== RICH_TEXT_VERSION) throw new TypeError("normalizeRichTextV1: unsupported or missing version");
   if (!Array.isArray(value.blocks)) throw new TypeError("normalizeRichTextV1: blocks must be an array");
   return { version: RICH_TEXT_VERSION, blocks: value.blocks.map(normalizeBlock) };
+}
+
+export function normalizeRichText(value) {
+  if (value?.version === RICH_TEXT_VERSION) return normalizeRichTextV1(value);
+  if (!isPlainObject(value) || value.version !== RICH_TEXT_VERSION_V2 || !Array.isArray(value.blocks)) throw new TypeError("normalizeRichText: invalid V2 document");
+  return { version: RICH_TEXT_VERSION_V2, blocks: value.blocks.map(block => {
+    if (block.type === "paragraph") return normalizeBlock(block);
+    if (block.type === "image") return { type: "image", storagePath: block.storagePath, alt: block.alt, mimeType: block.mimeType, size: block.size };
+    if (block.type === "table") return { type: "table", rows: block.rows.map(row => ({cells:row.cells.map(cell =>
+      typeof cell === "string" ? cell : {runs:cell.runs.map(normalizeRun)}
+    )})) };
+    throw new TypeError("normalizeRichText: unsupported block type");
+  }) };
 }
 
 function normalizeBlock(block) {
@@ -184,6 +277,28 @@ function normalizeRun(run) {
 // rather than throwing — this function may be called in contexts (e.g. a preview) where a
 // best-effort empty string is preferable to a crash.
 export function richTextToPlainText(value) {
-  if (!validateRichTextV1(value)) return "";
-  return value.blocks.map((block) => block.runs.map((run) => run.text).join("")).join("\n");
+  if (!validateRichText(value)) return "";
+  return value.blocks.map((block) => {
+    if (block.type === "paragraph") return block.runs.map((run) => run.text).join("");
+    if (block.type === "image") return `[Ảnh: ${block.alt || "không có mô tả"}]`;
+    return block.rows.map(row => row.cells.map(cell => typeof cell === "string" ? cell : cell.runs.map(run=>run.text).join("")).join("\t")).join("\n");
+  }).join("\n");
+}
+
+// Text-only compatibility path for a structurally valid V2 document whose only contextual
+// incompatibility is a legacy image path from the same owner/activity. This never authorizes or
+// resolves the image; it only permits safe paragraph/table text to reach a textContent fallback.
+export function legacyImageTextFallback(value, imageContext) {
+  if (!imageContext || !validateRichText(value) || validateRichText(value, imageContext)) return null;
+  const images=value.blocks.filter(block=>block.type==="image");
+  if (!images.length || !images.every(block=>{
+    const parsed=parseRichImageStoragePath(block.storagePath);
+    return parsed?.scope==="legacy" && parsed.ownerId===String(imageContext.ownerId) && parsed.activityId===String(imageContext.activityId);
+  })) return null;
+  const text=value.blocks.flatMap(block=>{
+    if(block.type==="paragraph") return [block.runs.map(run=>run.text).join("")];
+    if(block.type==="table") return [block.rows.map(row=>row.cells.map(cell=>typeof cell==="string"?cell:cell.runs.map(run=>run.text).join("")).join("\t")).join("\n")];
+    return [];
+  }).filter(Boolean).join("\n");
+  return [text,"[Ảnh cũ chưa được hỗ trợ ở chế độ xem này]"].filter(Boolean).join("\n");
 }

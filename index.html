@@ -2815,13 +2815,13 @@ const TEACHER_MENU = [
   {key:"questionSets", label:"Bộ câu hỏi mẫu", icon:"🗂️"},
   {key:"qrlinks", label:"QR vĩnh viễn", icon:"🔗"},
   {key:"groups", label:"Thảo luận nhóm", icon:"👥"},
-  {key:"history", label:"Lịch sử phiên", icon:"🕓"},
   {key:"trash", label:"Thùng rác", icon:"🗑️"},
   {key:"reports", label:"Báo cáo", icon:"📄"},
   {key:"account", label:"Tài khoản", icon:"👤"},
 ];
 function renderTeacherShell(){
   clearListeners();
+  if(STATE.teacherNav==="history") STATE.teacherNav="create";
   appRoot().innerHTML = shellTemplate("Giảng viên", TEACHER_MENU, STATE.teacherNav, STATE.profile.displayName || STATE.profile.email);
   wireShellNav(TEACHER_MENU, (key)=>{ STATE.teacherNav = key; window.location.hash = ""; clearListeners(); teacherRoute(); });
   teacherRoute();
@@ -2839,12 +2839,12 @@ function teacherRoute(){
   if(key==="overview") return teacherOverview(c);
   if(key==="knowledge") return knowledgeModule(c, false);
   if(key==="classes") return teacherClasses(c);
-  if(key==="create"){ window.location.hash="#/wizard"; return teacherWizard(c,null); }
+  if(key==="create") return teacherHistory(c);
   if(key==="library") return teacherLibrary(c);
   if(key==="questionSets") return teacherQuestionSets(c);
   if(key==="qrlinks") return qrManager(c, false);
   if(key==="groups") return groupModule(c, false);
-  if(key==="history") return teacherHistory(c);
+  if(key==="history"){ STATE.teacherNav="create"; return teacherHistory(c); }
   if(key==="trash") return teacherTrash(c);
   if(key==="reports") return teacherReportsList(c);
   if(key==="account") return teacherAccount(c);
@@ -4433,7 +4433,7 @@ async function teacherLiveControl(c, sessionId){
   }
   async function archiveSession(){
     if(!confirm("Kết thúc và lưu trữ phiên này?")) return;
-    try{ await updateDoc(sessionRef, { status:"archived", updatedAt: serverTimestamp() }); session.status="archived"; toast("Đã lưu trữ phiên.","ok"); window.location.hash=""; STATE.teacherNav="history"; teacherRoute(); }
+    try{ await updateDoc(sessionRef, { status:"archived", updatedAt: serverTimestamp() }); session.status="archived"; toast("Đã lưu trữ phiên.","ok"); window.location.hash=""; STATE.teacherNav="create"; teacherRoute(); }
     catch(e){ toast(mapError(e),"err"); }
   }
   async function toggleResults(){
@@ -4587,11 +4587,15 @@ async function teacherTrash(c){
 }
 
 async function teacherHistory(c){
-  c.innerHTML = `<h2>Lịch sử phiên</h2>
-    <p class="mut">Có thể mở lại kết quả, điều khiển phiên hoặc xóa vĩnh viễn các phiên không còn cần thiết. Phiên đang mở phải được đóng trước khi xóa.</p>
+  c.innerHTML = `<div class="flex-between" style="gap:12px;flex-wrap:wrap;"><div><h2 style="margin-bottom:4px;">Tạo tương tác</h2>
+    <p class="mut" style="margin:0;">Tạo phiên mới hoặc quản lý các phiên tương tác hiện có.</p></div>
+    <button class="btn btn-lg" id="btnCreateInteractionSession">➕ TẠO PHIÊN TƯƠNG TÁC</button></div>
+    <h3 class="mt-20" style="margin-bottom:4px;">CÁC PHIÊN TƯƠNG TÁC</h3>
+    <p class="mut">Có thể mở lại kết quả, điều khiển phiên hoặc chuyển các phiên không còn cần thiết vào Thùng rác. Phiên đang mở phải được đóng trước khi xóa.</p>
     <div class="card"><div class="flex-between mt-8"><input type="text" id="hSearch" placeholder="Tìm theo tên hoạt động…" style="max-width:280px;">
     <select id="hFilter"><option value="">Tất cả trạng thái</option><option value="draft">Nháp</option><option value="ready">Sẵn sàng</option><option value="open">Đang mở</option><option value="closed">Đã đóng</option><option value="archived">Lưu trữ</option></select></div>
     <div class="table-wrap mt-14" id="hTable"><div class="center-screen" style="min-height:120px;"><span class="spinner"></span></div></div></div>`;
+  $("#btnCreateInteractionSession").onclick = ()=>{ window.location.hash="#/wizard"; };
   try{
     const classMap = await loadTeacherClassMap();
     const snap = await getDocs(query(collection(db,"sessions"), where("ownerId","==",STATE.user.uid), orderBy("createdAt","desc"), limit(300)));

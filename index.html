@@ -2819,14 +2819,22 @@ const TEACHER_MENU = [
   {key:"reports", label:"Báo cáo", icon:"📄"},
   {key:"account", label:"Tài khoản", icon:"👤"},
 ];
+let teacherRouteGeneration=0;
+function navigateTeacherTopLevel(key){
+  STATE.teacherNav=key;
+  clearListeners();
+  if(window.location.hash){ window.location.hash=""; return; }
+  teacherRoute();
+}
 function renderTeacherShell(){
   clearListeners();
   if(STATE.teacherNav==="history") STATE.teacherNav="create";
   appRoot().innerHTML = shellTemplate("Giảng viên", TEACHER_MENU, STATE.teacherNav, STATE.profile.displayName || STATE.profile.email);
-  wireShellNav(TEACHER_MENU, (key)=>{ STATE.teacherNav = key; window.location.hash = ""; clearListeners(); teacherRoute(); });
+  wireShellNav(TEACHER_MENU, navigateTeacherTopLevel);
   teacherRoute();
 }
 function teacherRoute(){
+  const routeGeneration=++teacherRouteGeneration;
   const c = $("#mainContent");
   if(!c) return;
   const hash = window.location.hash || "";
@@ -2839,12 +2847,12 @@ function teacherRoute(){
   if(key==="overview") return teacherOverview(c);
   if(key==="knowledge") return knowledgeModule(c, false);
   if(key==="classes") return teacherClasses(c);
-  if(key==="create") return teacherHistory(c);
+  if(key==="create") return teacherHistory(c,routeGeneration);
   if(key==="library") return teacherLibrary(c);
   if(key==="questionSets") return teacherQuestionSets(c);
   if(key==="qrlinks") return qrManager(c, false);
   if(key==="groups") return groupModule(c, false);
-  if(key==="history"){ STATE.teacherNav="create"; return teacherHistory(c); }
+  if(key==="history"){ STATE.teacherNav="create"; return teacherHistory(c,routeGeneration); }
   if(key==="trash") return teacherTrash(c);
   if(key==="reports") return teacherReportsList(c);
   if(key==="account") return teacherAccount(c);
@@ -4433,7 +4441,7 @@ async function teacherLiveControl(c, sessionId){
   }
   async function archiveSession(){
     if(!confirm("Kết thúc và lưu trữ phiên này?")) return;
-    try{ await updateDoc(sessionRef, { status:"archived", updatedAt: serverTimestamp() }); session.status="archived"; toast("Đã lưu trữ phiên.","ok"); window.location.hash=""; STATE.teacherNav="create"; teacherRoute(); }
+    try{ await updateDoc(sessionRef, { status:"archived", updatedAt: serverTimestamp() }); session.status="archived"; toast("Đã lưu trữ phiên.","ok"); navigateTeacherTopLevel("create"); }
     catch(e){ toast(mapError(e),"err"); }
   }
   async function toggleResults(){
@@ -4586,7 +4594,7 @@ async function teacherTrash(c){
   }catch(e){$("#trashTable").innerHTML=errorBlock(e,()=>teacherTrash(c));}
 }
 
-async function teacherHistory(c){
+async function teacherHistory(c,routeGeneration=teacherRouteGeneration){
   c.innerHTML = `<div class="flex-between" style="gap:12px;flex-wrap:wrap;"><div><h2 style="margin-bottom:4px;">Tạo tương tác</h2>
     <p class="mut" style="margin:0;">Tạo phiên mới hoặc quản lý các phiên tương tác hiện có.</p></div>
     <button class="btn btn-lg" id="btnCreateInteractionSession">➕ TẠO PHIÊN TƯƠNG TÁC</button></div>
@@ -4598,7 +4606,9 @@ async function teacherHistory(c){
   $("#btnCreateInteractionSession").onclick = ()=>{ window.location.hash="#/wizard"; };
   try{
     const classMap = await loadTeacherClassMap();
+    if(routeGeneration!==teacherRouteGeneration || c!==$("#mainContent")) return;
     const snap = await getDocs(query(collection(db,"sessions"), where("ownerId","==",STATE.user.uid), orderBy("createdAt","desc"), limit(300)));
+    if(routeGeneration!==teacherRouteGeneration || c!==$("#mainContent")) return;
     const all = snap.docs.map(d=>({id:d.id,...d.data()})).filter(s=>!s.deletedAt);
     const render = ()=>{
       const kw = ($("#hSearch").value||"").toLowerCase().trim(); const fl = $("#hFilter").value;
@@ -4630,7 +4640,10 @@ async function teacherHistory(c){
     };
     $("#hSearch").addEventListener("input", debounce(render,200)); $("#hFilter").addEventListener("change", render);
     render();
-  }catch(e){ $("#hTable").innerHTML = errorBlock(e, ()=>teacherHistory(c)); }
+  }catch(e){
+    if(routeGeneration!==teacherRouteGeneration || c!==$("#mainContent")) return;
+    $("#hTable").innerHTML = errorBlock(e, ()=>teacherHistory(c));
+  }
 }
 async function teacherReportsList(c){
   c.innerHTML = `<h2>Báo cáo</h2><p class="mut">Chọn một phiên để xem báo cáo chi tiết, in, hoặc xuất dữ liệu.</p>

@@ -5352,14 +5352,14 @@ async function knowledgeMoveToTrash(sessionId,isAdminView,c){
   if(!confirm(message))return;
   try{
     const patch=isAdminView
-      ?{adminDeletedAt:serverTimestamp(),adminDeletedBy:STATE.user.uid,status:"closed",updatedAt:serverTimestamp()}
-      :{teacherDeletedAt:serverTimestamp(),teacherDeletedBy:STATE.user.uid,status:"closed",updatedAt:serverTimestamp()};
+      ?{adminDeletedAt:serverTimestamp(),adminDeletedBy:STATE.user.uid,status:"closed",updatedAt:serverTimestamp(),grantEpoch:increment(1)}
+      :{teacherDeletedAt:serverTimestamp(),teacherDeletedBy:STATE.user.uid,status:"closed",updatedAt:serverTimestamp(),grantEpoch:increment(1)};
     await updateDoc(doc(db,"knowledgeSessions",sessionId),patch);
     toast(isAdminView?"Đã chuyển vào Admin Trash.":"Đã chuyển vào Thùng rác Knowledge.","ok");
   }catch(e){toast(mapError(e),"err");}
 }
 async function knowledgeRestoreForTeacher(sessionId,c){
-  try{await updateDoc(doc(db,"knowledgeSessions",sessionId),{teacherDeletedAt:null,teacherDeletedBy:null,updatedAt:serverTimestamp()});toast("Đã khôi phục phiên cho giảng viên.","ok");}
+  try{await updateDoc(doc(db,"knowledgeSessions",sessionId),{teacherDeletedAt:null,teacherDeletedBy:null,updatedAt:serverTimestamp(),grantEpoch:increment(1)});toast("Đã khôi phục phiên cho giảng viên.","ok");}
   catch(e){toast(mapError(e),"err");}
 }
 async function knowledgeTrash(c,isAdminView){
@@ -5370,7 +5370,7 @@ async function knowledgeTrash(c,isAdminView){
   track(onSnapshot(q,snap=>{
     const rows=snap.docs.map(d=>({id:d.id,...d.data()})).filter(s=>isAdminView?!!s.adminDeletedAt:(!!s.teacherDeletedAt&&!s.adminDeletedAt)).sort((a,b)=>((b.adminDeletedAt||b.teacherDeletedAt)?.seconds||0)-((a.adminDeletedAt||a.teacherDeletedAt)?.seconds||0));
     $("#knTrashList").innerHTML=rows.length?`<div class="grid grid-2">${rows.map(s=>`<div class="card"><h3>${esc(s.title)}</h3><p class="mut small">Mã: <b>${esc(s.joinCode)}</b> · ${knowledgeDate(isAdminView?s.adminDeletedAt:s.teacherDeletedAt)}</p><div class="flex gap-8"><button class="btn btn-sm btn-ok" data-kn-restore="${s.id}">KHÔI PHỤC</button>${isAdminView?`<button class="btn btn-sm btn-danger" data-kn-hard="${s.id}" data-title="${esc(s.title)}">XÓA VĨNH VIỄN</button>`:''}</div></div>`).join('')}</div>`:'<div class="card empty-state"><div class="ic">🗑️</div><h3>Thùng rác đang trống</h3></div>';
-    $$('[data-kn-restore]').forEach(b=>b.onclick=async()=>{try{const patch=isAdminView?{adminDeletedAt:null,adminDeletedBy:null,updatedAt:serverTimestamp()}:{teacherDeletedAt:null,teacherDeletedBy:null,updatedAt:serverTimestamp()};await updateDoc(doc(db,"knowledgeSessions",b.dataset.knRestore),patch);toast("Đã khôi phục phiên.","ok");}catch(e){toast(mapError(e),"err");}});
+    $$('[data-kn-restore]').forEach(b=>b.onclick=async()=>{try{const patch=isAdminView?{adminDeletedAt:null,adminDeletedBy:null,updatedAt:serverTimestamp(),grantEpoch:increment(1)}:{teacherDeletedAt:null,teacherDeletedBy:null,updatedAt:serverTimestamp(),grantEpoch:increment(1)};await updateDoc(doc(db,"knowledgeSessions",b.dataset.knRestore),patch);toast("Đã khôi phục phiên.","ok");}catch(e){toast(mapError(e),"err");}});
     $$('[data-kn-hard]').forEach(b=>b.onclick=()=>knowledgePermanentDelete(b.dataset.knHard,b.dataset.title));
   },e=>{$("#knTrashList").innerHTML=errorBlock(e,()=>knowledgeTrash(c,isAdminView));}));
 }

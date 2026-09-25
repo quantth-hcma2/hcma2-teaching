@@ -582,7 +582,7 @@ import { resolveCandidateEnvironment, candidateGroupJoinUrl } from "./app-enviro
 // GATE 2B-RT-FIX1: key-order-independent deep equality + the session-info save conflict check —
 // see session-info-compare.mjs for the production-bug root cause and full contract.
 import { valuesEqualDeep, findConflictKey } from "./session-info-compare.mjs";
-import { uploadThenCreateGroupSubmission } from "./group-submission-upload.mjs";
+import { uploadThenCreateGroupSubmission, reportGroupSubmissionImageLoadError } from "./group-submission-upload.mjs";
 
 /* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
 const APP_ENV=await resolveCandidateEnvironment(window.location);
@@ -2229,7 +2229,7 @@ async function groupLive(c,id,isAdminView){
     Array.from({length:current.groupCount||6},(_,k)=>k+1).forEach(i=>{
       if(topics[String(i)]?.topic||richTextToPlainText(topics[String(i)]?.topicRich)){const imageContext={ownerId:current.ownerId,activityId:id,scope:"group",groupId:i,allowLegacy:true};renderRichText($(`[data-panel-topic-mount="${i}"]`), topics[String(i)]?.topicRich, topics[String(i)].topic||"", undefined, {imageContext,resolveImageUrl:path=>richImageUrl(path,false,imageContext)});}
     });
-    $$("[data-gphoto-path]").forEach(async img=>{try{const url=await groupSubmissionBlobUrl(img.dataset.gphotoPath,false,MAX_IMAGE_BYTES);if(!img.isConnected){URL.revokeObjectURL(url);return;}panelAssetUrls.add(url);img.src=url;img.onclick=e=>{e.stopPropagation();openImageViewerSimple(url);};}catch(e){img.alt="Không tải được ảnh";}});
+    $$("[data-gphoto-path]").forEach(async img=>{const storagePath=img.dataset.gphotoPath;try{const url=await groupSubmissionBlobUrl(storagePath,false,MAX_IMAGE_BYTES);if(!img.isConnected){URL.revokeObjectURL(url);return;}panelAssetUrls.add(url);img.src=url;img.onclick=e=>{e.stopPropagation();openImageViewerSimple(url);};}catch(e){reportGroupSubmissionImageLoadError({image:img,error:e,role:"teacher",storagePath});}});
     $$("[data-gfile-path]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();downloadGroupSubmission(btn.dataset.gfilePath,btn.dataset.gfileName,false).catch(err=>toast(mapError(err),"err"));});
     $$("[data-group-panel]").forEach(panel=>panel.onclick=()=>{
       const i=Number(panel.dataset.groupPanel);
@@ -2245,7 +2245,7 @@ async function groupLive(c,id,isAdminView){
         ${fs.length?`<div class="mt-14">${fs.map(f=>groupFileAnchorHtml(f)).join("")}</div>`:""}`;
       if(topics[String(i)]?.topic||richTextToPlainText(topics[String(i)]?.topicRich)){const imageContext={ownerId:current.ownerId,activityId:id,scope:"group",groupId:i,allowLegacy:true};renderRichText($("#groupPanelPopupTopic"), topics[String(i)]?.topicRich, topics[String(i)].topic||"", undefined, {imageContext,resolveImageUrl:path=>richImageUrl(path,false,imageContext)});}
       $("#groupPanelPopup").classList.remove("hidden");
-      $$("[data-popup-photo]").forEach(async img=>{try{const url=await groupSubmissionBlobUrl(img.dataset.gphotoPath,false,MAX_IMAGE_BYTES);if(!img.isConnected){URL.revokeObjectURL(url);return;}panelAssetUrls.add(url);img.src=url;img.onclick=e=>{e.stopPropagation();openImageViewerSimple(url);};}catch(e){img.alt="Không tải được ảnh";}});
+      $$("[data-popup-photo]").forEach(async img=>{const storagePath=img.dataset.gphotoPath;try{const url=await groupSubmissionBlobUrl(storagePath,false,MAX_IMAGE_BYTES);if(!img.isConnected){URL.revokeObjectURL(url);return;}panelAssetUrls.add(url);img.src=url;img.onclick=e=>{e.stopPropagation();openImageViewerSimple(url);};}catch(e){reportGroupSubmissionImageLoadError({image:img,error:e,role:"teacher",storagePath});}});
       $$("[data-gfile-path]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();downloadGroupSubmission(btn.dataset.gfilePath,btn.dataset.gfileName,false).catch(err=>toast(mapError(err),"err"));});
     });
   }
@@ -2425,7 +2425,7 @@ async function renderGroupStudentEntry(){
         ${arr.length?arr.map(n=>`<div class="group-note">${esc(n.text||"")}</div>`).join(""):`<div class="mut small">Chưa có ý kiến nào.</div>`}
         ${photos.length?`<div class="group-media mt-14">${photos.map(p=>`<img data-student-photo-path="${esc(p.storagePath||"")}" alt="Ảnh nhóm ${membershipGroup}">`).join("")}</div>`:""}
         ${files.length?`<div class="mt-14">${files.map(f=>groupFileAnchorHtml(f)).join("")}</div>`:""}`;
-      $$("[data-student-photo-path]").forEach(async img=>{try{const url=await groupSubmissionBlobUrl(img.dataset.studentPhotoPath,true,MAX_IMAGE_BYTES);if(!img.isConnected){URL.revokeObjectURL(url);return;}studentAssetUrls.add(url);img.src=url;img.onclick=()=>openImageViewerSimple(url);}catch(e){img.alt="Không tải được ảnh";}});
+      $$("[data-student-photo-path]").forEach(async img=>{const storagePath=img.dataset.studentPhotoPath;try{const url=await groupSubmissionBlobUrl(storagePath,true,MAX_IMAGE_BYTES);if(!img.isConnected){URL.revokeObjectURL(url);return;}studentAssetUrls.add(url);img.src=url;img.onclick=()=>openImageViewerSimple(url);}catch(e){reportGroupSubmissionImageLoadError({image:img,error:e,role:"student",storagePath});}});
       $$("#gsMyNotes [data-gfile-path]").forEach(btn=>btn.onclick=()=>downloadGroupSubmission(btn.dataset.gfilePath,btn.dataset.gfileName,true).catch(err=>toast(mapError(err),"err")));
     }
     function updateStudentState(){

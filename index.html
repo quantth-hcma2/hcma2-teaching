@@ -413,6 +413,19 @@ tr:hover td{background:#fafbfc;}
 .group-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
 .group-live-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));margin-top:16px}
 .group-panel{background:#fff;border:1px solid var(--border);border-radius:14px;padding:14px;min-height:170px;box-shadow:0 3px 12px #0000000a}
+.group-live-stage{margin-top:20px}
+.group-live-stage-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.group-live-stage-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.group-live-stage.is-all-fullscreen,.group-live-stage.is-focus-mode{position:fixed;inset:0;z-index:10015;height:100vh;height:100dvh;margin:0;padding:18px;background:#f1f5f9;overflow:auto}
+.group-live-stage.is-all-fullscreen .group-live-stage-head,.group-live-stage.is-focus-mode .group-live-stage-head{position:sticky;top:-18px;z-index:2;margin:-18px -18px 14px;padding:14px 18px;background:#fff;border-bottom:1px solid var(--border);box-shadow:0 4px 14px #00000012}
+.group-live-stage.is-all-fullscreen .group-live-grid{grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));align-items:start;margin-top:0}
+.group-live-stage.is-focus-mode .group-live-grid{display:block;margin-top:0}
+.group-live-stage.is-focus-mode .group-panel:not(.is-group-focused){display:none}
+.group-live-stage.is-focus-mode .group-panel.is-group-focused{display:block;min-height:calc(100dvh - 104px);max-width:1600px;margin:0 auto;overflow:auto;cursor:default;transform:none;box-shadow:none}
+.group-live-stage.is-focus-mode .group-panel.is-group-focused .group-media img{width:min(320px,100%);height:auto;aspect-ratio:auto}
+.group-panel-focus-trigger{appearance:none;border:0;background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:2px 4px;margin:-2px -4px;cursor:pointer;border-radius:6px}
+.group-panel-focus-trigger:focus-visible{outline:3px solid #2563eb;outline-offset:2px}
+.group-live-stage .group-media img{max-width:100%;height:auto;aspect-ratio:1;object-fit:cover}
 .group-panel h4{margin:0 0 4px;font-size:16px}
 .group-topic{font-size:13px;color:var(--primary);font-weight:700;margin-bottom:8px}
 .group-note{background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;padding:9px 10px;margin:7px 0;white-space:pre-wrap;word-break:break-word}
@@ -432,15 +445,6 @@ tr:hover td{background:#fafbfc;}
 .group-panel{cursor:pointer;transition:transform .15s ease,box-shadow .15s ease}
 .group-panel:hover{transform:translateY(-2px);box-shadow:0 8px 24px #00000018}
 .group-panel::after{content:"Bấm để phóng to";display:block;text-align:right;font-size:10px;color:#94a3b8;margin-top:8px}
-.group-panel-popup{position:fixed;inset:0;background:rgba(2,6,23,.96);z-index:10020;display:flex;align-items:center;justify-content:center;padding:28px}
-.group-panel-popup.hidden{display:none!important}
-.group-panel-popup-inner{width:min(1100px,94vw);max-height:88vh;overflow:auto;background:#fff;border-radius:18px;padding:30px;box-shadow:0 30px 80px #0008}
-.group-panel-popup-inner h2{font-size:34px;margin:0 0 6px}
-.group-panel-popup-inner .group-topic{font-size:19px;margin-bottom:18px}
-.group-panel-popup-inner .group-note{font-size:22px;line-height:1.55;padding:15px 17px;margin:11px 0}
-.group-panel-popup-inner .group-media img{width:150px;height:150px}
-.group-panel-popup-inner .group-file{font-size:18px;padding:11px 13px}
-.group-popup-close{position:fixed;right:26px;bottom:24px;z-index:10021}
 .group-timer-float{position:fixed;top:14px;right:16px;z-index:10010;background:#0f2942;color:#fff;border:2px solid #d9a441;border-radius:12px;padding:8px 14px;cursor:pointer;box-shadow:0 8px 24px #0005;text-align:center;min-width:118px}
 .group-timer-float .lbl{font-size:9px;letter-spacing:.1em;text-transform:uppercase;opacity:.78;margin-bottom:2px}
 .group-timer-float .clock{font-size:28px;font-weight:900;letter-spacing:1px;line-height:1}
@@ -455,10 +459,10 @@ tr:hover td{background:#fafbfc;}
 @media(max-width:700px){
   .group-timer-float{top:10px;right:10px;min-width:100px;padding:7px 10px}
   .group-timer-float .clock{font-size:23px}
-  .group-panel-popup{padding:14px}
-  .group-panel-popup-inner{padding:20px}
-  .group-panel-popup-inner h2{font-size:28px}
-  .group-panel-popup-inner .group-note{font-size:18px}
+  .group-live-stage.is-all-fullscreen,.group-live-stage.is-focus-mode{padding:12px}
+  .group-live-stage.is-all-fullscreen .group-live-stage-head,.group-live-stage.is-focus-mode .group-live-stage-head{top:-12px;margin:-12px -12px 12px;padding:12px}
+  .group-live-stage.is-all-fullscreen .group-live-grid{grid-template-columns:1fr}
+  .group-live-stage.is-focus-mode .group-panel.is-group-focused{min-height:calc(100dvh - 88px)}
 }
 
 
@@ -2150,8 +2154,13 @@ async function groupLive(c,id,isAdminView){
     </div>
     <div class="card"><h3>Chủ đề từng nhóm</h3><div id="gTopics"></div><button class="btn btn-outline mt-8" id="gSaveTopics">SỬA NHIỆM VỤ</button> <button class="btn btn-outline mt-8" id="gManageMembers">QUẢN LÝ NHÓM HỌC VIÊN</button></div>
   </div>
-  <div class="flex-between mt-20"><h3 style="margin:0">Bảng ý kiến nhóm — Realtime</h3><span class="small mut" id="gRespCount"></span></div>
-  <div id="gPanels" class="group-live-grid"></div>
+  <section id="groupLiveStage" class="group-live-stage" aria-label="Theo dõi thảo luận nhóm">
+    <div class="group-live-stage-head">
+      <div><h3 style="margin:0">Bảng ý kiến nhóm — Realtime</h3><span class="small mut" id="gRespCount"></span></div>
+      <div class="group-live-stage-actions"><button type="button" class="btn btn-outline hidden" id="gGroupFocusBack">← QUAY LẠI</button><button type="button" class="btn btn-outline" id="gAllFullscreenToggle" aria-pressed="false">⛶ TOÀN MÀN HÌNH</button></div>
+    </div>
+    <div id="gPanels" class="group-live-grid"></div>
+  </section>
   <div id="groupTimerFloat" class="group-timer-float" title="Bấm để phóng to đồng hồ">
     <div class="lbl">Thời gian còn lại</div><div class="clock" id="groupTimerFloatClock">--:--</div>
   </div>
@@ -2161,10 +2170,6 @@ async function groupLive(c,id,isAdminView){
     <div class="close-timer flex gap-8">
       <button class="btn btn-outline" id="groupTimerPopupClose">ĐÓNG ✕</button>
     </div>
-  </div>
-  <div id="groupPanelPopup" class="group-panel-popup hidden">
-    <div class="group-panel-popup-inner" id="groupPanelPopupInner"></div>
-    <button class="btn btn-outline group-popup-close" id="groupPanelPopupClose">ĐÓNG ✕</button>
   </div>
   `;
 
@@ -2179,13 +2184,39 @@ async function groupLive(c,id,isAdminView){
     $("#groupTimerPopup").classList.add("hidden");
     $("#groupTimerFloat").classList.remove("hidden");
   };
-  $("#groupPanelPopupClose").onclick=()=>$("#groupPanelPopup").classList.add("hidden");
-  $("#groupPanelPopup").onclick=e=>{if(e.target.id==="groupPanelPopup") $("#groupPanelPopup").classList.add("hidden");};
-
   $("#gOpen").onclick=()=>{updateDoc(doc(db,GROUP_COLLECTION,id),{status:"open",startedAt:serverTimestamp(),pausedRemainingSec:null,updatedAt:serverTimestamp()}).catch(e=>toast(mapError(e),"err"));};
   $("#gSessionInfo").onclick=()=>openSessionInfoEditor("groupActivities",id);
   $("#gClose").onclick=()=>updateDoc(doc(db,GROUP_COLLECTION,id),{status:"closed",updatedAt:serverTimestamp()}).catch(e=>toast(mapError(e),"err"));
   let current=a, notes=[],photos=[],files=[],topics={};
+  const groupViewState={allFullscreen:false,focusedGroup:null,focusOrigin:null};
+  const groupFocusInteractiveSelector='a,button,input,select,textarea,label,img,[role="button"],[contenteditable="true"]';
+  function applyGroupViewState(){
+    const stage=$("#groupLiveStage"), toggle=$("#gAllFullscreenToggle"), back=$("#gGroupFocusBack");
+    if(!stage)return;
+    stage.classList.toggle("is-all-fullscreen",groupViewState.allFullscreen&&groupViewState.focusedGroup===null);
+    stage.classList.toggle("is-focus-mode",groupViewState.focusedGroup!==null);
+    toggle.classList.toggle("hidden",groupViewState.focusedGroup!==null);
+    toggle.textContent=groupViewState.allFullscreen?"THOÁT TOÀN MÀN HÌNH":"⛶ TOÀN MÀN HÌNH";
+    toggle.setAttribute("aria-pressed",String(groupViewState.allFullscreen));
+    back.classList.toggle("hidden",groupViewState.focusedGroup===null);
+    back.textContent=groupViewState.focusOrigin==="all"?"← TẤT CẢ NHÓM":"← QUAY LẠI";
+    $$("[data-group-panel]").forEach(panel=>panel.classList.toggle("is-group-focused",Number(panel.dataset.groupPanel)===groupViewState.focusedGroup));
+  }
+  function focusGroup(group){
+    if(!Number.isInteger(group)||group<1||group>(current.groupCount||6))return;
+    groupViewState.focusOrigin=groupViewState.allFullscreen?"all":"normal";
+    groupViewState.focusedGroup=group;
+    applyGroupViewState();
+    $("#gGroupFocusBack")?.focus();
+  }
+  function leaveGroupFocus(){
+    const returnToAll=groupViewState.focusOrigin==="all";
+    groupViewState.focusedGroup=null;groupViewState.focusOrigin=null;groupViewState.allFullscreen=returnToAll;
+    applyGroupViewState();
+    $("#gAllFullscreenToggle")?.focus();
+  }
+  $("#gAllFullscreenToggle").onclick=()=>{groupViewState.allFullscreen=!groupViewState.allFullscreen;applyGroupViewState();};
+  $("#gGroupFocusBack").onclick=leaveGroupFocus;
   const panelAssetUrls=new Set(); track(()=>revokeGroupSubmissionUrls(panelAssetUrls));
   const classroom=mountClassroomPresentation({root:c,initial:a,
     write:(action,seconds)=>writeTimer({db,ref:doc(db,GROUP_COLLECTION,id),runTransaction,serverTimestamp},action,seconds),
@@ -2218,7 +2249,7 @@ async function groupLive(c,id,isAdminView){
       const ps=photos.filter(x=>Number(x.group)===i);
       const fs=files.filter(x=>Number(x.group)===i);
       total+=ns.length+ps.length+fs.length;
-      return `<div class="group-panel" data-group-panel="${i}"><h4>Nhóm ${i}</h4>
+      return `<div class="group-panel" data-group-panel="${i}"><h4><button type="button" class="group-panel-focus-trigger" data-group-focus="${i}" aria-label="Phóng lớn Nhóm ${i}">Nhóm ${i}</button></h4>
         ${(topics[String(i)]?.topic||richTextToPlainText(topics[String(i)]?.topicRich))?`<div class="group-topic">📌 <span data-panel-topic-mount="${i}"></span></div>`:""}
         <div>${ns.length?ns.map(n=>`<div class="group-note">${esc(n.text||"")}</div>`).join(""):`<div class="mut small">Đang chờ ý kiến…</div>`}</div>
         ${ps.length?`<div class="group-media">${ps.map(p=>`<img data-gphoto="${p.id}" data-gphoto-path="${esc(p.storagePath||"")}" alt="Ảnh nhóm ${i}">`).join("")}</div>`:""}
@@ -2231,23 +2262,9 @@ async function groupLive(c,id,isAdminView){
     });
     $$("[data-gphoto-path]").forEach(async img=>{const storagePath=img.dataset.gphotoPath;try{const url=await groupSubmissionBlobUrl(storagePath,false,MAX_IMAGE_BYTES);if(!img.isConnected){URL.revokeObjectURL(url);return;}panelAssetUrls.add(url);img.src=url;img.onclick=e=>{e.stopPropagation();openImageViewerSimple(url);};}catch(e){reportGroupSubmissionImageLoadError({image:img,error:e,role:"teacher",storagePath});}});
     $$("[data-gfile-path]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();downloadGroupSubmission(btn.dataset.gfilePath,btn.dataset.gfileName,false).catch(err=>toast(mapError(err),"err"));});
-    $$("[data-group-panel]").forEach(panel=>panel.onclick=()=>{
-      const i=Number(panel.dataset.groupPanel);
-      const ns=notes.filter(x=>Number(x.group)===i).sort((x,y)=>qrDateValue(x.createdAt)-qrDateValue(y.createdAt));
-      const ps=photos.filter(x=>Number(x.group)===i);
-      const fs=files.filter(x=>Number(x.group)===i);
-      $("#groupPanelPopupInner").innerHTML=`
-        <h2>Nhóm ${i}</h2>
-        ${(topics[String(i)]?.topic||richTextToPlainText(topics[String(i)]?.topicRich))?`<div class="group-topic">📌 <span id="groupPanelPopupTopic"></span></div>`:""}
-        <div class="small mut" style="margin-bottom:12px">${ns.length} ý kiến · ${ps.length} ảnh · ${fs.length} tệp/link</div>
-        ${ns.length?ns.map(n=>`<div class="group-note">${esc(n.text||"")}</div>`).join(""):`<div class="mut">Đang chờ ý kiến…</div>`}
-        ${ps.length?`<div class="group-media mt-14">${ps.map(p=>`<img data-popup-photo="${p.id}" data-gphoto-path="${esc(p.storagePath||"")}" alt="Ảnh nhóm ${i}">`).join("")}</div>`:""}
-        ${fs.length?`<div class="mt-14">${fs.map(f=>groupFileAnchorHtml(f)).join("")}</div>`:""}`;
-      if(topics[String(i)]?.topic||richTextToPlainText(topics[String(i)]?.topicRich)){const imageContext={ownerId:current.ownerId,activityId:id,scope:"group",groupId:i,allowLegacy:true};renderRichText($("#groupPanelPopupTopic"), topics[String(i)]?.topicRich, topics[String(i)].topic||"", undefined, {imageContext,resolveImageUrl:path=>richImageUrl(path,false,imageContext)});}
-      $("#groupPanelPopup").classList.remove("hidden");
-      $$("[data-popup-photo]").forEach(async img=>{const storagePath=img.dataset.gphotoPath;try{const url=await groupSubmissionBlobUrl(storagePath,false,MAX_IMAGE_BYTES);if(!img.isConnected){URL.revokeObjectURL(url);return;}panelAssetUrls.add(url);img.src=url;img.onclick=e=>{e.stopPropagation();openImageViewerSimple(url);};}catch(e){reportGroupSubmissionImageLoadError({image:img,error:e,role:"teacher",storagePath});}});
-      $$("[data-gfile-path]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();downloadGroupSubmission(btn.dataset.gfilePath,btn.dataset.gfileName,false).catch(err=>toast(mapError(err),"err"));});
-    });
+    $$("[data-group-focus]").forEach(button=>button.onclick=e=>{e.stopPropagation();focusGroup(Number(button.dataset.groupFocus));});
+    $$("[data-group-panel]").forEach(panel=>panel.onclick=e=>{if(e.target.closest(groupFocusInteractiveSelector))return;focusGroup(Number(panel.dataset.groupPanel));});
+    applyGroupViewState();
   }
   function updateTimer(){
     const remain=timerSeconds(current), val=fmtDuration(remain), done=remain<=0;
@@ -2261,11 +2278,14 @@ async function groupLive(c,id,isAdminView){
 
   const groupKeyHandler=(e)=>{
     if(e.key==="Escape"){
-      $("#groupPanelPopup")?.classList.add("hidden");
+      if(document.querySelector("#globalModal .modal-backdrop")){closeModal();return;}
       if($("#groupTimerPopup") && !$("#groupTimerPopup").classList.contains("hidden")){
         $("#groupTimerPopup").classList.add("hidden");
         $("#groupTimerFloat")?.classList.remove("hidden");
+        return;
       }
+      if(groupViewState.focusedGroup!==null){leaveGroupFocus();return;}
+      if(groupViewState.allFullscreen){groupViewState.allFullscreen=false;applyGroupViewState();return;}
     }
   };
   document.addEventListener("keydown",groupKeyHandler); track(()=>document.removeEventListener("keydown",groupKeyHandler));

@@ -827,6 +827,7 @@ const STATE = {
   authReady: false,
   listeners: [],       // các onSnapshot đang mở, dọn dẹp khi đổi route
   teacherNav: "overview",
+  teacherLibraryView: "questions",
   adminNav: "overview",
   wizard: null,        // trạng thái wizard tạo phiên
   student: { sessionId:null, token:null, session:null, question:null, options:[], myResponse:null },
@@ -2811,16 +2812,23 @@ const TEACHER_MENU = [
   {key:"knowledge", label:"Đồng kiến tạo tri thức", icon:"🧠"},
   {key:"classes", label:"Lớp học", icon:"🏫"},
   {key:"create", label:"Tạo tương tác", icon:"➕"},
-  {key:"library", label:"Thư viện câu hỏi", icon:"📚"},
-  {key:"questionSets", label:"Bộ câu hỏi mẫu", icon:"🗂️"},
-  {key:"qrlinks", label:"QR vĩnh viễn", icon:"🔗"},
   {key:"groups", label:"Thảo luận nhóm", icon:"👥"},
+  {key:"library", label:"THƯ VIỆN", icon:"📚"},
+  {key:"qrlinks", label:"QR vĩnh viễn", icon:"🔗"},
   {key:"trash", label:"Thùng rác", icon:"🗑️"},
   {key:"reports", label:"Báo cáo", icon:"📄"},
   {key:"account", label:"Tài khoản", icon:"👤"},
 ];
 let teacherRouteGeneration=0;
 function navigateTeacherTopLevel(key){
+  // Compatibility aliases: callers cũ vẫn có thể điều hướng bằng library/questionSets.
+  // Top-level thực tế luôn là Library Hub, với tab tương ứng được chọn rõ ràng.
+  if(key==="questionSets"){
+    key="library";
+    STATE.teacherLibraryView="questionSets";
+  }else if(key==="library"){
+    STATE.teacherLibraryView="questions";
+  }
   STATE.teacherNav=key;
   clearListeners();
   if(window.location.hash){ window.location.hash=""; return; }
@@ -2829,6 +2837,10 @@ function navigateTeacherTopLevel(key){
 function renderTeacherShell(){
   clearListeners();
   if(STATE.teacherNav==="history") STATE.teacherNav="create";
+  if(STATE.teacherNav==="questionSets"){
+    STATE.teacherNav="library";
+    STATE.teacherLibraryView="questionSets";
+  }
   appRoot().innerHTML = shellTemplate("Giảng viên", TEACHER_MENU, STATE.teacherNav, STATE.profile.displayName || STATE.profile.email);
   wireShellNav(TEACHER_MENU, navigateTeacherTopLevel);
   teacherRoute();
@@ -2843,13 +2855,18 @@ function teacherRoute(){
   if(hash.startsWith("#/group/")) return groupLive(c, decodeURIComponent(hash.split("/")[2]), false);
   if(hash.startsWith("#/knowledge/")) return knowledgeDashboard(c, decodeURIComponent(hash.split("/")[2]), false);
   if(hash.startsWith("#/wizard")){ const parts=hash.split("/"); return teacherWizard(c, parts[2]?decodeURIComponent(parts[2]):null); }
-  const key = STATE.teacherNav;
+  let key = STATE.teacherNav;
+  if(key==="questionSets"){
+    // Fail-safe cho state/caller cũ không đi qua navigateTeacherTopLevel().
+    STATE.teacherNav="library";
+    STATE.teacherLibraryView="questionSets";
+    key="library";
+  }
   if(key==="overview") return teacherOverview(c);
   if(key==="knowledge") return knowledgeModule(c, false);
   if(key==="classes") return teacherClasses(c);
   if(key==="create") return teacherHistory(c,routeGeneration);
-  if(key==="library") return teacherLibrary(c);
-  if(key==="questionSets") return teacherQuestionSets(c);
+  if(key==="library") return teacherLibraryHub(c);
   if(key==="qrlinks") return qrManager(c, false);
   if(key==="groups") return groupModule(c, false);
   if(key==="history"){ STATE.teacherNav="create"; return teacherHistory(c,routeGeneration); }
@@ -2876,8 +2893,8 @@ async function teacherOverview(c){
   $("#btnNewSession").onclick = ()=>{ window.location.hash = "#/wizard"; };
   $("#btnQuickGroup").onclick=()=>{STATE.teacherNav="groups";teacherRoute();};
   $("#btnQuickQr").onclick=()=>{STATE.teacherNav="qrlinks";teacherRoute();};
-  $("#btnQuickLib").onclick=()=>{STATE.teacherNav="library";teacherRoute();};
-  $("#btnQuickSets").onclick=()=>{STATE.teacherNav="questionSets";teacherRoute();};
+  $("#btnQuickLib").onclick=()=>navigateTeacherTopLevel("library");
+  $("#btnQuickSets").onclick=()=>navigateTeacherTopLevel("questionSets");
   try{
     const classesQ = query(collection(db,"classes"), where("ownerId","==",uid));
     // Sessions không có field deletedAt khi chưa từng bị xóa, nên không thể lọc "chưa xóa"
@@ -2978,6 +2995,36 @@ async function deleteClass(id){
   if(!confirm("Xóa lớp học này? Các phiên đã tạo trước đó sẽ không bị xóa.")) return;
   try{ await deleteDoc(doc(db,"classes",id)); toast("Đã xóa lớp học.","ok"); }
   catch(e){ toast(mapError(e),"err"); }
+}
+
+/* ---------- Library Hub ---------- */
+function teacherLibraryHub(c){
+  const view=STATE.teacherLibraryView==="questionSets"?"questionSets":"questions";
+  STATE.teacherLibraryView=view;
+  c.innerHTML=`<div class="section-title"><div><h2>THƯ VIỆN</h2><p class="mut">Kho nội dung dùng lại cho các hoạt động giảng dạy.</p></div></div>
+    <section class="card" aria-labelledby="interactionLibraryTitle">
+      <h3 id="interactionLibraryTitle" style="margin-top:0">THƯ VIỆN TẠO TƯƠNG TÁC</h3>
+      <div class="flex gap-8 mt-8" role="tablist" aria-label="Thư viện tạo tương tác">
+        <button class="btn ${view==="questions"?"":"btn-outline"}" id="libraryQuestionsTab" type="button" role="tab" aria-selected="${view==="questions"}" aria-controls="teacherLibraryView">CÂU HỎI</button>
+        <button class="btn ${view==="questionSets"?"":"btn-outline"}" id="libraryQuestionSetsTab" type="button" role="tab" aria-selected="${view==="questionSets"}" aria-controls="teacherLibraryView">BỘ CÂU HỎI</button>
+      </div>
+      <div id="teacherLibraryView" role="tabpanel" class="mt-20"></div>
+    </section>
+    <section class="card mt-20" aria-labelledby="groupLibraryTitle">
+      <h3 id="groupLibraryTitle" style="margin-top:0">THƯ VIỆN THẢO LUẬN NHÓM</h3>
+      <div class="empty-state" style="padding:20px"><div class="ic">👥</div>Sắp phát triển</div>
+    </section>`;
+  const switchView=(nextView)=>{
+    if(nextView===STATE.teacherLibraryView) return;
+    clearListeners();
+    STATE.teacherLibraryView=nextView;
+    teacherLibraryHub(c);
+  };
+  $("#libraryQuestionsTab").onclick=()=>switchView("questions");
+  $("#libraryQuestionSetsTab").onclick=()=>switchView("questionSets");
+  const viewHost=$("#teacherLibraryView");
+  if(view==="questionSets") teacherQuestionSets(viewHost);
+  else teacherLibrary(viewHost);
 }
 
 /* ---------- Thư viện câu hỏi ---------- */

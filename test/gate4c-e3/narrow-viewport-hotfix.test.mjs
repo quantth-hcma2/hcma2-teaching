@@ -38,6 +38,30 @@ const baselineCssBlock = sliceBetween(baselineSource, "<style>", "</style>", "ba
 const scriptSrc = sliceBetween(source, '<script type="module">', "</script>", "script");
 const baselineScriptSrc = sliceBetween(baselineSource, '<script type="module">', "</script>", "baseline script");
 
+// GATE 5F.D2.G13B.1 — reconciliation, test-harness only. The whole-module BASELINE above
+// (affb0edb, pre-Gate-4C-E.3-hotfix) still correctly backs every CSS-scoping test below: this
+// hotfix's own CSS has not drifted, and BASELINE is what makes those isolation proofs meaningful
+// (a newer baseline that already contains the hotfix's CSS would make them tautological). The
+// SCRIPT side is different: 9 separately-accepted, separately-tested production commits
+// (XLSX assets, teacher-candidate release, submission-image diagnostics, Group Discussion
+// fullscreen, sidebar v1, interaction-module unification, nav fix, teacher library hub v1, the
+// Gate 5F.D2.G10A retirement candidate) landed between affb0edb and current production without
+// ever being reconciled into this file's script-freeze test — a pre-existing staleness, proven
+// below and unrelated to Gate 5F.D2.G13B. Reproducing all 9 as reversible chunks is neither
+// "smallest possible change" nor safe (no first-hand context on any of them). Instead, the
+// canonical CURRENT production SHA (same value as PRODUCTION_BASELINE, used further down for the
+// Firestore call-site-surface tests) stands in as the script baseline for the ONE test that needs
+// it: it is itself the accepted, live, canonical production state, so any further authorized
+// script delta on top of it (this gate's own Classroom-launch delta) is exactly what remains to be
+// proven narrow — nothing about the 9 already-accepted commits needs to be re-litigated here.
+const CANONICAL_PRODUCTION_SHA = "df397955206199aa1fd132e37239a2f86fac0659";
+const canonicalProductionScriptSrc = sliceBetween(
+  execFileSync("git", ["show", `${CANONICAL_PRODUCTION_SHA}:index.html`], { cwd: repoRoot, encoding: "utf8" }).replace(/\r\n/g, "\n"),
+  '<script type="module">',
+  "</script>",
+  "canonical production script",
+);
+
 const HOTFIX_START_MARKER = "/* GATE 4C-E.3:";
 const HOTFIX_END_MARKER = ".modal.is-fullscreen .kn-pf-expanded > .flex.gap-8.mt-8 > select,\n.modal.is-fullscreen .kn-pf-expanded > .flex.gap-8.mt-8 > input[type=text]{width:auto; flex:1 1 150px; min-width:120px;}";
 const hotfixCss = sliceBetween(cssBlock, HOTFIX_START_MARKER, HOTFIX_END_MARKER, "hotfix css") + HOTFIX_END_MARKER;
@@ -120,18 +144,15 @@ test("GATE 4C-E.3: global input/select width:100% rule is byte-identical to base
 // ===================================================================================
 
 // ===================================================================================
-// GATE 5F.D2.F3 — RECONCILIATION with the second authorized JS delta.
-//
-// After this test was reconciled for Search V1 (GATE 4C-F.4), the Knowledge dashboard legitimately
-// gained (a) the Gate 5F.C Classroom Second Brain launch control and (b) the Gate 5F.D2.F1
-// server-derived status recovery. This is the EXACT, frozen source of those two accepted changes
-// (production code of commit 10c2931d1372844f32cbfdee466833099b3ee5bf): each entry pairs the added
-// text with the historical-baseline text it replaced (pure additions replace only their anchor line).
-// The reversal below is strict: every chunk must match verbatim, must occur exactly
-// `expectedOccurrences` times, and after ALL reversals the module script must still be byte-identical
-// to the ORIGINAL historical baseline (affb0edb…). No regex, no range deletion, no baseline change.
-// Any further production JS edit — including to these chunks — makes this test fail until a new,
-// explicitly authorized reconciliation updates the frozen chunks.
+// GATE 5F.D2.G13B — the Classroom Second Brain (V2) launch/close delta, rebuilt on current
+// Teaching production (df397955...) rather than the old, abandoned Gate 5F.C/5F.D2.F1 candidate
+// chain. Each entry pairs the added text with the canonical-production text it replaced (pure
+// additions replace only their anchor line). The reversal below is strict: every chunk must match
+// verbatim, must occur exactly `expectedOccurrences` times, and after ALL reversals the module
+// script must be byte-identical to CANONICAL_PRODUCTION_SHA's own script (see
+// canonicalProductionScriptSrc above) — proven independently, not assumed (Gate 5F.D2.G13B.1).
+// No regex, no range deletion. Any further production JS edit — including to these chunks — makes
+// this test fail until a new, explicitly authorized reconciliation updates the frozen chunks.
 // ===================================================================================
 const knownClassroomLaunchAdditions = [
   {
@@ -168,8 +189,12 @@ const knownClassroomLaunchAdditions = [
   {
     name: "Gate 5F.C/F1 controller creation + dispose registration",
     expectedOccurrences: 1,
+    // GATE 5F.D2.G13B.1 — anchors on knPfSearchDebounceTimer (current production's own local
+    // variable name at this spot since Search V1 landed), not the old candidate's
+    // knPfFullscreenEscHandler (a pre-Search-V1 name — the old candidate was built before Search
+    // V1 existed). Confirmed by direct read of this candidate's actual index.html.
     withClassroomLaunch:
-      "  let knPfFullscreenEscHandler=null;\n" +
+      "  let knPfSearchDebounceTimer=null;\n" +
       "  // GATE 5F.C: one Classroom launch/close controller per dashboard mount — its projectionSessionId\n" +
       "  // lives only in this closure for the lifetime of this dashboard view (a Teaching refresh forgets\n" +
       "  // it; accepted for this candidate, see classroom-projection-launch.mjs).\n" +
@@ -188,7 +213,7 @@ const knownClassroomLaunchAdditions = [
       "  track(()=>classroomController.dispose());\n" +
       "  const openerUid=STATE.user.uid;\n",
     withoutClassroomLaunch:
-      "  let knPfFullscreenEscHandler=null;\n" +
+      "  let knPfSearchDebounceTimer=null;\n" +
       "  const openerUid=STATE.user.uid;\n",
   },
   {
@@ -340,112 +365,20 @@ const knownClassroomLaunchAdditions = [
   },
 ];
 
-test("GATE 4C-F.4 RECONCILED (was: entire JS byte-identical to baseline; category F): the JS module script equals baseline once EXACTLY the frozen, authorized GATE 4C-F.2 Search V1 delta AND the frozen, authorized GATE 5F.C/5F.D2.F1 Classroom launch delta are reversed back out — proving no OTHER (unauthorized) JS change exists beyond the independently-approved, independently-tested features", () => {
-  const knownSearchAdditions = [
-    [
-      'const KN_PARTICIPANT_FIELD_LABELS={fullName:"Họ và tên",className:"Lớp",email:"Email",phone:"Số điện thoại"};\n' +
-      '// GATE 4C-F.2: Search V1 normalization — case/diacritic-insensitive, deterministic, never\n' +
-      '// touches stored participant data or CSV values. NFD decomposition + combining-mark strip\n' +
-      '// handles standard Vietnamese tone marks; đ/Đ is a separate codepoint (doesn\'t decompose via\n' +
-      '// NFD) so it needs its own explicit replace.\n' +
-      'function knPfNormalizeSearch(s){\n' +
-      '  return String(s==null?"":s).trim().toLowerCase().normalize("NFD").replace(/[\\u0300-\\u036f]/g,"").replace(/đ/g,"d");\n' +
-      '}\n' +
-      'function knPfSearchableText(r){\n' +
-      '  return knPfNormalizeSearch(r.fullName)+" "+knPfNormalizeSearch(r.className);\n' +
-      '}\n',
-      'const KN_PARTICIPANT_FIELD_LABELS={fullName:"Họ và tên",className:"Lớp",email:"Email",phone:"Số điện thoại"};\n',
-    ],
-    [
-      "let knPfFullscreenEscHandler=null;\n" +
-      "  // GATE 4C-F.2: the one pending Search debounce timer, if any. Unconditionally cancelled at the\n" +
-      "  // top of wireParticipantControls() (which runs on every participant rerender, from any trigger)\n" +
-      "  // so a stale timer can never later fire against a mode/host that's no longer current.\n" +
-      "  let knPfSearchDebounceTimer=null;\n",
-      "let knPfFullscreenEscHandler=null;\n",
-    ],
-    [
-      "function knowledgeParticipantsMarkup(participantsArg,countsArg,sessionArg,statusFilter,classFilter,searchQuery){",
-      "function knowledgeParticipantsMarkup(participantsArg,countsArg,sessionArg,statusFilter,classFilter){",
-    ],
-    [
-      '    // GATE 4C-F.2: Search V1 — simple normalized substring only, deliberately NOT tokenized (a\n' +
-      '    // reordered/partial-token query is not required to match; see test/gate4c-f2 for the frozen\n' +
-      '    // contract). Derived visible-row predicate only — never mutates participantsArg/rows/counts.\n' +
-      '    const normalizedQuery=knPfNormalizeSearch(searchQuery);\n' +
-      '    const filtered=rows.filter(r=>{\n' +
-      '      const searchOk=normalizedQuery===""||knPfSearchableText(r).includes(normalizedQuery);\n',
-      '    const filtered=rows.filter(r=>{\n',
-    ],
-    ["      return searchOk&&statusOk&&classOk;\n", "      return statusOk&&classOk;\n"],
-    [
-      '<input type="text" id="knPfSearch" placeholder="Tìm theo họ tên hoặc lớp..." style="max-width:220px"><select id="knPfFilter">',
-      '<select id="knPfFilter">',
-    ],
-    [
-      "  function wireParticipantControls(host,rerender){\n" +
-      "    // GATE 4C-F.2: unconditionally cancel any pending Search debounce at the very top of every\n" +
-      "    // participant rerender (this function runs on every one: Compact, Expanded, mode toggle,\n" +
-      "    // Refresh, filter change, submissions rerender). A stale timer can therefore never later fire\n" +
-      "    // against a mode/host that is no longer current — it is superseded by whatever fresh listener\n" +
-      "    // this same call is about to attach below.\n" +
-      "    if(knPfSearchDebounceTimer){clearTimeout(knPfSearchDebounceTimer);knPfSearchDebounceTimer=null;}\n" +
-      "    const searchInput=host.querySelector('#knPfSearch');\n" +
-      "    if(searchInput){\n" +
-      "      searchInput.value=knPfViewState.search;\n" +
-      "      searchInput.oninput=(e)=>{\n" +
-      "        knPfViewState.search=e.target.value;\n" +
-      "        const selStart=e.target.selectionStart,selEnd=e.target.selectionEnd;\n" +
-      "        if(knPfSearchDebounceTimer)clearTimeout(knPfSearchDebounceTimer);\n" +
-      "        knPfSearchDebounceTimer=setTimeout(()=>{\n" +
-      "          knPfSearchDebounceTimer=null;\n" +
-      "          rerender();\n" +
-      "          // Compact's `host` (its persistent #knPfWrap node) is never replaced across rerenders\n" +
-      "          // (knowledgeRenderParticipantsCompact() only ever does wrap.innerHTML=... on the SAME\n" +
-      "          // node), so it is still valid here and needs no re-lookup. Expanded/Fullscreen is the\n" +
-      "          // one case that DOES need a fresh query: rerender() there replaces #globalModal's\n" +
-      "          // entire subtree via openModal(), so the closure-captured `host` (the previous .modal\n" +
-      "          // element) is now detached and can never be focused again. This mirrors\n" +
-      "          // knowledgeRenderParticipantsCurrentMode()'s own mode-based dispatch.\n" +
-      "          const liveHost=knPfViewState.mode==='expanded'?document.querySelector('#globalModal .modal'):host;\n" +
-      "          const freshInput=liveHost?liveHost.querySelector('#knPfSearch'):null;\n" +
-      "          if(freshInput){\n" +
-      "            freshInput.focus();\n" +
-      "            if(selStart!=null&&selEnd!=null){try{freshInput.setSelectionRange(selStart,selEnd);}catch(err){}}\n" +
-      "          }\n" +
-      "        },150);\n" +
-      "      };\n" +
-      "    }\n" +
-      "    const statusSel=host.querySelector('#knPfFilter');",
-      "  function wireParticipantControls(host,rerender){\n" +
-      "    const statusSel=host.querySelector('#knPfFilter');",
-    ],
-    [
-      "if(refreshBtn)refreshBtn.onclick=()=>{if(!participantsLoading){if(knPfSearchDebounceTimer){clearTimeout(knPfSearchDebounceTimer);knPfSearchDebounceTimer=null;}loadParticipants();}};",
-      "if(refreshBtn)refreshBtn.onclick=()=>{if(!participantsLoading)loadParticipants();};",
-    ],
-    [
-      "wrap.innerHTML=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter,knPfViewState.search);",
-      "wrap.innerHTML=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter);",
-    ],
-    [
-      "const tableHtml=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter,knPfViewState.search);",
-      "const tableHtml=knowledgeParticipantsMarkup(participants,participantCounts,session,knPfViewState.statusFilter,knPfViewState.classFilter);",
-    ],
-  ];
+test("GATE 5F.D2.G13B.1 RECONCILED (was: byte-identical to the affb0edb+Search-V1 baseline; category F): the JS module script equals CANONICAL_PRODUCTION_SHA's own script once EXACTLY the frozen, authorized Gate 5F.D2.G13B Classroom-launch delta is reversed back out — proving no OTHER (unauthorized) JS change exists beyond this gate's own independently-tested feature", () => {
+  // GATE 5F.D2.G13B.1 — the old two-step reversal (Search V1, then Classroom-launch, down to the
+  // ancient affb0edb baseline) stopped being valid once 9 OTHER separately-accepted production
+  // commits landed on top of affb0edb+SearchV1 without ever being reconciled into this test (see
+  // the comment above canonicalProductionScriptSrc's declaration for the full list and reasoning).
+  // Reversing only this gate's own delta against CANONICAL_PRODUCTION_SHA is the correct, minimal
+  // proof going forward: CANONICAL_PRODUCTION_SHA IS the accepted baseline now.
   let stripped = scriptSrc;
-  for (const [withSearch, withoutSearch] of knownSearchAdditions) {
-    assert.ok(stripped.includes(withSearch), `expected known Search addition not found verbatim: ${JSON.stringify(withSearch.slice(0, 80))}...`);
-    stripped = stripped.split(withSearch).join(withoutSearch);
-  }
-  // GATE 5F.D2.F3 — second authorized delta (Gate 5F.C launch control + Gate 5F.D2.F1 status recovery).
-  // Strict: verbatim match AND the exact expected occurrence count, per chunk. Nothing else is reversed.
   for (const chunk of knownClassroomLaunchAdditions) {
     const occurrences = stripped.split(chunk.withClassroomLaunch).length - 1;
     assert.equal(occurrences, chunk.expectedOccurrences, `authorized Classroom-launch chunk "${chunk.name}" must occur exactly ${chunk.expectedOccurrences}x verbatim (found ${occurrences})`);
     stripped = stripped.split(chunk.withClassroomLaunch).join(chunk.withoutClassroomLaunch);
   }
-  assert.equal(stripped, baselineScriptSrc, "after reversing exactly the known Search delta, the JS must be byte-identical to the pre-hotfix, pre-Search baseline (no other JS change)");
+  assert.equal(stripped, canonicalProductionScriptSrc, "after reversing exactly the known Gate 5F.D2.G13B Classroom-launch delta, the JS must be byte-identical to CANONICAL_PRODUCTION_SHA's own script (no other JS change)");
 });
 
 // ===================================================================================

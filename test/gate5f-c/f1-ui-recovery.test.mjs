@@ -420,7 +420,10 @@ test("SCOPE LOCK (F1): the diff against the accepted Gate 5F.C candidate touches
   const CANDIDATE = "df397955206199aa1fd132e37239a2f86fac0659";
   const changed = execSync(`git diff --name-only ${CANDIDATE}`, { cwd: repoRoot, encoding: "utf8" }).split("\n").map((s) => s.trim()).filter(Boolean);
   const untracked = execSync("git status --porcelain", { cwd: repoRoot, encoding: "utf8" }).split("\n").filter((l) => l.startsWith("??")).map((l) => l.slice(3).trim());
-  const allowed = new Set(["index.html", "classroom-projection-launch.mjs", "test/gate5f-c/f1-status-recovery.test.mjs", "test/gate5f-c/f1-ui-recovery.test.mjs", "test/gate4c-e3/narrow-viewport-hotfix.test.mjs", "test/gate5f-c/source-guard.test.mjs"]);
+  // GATE 5F.D2.G13B — unlike the old chain (where classroom-launch.test.mjs predated this file's
+  // own diff baseline), this candidate's single baseline means every gate5f-c test file shows up
+  // in the same flat diff, so it must be listed explicitly here too.
+  const allowed = new Set(["index.html", "classroom-projection-launch.mjs", "test/gate5f-c/classroom-launch.test.mjs", "test/gate5f-c/f1-status-recovery.test.mjs", "test/gate5f-c/f1-ui-recovery.test.mjs", "test/gate4c-e3/narrow-viewport-hotfix.test.mjs", "test/gate5f-c/source-guard.test.mjs"]);
   for (const f of [...changed, ...untracked.filter((p) => !p.endsWith("/"))]) {
     assert.ok(allowed.has(f), `unexpected file changed outside Gate 5F.D2.F1's scope: ${f}`);
   }

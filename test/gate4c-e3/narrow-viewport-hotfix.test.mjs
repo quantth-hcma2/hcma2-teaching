@@ -162,12 +162,18 @@ const knownClassroomLaunchAdditions = [
     // 5F.D2.G13A's reconciliation) has one intervening B1.2 import (group-submission-upload.mjs)
     // between session-info-compare.mjs and this gate's own import that did not exist on the old,
     // abandoned candidate's checkpoint — the anchor below reflects that real, current position.
+    // GATE 5F.D2.POST-2 — extends this same chunk with the shared token-provider import/const
+    // (createGetClassroomIdToken / getClassroomIdToken) added directly below the original import.
     withClassroomLaunch:
       "import { uploadThenCreateGroupSubmission, reportGroupSubmissionImageLoadError } from \"./group-submission-upload.mjs\";\n" +
       "// GATE 5F.C: Knowledge Co-creation dashboard launch/close control for the Classroom Second Brain\n" +
       "// (V2) projection. Talks only to the accepted, frozen Gate 5C HTTP contract — never touches\n" +
       "// Firestore Rules/indexes, the Public Second Brain V1 service, or any Classroom backend file.\n" +
-      "import { canLaunchClassroomProjection, createClassroomLaunchController } from \"./classroom-projection-launch.mjs\";\n" +
+      "import { canLaunchClassroomProjection, createClassroomLaunchController, createGetClassroomIdToken } from \"./classroom-projection-launch.mjs\";\n" +
+      "// GATE 5F.D2.POST-2: one shared token provider for the Classroom controller's Start/Status/Close\n" +
+      "// (see createGetClassroomIdToken in classroom-projection-launch.mjs). auth.currentUser is read\n" +
+      "// fresh on every call (matches the original closure's behavior), never captured/cached here.\n" +
+      "const getClassroomIdToken=createGetClassroomIdToken(()=>auth.currentUser);\n" +
       "\n",
     withoutClassroomLaunch:
       "import { uploadThenCreateGroupSubmission, reportGroupSubmissionImageLoadError } from \"./group-submission-upload.mjs\";\n" +
@@ -193,6 +199,8 @@ const knownClassroomLaunchAdditions = [
     // variable name at this spot since Search V1 landed), not the old candidate's
     // knPfFullscreenEscHandler (a pre-Search-V1 name — the old candidate was built before Search
     // V1 existed). Confirmed by direct read of this candidate's actual index.html.
+    // GATE 5F.D2.POST-2 — getIdToken now wires to the shared getClassroomIdToken provider instead
+    // of the old inline closure.
     withClassroomLaunch:
       "  let knPfSearchDebounceTimer=null;\n" +
       "  // GATE 5F.C: one Classroom launch/close controller per dashboard mount — its projectionSessionId\n" +
@@ -207,7 +215,7 @@ const knownClassroomLaunchAdditions = [
       "  const classroomController=createClassroomLaunchController({\n" +
       "    windowOpenImpl:(url,target)=>window.open(url,target),\n" +
       "    fetchImpl:(url,init)=>fetch(url,init),\n" +
-      "    getIdToken:()=>auth.currentUser.getIdToken(),\n" +
+      "    getIdToken:getClassroomIdToken,\n" +
       "    requireKnownStatus:true,\n" +
       "  });\n" +
       "  track(()=>classroomController.dispose());\n" +
@@ -357,6 +365,10 @@ const knownClassroomLaunchAdditions = [
       "    const result=await pending;\n" +
       "    if(result.ok){ toast(\"Đã đóng trình chiếu.\",\"ok\"); } else { toast(result.message,\"err\"); }\n" +
       "    renderSecondBrainAction();\n" +
+      "    // GATE 5F.D2.POST-2: after a Close failure that wasn't itself an auth failure (e.g. the one\n" +
+      "    // allowed forced-refresh retry succeeded getting a token but the request still failed some\n" +
+      "    // other way), reconfirm the server-side state instead of trusting only the optimistic UI.\n" +
+      "    if(!result.ok&&result.recheckStatus&&classroomDashCurrent())refreshClassroomStatus();\n" +
       "  }\n" +
       "  async function aiGateway(path,body){\n",
     withoutClassroomLaunch:

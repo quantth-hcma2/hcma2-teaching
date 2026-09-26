@@ -379,7 +379,11 @@ test("SOURCE: the controller is created exactly once per dashboard mount, requir
   assert.equal((html.match(/createClassroomLaunchController\(/g) || []).length, 1);
   assert.match(html, /createClassroomLaunchController\(\{[\s\S]*?requireKnownStatus:true,[\s\S]*?\}\);\n\s*track\(\(\)=>classroomController\.dispose\(\)\);/);
   assert.equal((html.match(/\+\+CLASSROOM_DASHBOARD_GEN/g) || []).length, 1);
-  assert.equal((html.match(/getIdToken:\(\)=>auth\.currentUser\.getIdToken\(\)/g) || []).length >= 1, true, "the teacher's own Firebase Auth token is used");
+  // GATE 5F.D2.POST-2: the controller now takes the shared token provider (getClassroomIdToken)
+  // instead of an inline closure — still built from the teacher's own auth.currentUser, verified
+  // by tracing the wiring rather than matching the old literal closure text.
+  assert.equal((html.match(/getIdToken:getClassroomIdToken/g) || []).length >= 1, true, "the shared Classroom token provider is wired in");
+  assert.match(html, /const getClassroomIdToken=createGetClassroomIdToken\(\(\)=>auth\.currentUser\)/, "the shared token provider is built from the teacher's own Firebase Auth currentUser");
   assert.ok(!/publicAuth/.test(html.slice(html.indexOf("const classroomController"), html.indexOf("const classroomController") + 600)), "never the student publicAuth");
 });
 
@@ -423,7 +427,8 @@ test("SCOPE LOCK (F1): the diff against the accepted Gate 5F.C candidate touches
   // GATE 5F.D2.G13B — unlike the old chain (where classroom-launch.test.mjs predated this file's
   // own diff baseline), this candidate's single baseline means every gate5f-c test file shows up
   // in the same flat diff, so it must be listed explicitly here too.
-  const allowed = new Set(["index.html", "classroom-projection-launch.mjs", "test/gate5f-c/classroom-launch.test.mjs", "test/gate5f-c/f1-status-recovery.test.mjs", "test/gate5f-c/f1-ui-recovery.test.mjs", "test/gate4c-e3/narrow-viewport-hotfix.test.mjs", "test/gate5f-c/source-guard.test.mjs"]);
+  // GATE 5F.D2.POST-2 adds one new test file to this same flat diff.
+  const allowed = new Set(["index.html", "classroom-projection-launch.mjs", "test/gate5f-c/classroom-launch.test.mjs", "test/gate5f-c/f1-status-recovery.test.mjs", "test/gate5f-c/f1-ui-recovery.test.mjs", "test/gate4c-e3/narrow-viewport-hotfix.test.mjs", "test/gate5f-c/source-guard.test.mjs", "test/gate5f-c/post2-close-auth-recovery.test.mjs"]);
   for (const f of [...changed, ...untracked.filter((p) => !p.endsWith("/"))]) {
     assert.ok(allowed.has(f), `unexpected file changed outside Gate 5F.D2.F1's scope: ${f}`);
   }

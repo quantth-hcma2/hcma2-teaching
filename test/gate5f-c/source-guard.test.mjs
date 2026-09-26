@@ -21,7 +21,8 @@ const html = readFileSync(indexHtmlPath, "utf8").replace(/\r\n/g, "\n");
 const BASELINE_COMMIT = "df397955206199aa1fd132e37239a2f86fac0659"; // exact current Teaching production SHA (Gate 5F.D2.G13A.1)
 
 test("SOURCE GUARD: classroom-projection-launch.mjs is imported by index.html", () => {
-  assert.match(html, /import\s*\{\s*canLaunchClassroomProjection,\s*createClassroomLaunchController\s*\}\s*from\s*"\.\/classroom-projection-launch\.mjs"/);
+  // GATE 5F.D2.POST-2: the import now also brings in createGetClassroomIdToken.
+  assert.match(html, /import\s*\{\s*canLaunchClassroomProjection,\s*createClassroomLaunchController,\s*createGetClassroomIdToken\s*\}\s*from\s*"\.\/classroom-projection-launch\.mjs"/);
 });
 
 test("SOURCE GUARD: the old V1 static link (brain.quantth.vn/knowledge-wall.html) is no longer the primary Second Brain action", () => {

@@ -593,6 +593,10 @@ import { resolveCandidateEnvironment, candidateGroupJoinUrl } from "./app-enviro
 // see session-info-compare.mjs for the production-bug root cause and full contract.
 import { valuesEqualDeep, findConflictKey } from "./session-info-compare.mjs";
 import { uploadThenCreateGroupSubmission, reportGroupSubmissionImageLoadError } from "./group-submission-upload.mjs";
+// GATE 5F.C: Knowledge Co-creation dashboard launch/close control for the Classroom Second Brain
+// (V2) projection. Talks only to the accepted, frozen Gate 5C HTTP contract — never touches
+// Firestore Rules/indexes, the Public Second Brain V1 service, or any Classroom backend file.
+import { canLaunchClassroomProjection, createClassroomLaunchController } from "./classroom-projection-launch.mjs";
 
 /* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
 const APP_ENV=await resolveCandidateEnvironment(window.location);
@@ -5471,6 +5475,9 @@ function knowledgeCreateDialog(c,isAdminView){
     }catch(e){toast(mapError(e)||e.message,"err");btn.disabled=false;}
   };
 }
+// GATE 5F.D2.F1: bumped on every Knowledge dashboard mount; async Classroom status/Start/Close
+// continuations compare against it before touching the DOM (see renderSecondBrainAction).
+let CLASSROOM_DASHBOARD_GEN=0;
 async function knowledgeDashboard(c,sessionId,isAdminView){
   clearListeners(); let session=null,recentDocs=[],recentLimit=50,totalCount=0,participantCount=0,aiAttached=false,latestAiSnapshot=null;
   // GATE 3D: participants (hồ sơ PII) chỉ tải ON-DEMAND (getDocs, không phải onSnapshot
@@ -5494,6 +5501,22 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
   // top of wireParticipantControls() (which runs on every participant rerender, from any trigger)
   // so a stale timer can never later fire against a mode/host that's no longer current.
   let knPfSearchDebounceTimer=null;
+  // GATE 5F.C: one Classroom launch/close controller per dashboard mount — its projectionSessionId
+  // lives only in this closure for the lifetime of this dashboard view (a Teaching refresh forgets
+  // it; accepted for this candidate, see classroom-projection-launch.mjs).
+  // GATE 5F.D2.F1: the controller now also recovers the server-side grant state (POST
+  // /projections/status) on entry. requireKnownStatus makes "not yet checked / check failed" count
+  // as UNKNOWN, never as "no projection". The generation counter + dispose-on-leave stop a late
+  // status response from an earlier dashboard mount from touching a newer dashboard's controls.
+  const classroomDashGen=++CLASSROOM_DASHBOARD_GEN;
+  let classroomStatusRequested=false;
+  const classroomController=createClassroomLaunchController({
+    windowOpenImpl:(url,target)=>window.open(url,target),
+    fetchImpl:(url,init)=>fetch(url,init),
+    getIdToken:()=>auth.currentUser.getIdToken(),
+    requireKnownStatus:true,
+  });
+  track(()=>classroomController.dispose());
   const openerUid=STATE.user.uid;
   c.innerHTML=`<button class="btn btn-ghost btn-sm" id="knBack">← Danh sách</button><div id="knDash" class="mt-14"><div class="center-screen"><span class="spinner"></span></div></div>`;
   $("#knBack").onclick=()=>{window.location.hash=""; if(isAdminView){STATE.adminNav="knowledge";adminRoute("knowledge");}else{STATE.teacherNav="knowledge";teacherRoute();}};
@@ -5548,7 +5571,7 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
       <div class="grid grid-2 mt-14"><div class="card"><h3>QR / liên kết công khai</h3><div class="flex gap-14" style="align-items:center;flex-wrap:wrap"><div class="pres-qr-wrap clickable" id="knQrWrap" role="button" tabindex="0" aria-label="Phóng to mã QR"><div id="knQr"></div><div class="pres-qr-hint">🔍 Nhấp để phóng to mã QR</div></div><div style="flex:1;min-width:220px"><input id="knUrl" value="${esc(url)}" readonly><div class="flex gap-8 mt-8"><button class="btn btn-sm" id="knCopy">SAO CHÉP</button><button class="btn btn-sm btn-outline" id="knSessionInfo">SỬA PHIÊN</button><button class="btn btn-sm ${session.status==='open'?'btn-danger':'btn-ok'}" id="knToggle">${session.status==='open'?'ĐÓNG PHIÊN':'MỞ LẠI'}</button></div></div></div></div>
       ${session.collectParticipantProfile===true?`<div class="card mt-14" id="knPfCard"><div class="section-title"><div><h3>👥 Người tham gia</h3><p class="mut">Thông tin cá nhân chỉ tải khi mở mục này — không cập nhật theo thời gian thực; bấm "Làm mới danh sách" để lấy dữ liệu mới nhất.</p></div><button class="btn btn-outline btn-sm" id="knPfExpand">⤢ MỞ RỘNG</button></div><div id="knPfWrap" class="kn-pf-compact"><div class="center-screen"><span class="spinner"></span></div></div></div>`:""}
       <div class="card"><h3>🤖 AI Analysis — Phase 2</h3><p class="mut">AI đọc bản sao theo lô; dữ liệu gốc không bị sửa hoặc ghi đè.</p><div class="flex gap-8" style="flex-wrap:wrap"><button class="btn" id="knAiRun">PHÂN TÍCH BẰNG AI</button><button class="btn btn-outline" id="knAiRetry" style="display:none">TIẾP TỤC / THỬ LẠI</button><button class="btn btn-outline" id="knAiJson" disabled>XUẤT AI JSON</button><button class="btn btn-outline" id="knAiCsv" disabled>XUẤT AI CSV</button></div><button class="btn btn-outline mt-8" id="knCsv">XUẤT CSV DỮ LIỆU GỐC</button><div id="knAiStatus" class="mt-14"><span class="mut small">Chưa có bản phân tích.</span></div></div></div>
-      <div class="card second-brain-card mt-14"><div class="second-brain-head"><span class="second-brain-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 4.5a3 3 0 0 0-3 3v.3A3.2 3.2 0 0 0 4.5 10.8a3.2 3.2 0 0 0 1 5.4A3 3 0 0 0 8.5 20a2.7 2.7 0 0 0 2.5-1.6"/><path d="M15 4.5a3 3 0 0 1 3 3v.3a3.2 3.2 0 0 1 1.5 3 3.2 3.2 0 0 1-1 5.4A3 3 0 0 1 15.5 20a2.7 2.7 0 0 1-2.5-1.6"/><path d="M12 4.5v14"/><circle cx="7.2" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="16.8" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="14.5" r=".9" fill="currentColor" stroke="none"/><circle cx="16" cy="14.5" r=".9" fill="currentColor" stroke="none"/></svg></span><div><h3>SECOND BRAIN LIVE</h3><p>Trình chiếu không gian tri thức được hình thành theo thời gian thực</p></div></div><a class="btn btn-lg" href="https://brain.quantth.vn/knowledge-wall.html" target="_blank" rel="noopener noreferrer">MỞ SECOND BRAIN LIVE<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></svg><span class="sr-only"> (mở trong tab mới)</span></a></div>
+      ${canLaunchClassroomProjection({session,isAdminView,actorUid:STATE.user.uid})?`<div class="card second-brain-card mt-14" id="knSecondBrainCard"><div class="second-brain-head"><span class="second-brain-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 4.5a3 3 0 0 0-3 3v.3A3.2 3.2 0 0 0 4.5 10.8a3.2 3.2 0 0 0 1 5.4A3 3 0 0 0 8.5 20a2.7 2.7 0 0 0 2.5-1.6"/><path d="M15 4.5a3 3 0 0 1 3 3v.3a3.2 3.2 0 0 1 1.5 3 3.2 3.2 0 0 1-1 5.4A3 3 0 0 1 15.5 20a2.7 2.7 0 0 1-2.5-1.6"/><path d="M12 4.5v14"/><circle cx="7.2" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="16.8" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="14.5" r=".9" fill="currentColor" stroke="none"/><circle cx="16" cy="14.5" r=".9" fill="currentColor" stroke="none"/></svg></span><div><h3>SECOND BRAIN LIVE</h3><p>Trình chiếu không gian tri thức được hình thành theo thời gian thực</p></div></div><div id="knSecondBrainAction"></div></div>`:""}
       <div id="knAiDashboard" class="mt-14"></div>
       <div class="card mt-14"><div class="section-title"><div><h3>Tình huống gần đây</h3><p class="mut">Chỉ tải tối đa ${recentLimit} bản ghi trên màn hình; CSV chỉ tải toàn bộ khi được yêu cầu.</p></div></div>
       <div class="grid grid-2"><input id="knSearch" placeholder="Tìm trong các bản ghi đang hiển thị…"><select id="knSeq"><option value="">Mọi thứ tự</option><option value="1">Tình huống 1</option><option value="2">Tình huống 2</option><option value="3">Tình huống 3</option><option value="more">Từ 4 trở đi</option></select></div><div id="knRecent" class="knowledge-list mt-14"></div><button class="btn btn-ghost btn-sm mt-14" id="knMore">TẢI THÊM 50</button></div>`;
@@ -5559,6 +5582,15 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
     $("#knCopy").onclick=()=>navigator.clipboard.writeText(url).then(()=>toast("Đã sao chép liên kết.","ok")).catch(()=>toast("Hãy sao chép liên kết trong ô.","warn"));
     $("#knSessionInfo").onclick=()=>openSessionInfoEditor("knowledgeSessions",sessionId);
     $("#knToggle").onclick=async()=>{try{await updateDoc(sRef,{status:session.status==="open"?"closed":"open",updatedAt:serverTimestamp()});toast("Đã cập nhật trạng thái phiên.","ok");}catch(e){toast(mapError(e),"err");}};
+    // GATE 5F.C: re-render only the Second Brain action area (Start/Active+Close) — the card
+    // itself was already re-rendered above from scratch on every session-doc snapshot, and this
+    // keeps the controller's own state (starting/active/closing) reflected without needing a
+    // separate listener or touching any other part of the dashboard.
+    // GATE 5F.D2.F1: the server-side grant status is queried exactly once per dashboard mount, the
+    // first time the launch card exists (never for trashed sessions, which render no card);
+    // later session snapshots only re-render from the controller's own state.
+    if(!classroomStatusRequested&&$("#knSecondBrainCard")){classroomStatusRequested=true;refreshClassroomStatus();}
+    else renderSecondBrainAction();
     // GATE 4C-D.2: Expanded's own action button — lives in the static card header (outside
     // #knPfWrap, so it survives every Compact re-render) alongside the session's other actions.
     if($("#knPfExpand"))$("#knPfExpand").onclick=knowledgeRenderParticipantsExpanded;
@@ -5596,6 +5628,112 @@ knowledgeRenderAi();
       <div class="grid grid-2 mt-14"><div class="card"><h3>Đồng thuận / khác biệt</h3><p><b>Đồng thuận:</b> ${esc((r.consensus||[]).join('; ')||'—')}</p><p><b>Khác biệt:</b> ${esc((r.divergence||[]).join('; ')||'—')}</p></div><div class="card"><h3>Tình huống đại diện</h3>${situations.slice(0,12).map(x=>`<div class="knowledge-item"><b>${esc(x.topic||'')}</b><div>${esc(x.text||x.quote||'')}</div></div>`).join('')||'<p class="mut">Chưa có.</p>'}</div></div>
       <div class="card mt-14"><h3>💬 AI Copilot</h3><p class="mut small">Dùng snapshot và các raw chunks liên quan; không gửi toàn bộ 1.500 bản ghi mỗi câu hỏi.</p><textarea id="knCopilotQuestion" maxlength="1000" rows="3" placeholder="Ví dụ: Ba vấn đề cấp thiết nhất và bằng chứng là gì?"></textarea><button class="btn mt-8" id="knCopilotAsk">HỎI COPILOT</button><div id="knCopilotAnswer" class="knowledge-item mt-14" style="display:none"></div></div>`;
     $("#knCopilotAsk").onclick=knowledgeAskCopilot;
+  }
+  // ===================================================================================
+  // GATE 5F.C — Classroom Second Brain (V2) launch/close. Session-bound projection of the
+  // accepted Gate 5C/5D/5E Classroom service; replaces the old static, unauthenticated V1
+  // "MỞ SECOND BRAIN LIVE" link (the Public Second Brain V1 knowledge-wall page) as the PRIMARY
+  // action on this card. V1 itself is untouched — it is simply no longer presented here as the
+  // session-bound action; deliberately not adding a second button alongside it in this gate (see
+  // the Gate 5F.C report for the reasoning).
+  // ===================================================================================
+  // GATE 5F.D2.F1: every async continuation (status / Start / Close) re-checks this before it
+  // touches the DOM — the launch card's element ids are shared by every dashboard mount, so an
+  // obsolete continuation from an earlier mount (or another account) must never render into a newer one.
+  function classroomDashCurrent(){
+    return classroomDashGen===CLASSROOM_DASHBOARD_GEN&&STATE.user&&STATE.user.uid===openerUid;
+  }
+  function renderSecondBrainAction(){
+    if(!classroomDashCurrent())return;
+    const host=$("#knSecondBrainAction");
+    if(!host)return; // card isn't rendered at all when canLaunchClassroomProjection() is false
+    const view=classroomController.getView();
+    const icon=`<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></svg><span class="sr-only"> (mở trong tab mới)</span>`;
+    const closeBtn=`<button class="btn btn-lg btn-outline" id="knClassroomClose" style="background:transparent;color:#fff;border-color:#fff">ĐÓNG TRÌNH CHIẾU</button>`;
+    // Wording is deliberately about the server-side GRANT — this page cannot know whether a
+    // projector or browser tab is actually still open.
+    if(view==="loading"){
+      host.innerHTML=`<div class="flex gap-8" style="align-items:center;flex-wrap:wrap" id="knClassroomStatus"><span class="spinner"></span><span>Đang kiểm tra trạng thái trình chiếu…</span><button class="btn btn-lg" id="knClassroomStart" disabled>TRÌNH CHIẾU SECOND BRAIN</button></div>`;
+      return;
+    }
+    if(view==="active"){
+      host.innerHTML=`<div class="flex gap-8" style="align-items:center;flex-wrap:wrap" id="knClassroomStatus"><span class="badge" style="background:#fff;color:var(--brand-dark)">● Phiên chiếu đang hoạt động</span>${closeBtn}<button class="btn btn-lg" id="knClassroomStart">CHIẾU LẠI (THAY THẾ PHIÊN ĐANG CHIẾU)${icon}</button></div>`;
+      $("#knClassroomClose").onclick=onClassroomCloseClick;
+      $("#knClassroomStart").onclick=onClassroomStartClick;
+      return;
+    }
+    if(view==="unknown"){
+      host.innerHTML=`<div id="knClassroomStatus"><p style="margin:0 0 10px">⚠️ Không xác định được trạng thái trình chiếu. Có thể đang có một phiên chiếu hoạt động — chiếu mới sẽ thay thế phiên đó.</p><div class="flex gap-8" style="align-items:center;flex-wrap:wrap"><button class="btn btn-lg" id="knClassroomStart">TRÌNH CHIẾU SECOND BRAIN${icon}</button>${closeBtn}<button class="btn btn-lg btn-outline" id="knClassroomRetry" style="background:transparent;color:#fff;border-color:#fff">KIỂM TRA LẠI</button></div></div>`;
+      $("#knClassroomStart").onclick=onClassroomStartClick;
+      $("#knClassroomClose").onclick=onClassroomCloseClick;
+      $("#knClassroomRetry").onclick=refreshClassroomStatus;
+      return;
+    }
+    const busy=view==="starting"||view==="closing";
+    host.innerHTML=`<button class="btn btn-lg" id="knClassroomStart"${busy?" disabled":""}>${view==="closing"?"ĐANG ĐÓNG…":busy?"ĐANG MỞ…":"TRÌNH CHIẾU SECOND BRAIN"}${icon}</button>`;
+    if(!busy)$("#knClassroomStart").onclick=onClassroomStartClick;
+  }
+  // GATE 5F.D2.F1 — read-only status recovery (never Close as a probe). The controller flips to
+  // "checking" synchronously, so the very first paint already shows the loading state; a response
+  // that a newer Start/Close/check made obsolete comes back { stale } and is dropped.
+  async function refreshClassroomStatus(){
+    if(!session)return;
+    const pending=classroomController.checkStatus(session);
+    renderSecondBrainAction();
+    const result=await pending;
+    if(result.stale||result.skipped)return;
+    renderSecondBrainAction();
+  }
+  // GATE 5F.C Part G/L — deliberately synchronous up to classroomController.start()'s own
+  // window.open() call: this handler itself performs no await before that point (confirm() is
+  // native/blocking, not async), so window.open() always runs within the same trusted-click call
+  // stack the browser's popup blocker requires. This function must stay non-async.
+  // GATE 5F.D2.F1: the confirmation is now driven by the controller's server-derived guard, so it
+  // also applies after a Teaching refresh and whenever the status could not be determined.
+  function onClassroomStartClick(){
+    const guard=classroomController.getStartGuard();
+    if(guard==="busy")return;
+    if(guard==="replace-active"){
+      if(!confirm("Chiếu phiên mới sẽ kết thúc phiên chiếu đang hoạt động. Tiếp tục?"))return;
+      runClassroomStart(true);
+      return;
+    }
+    if(guard==="status-unknown"){
+      if(!confirm("Không xác định được trạng thái trình chiếu. Có thể đang có một phiên chiếu hoạt động, và chiếu mới sẽ kết thúc phiên đó. Tiếp tục?"))return;
+      runClassroomStart(true);
+      return;
+    }
+    runClassroomStart(false);
+  }
+  // GATE 5F.C FIX1 — classroomController.start() now checks window.open() BEFORE any network
+  // call (see classroom-projection-launch.mjs), so a blocked popup is just another `!result.ok`
+  // failure (code POPUP_BLOCKED) with its own mapped Vietnamese message — no separate modal/
+  // retry-with-the-same-token flow is needed or possible any more (no token was ever requested).
+  // The lecturer simply allows popups and clicks "Trình chiếu Second Brain" again.
+  // GATE 5F.D2.F1: start() is invoked BEFORE the first await (and before any re-render), so its
+  // window.open() call stays inside the click's synchronous call stack.
+  async function runClassroomStart(confirmed){
+    const pending=classroomController.start(session,{confirmed});
+    renderSecondBrainAction(); // reflect "starting" immediately (button disabled) while the request is in flight
+    const result=await pending;
+    if(result.needsConfirmation){ renderSecondBrainAction(); return; } // guarded above; defensive only
+    if(!result.ok){
+      toast(result.message,"err");
+      renderSecondBrainAction();
+      // An ambiguous failure (e.g. the response was lost) may have left a grant on the server.
+      if(result.recheckStatus&&classroomDashCurrent())refreshClassroomStatus();
+      return;
+    }
+    toast("Đã mở Trình chiếu Second Brain.","ok");
+    renderSecondBrainAction();
+  }
+  async function onClassroomCloseClick(){
+    const btn=$("#knClassroomClose"); if(btn)btn.disabled=true;
+    const pending=classroomController.close(session);
+    renderSecondBrainAction();
+    const result=await pending;
+    if(result.ok){ toast("Đã đóng trình chiếu.","ok"); } else { toast(result.message,"err"); }
+    renderSecondBrainAction();
   }
   async function aiGateway(path,body){
     if(!auth.currentUser)throw new Error('Phiên đăng nhập đã hết hạn.');

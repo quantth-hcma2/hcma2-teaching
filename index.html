@@ -596,7 +596,11 @@ import { uploadThenCreateGroupSubmission, reportGroupSubmissionImageLoadError } 
 // GATE 5F.C: Knowledge Co-creation dashboard launch/close control for the Classroom Second Brain
 // (V2) projection. Talks only to the accepted, frozen Gate 5C HTTP contract — never touches
 // Firestore Rules/indexes, the Public Second Brain V1 service, or any Classroom backend file.
-import { canLaunchClassroomProjection, createClassroomLaunchController } from "./classroom-projection-launch.mjs";
+import { canLaunchClassroomProjection, createClassroomLaunchController, createGetClassroomIdToken } from "./classroom-projection-launch.mjs";
+// GATE 5F.D2.POST-2: one shared token provider for the Classroom controller's Start/Status/Close
+// (see createGetClassroomIdToken in classroom-projection-launch.mjs). auth.currentUser is read
+// fresh on every call (matches the original closure's behavior), never captured/cached here.
+const getClassroomIdToken=createGetClassroomIdToken(()=>auth.currentUser);
 
 /* ---------------- Firebase Config (Web App config — không phải secret) ---------------- */
 const APP_ENV=await resolveCandidateEnvironment(window.location);
@@ -5513,7 +5517,7 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
   const classroomController=createClassroomLaunchController({
     windowOpenImpl:(url,target)=>window.open(url,target),
     fetchImpl:(url,init)=>fetch(url,init),
-    getIdToken:()=>auth.currentUser.getIdToken(),
+    getIdToken:getClassroomIdToken,
     requireKnownStatus:true,
   });
   track(()=>classroomController.dispose());
@@ -5734,6 +5738,10 @@ knowledgeRenderAi();
     const result=await pending;
     if(result.ok){ toast("Đã đóng trình chiếu.","ok"); } else { toast(result.message,"err"); }
     renderSecondBrainAction();
+    // GATE 5F.D2.POST-2: after a Close failure that wasn't itself an auth failure (e.g. the one
+    // allowed forced-refresh retry succeeded getting a token but the request still failed some
+    // other way), reconfirm the server-side state instead of trusting only the optimistic UI.
+    if(!result.ok&&result.recheckStatus&&classroomDashCurrent())refreshClassroomStatus();
   }
   async function aiGateway(path,body){
     if(!auth.currentUser)throw new Error('Phiên đăng nhập đã hết hạn.');

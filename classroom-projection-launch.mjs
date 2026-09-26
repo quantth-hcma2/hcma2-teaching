@@ -138,11 +138,45 @@ export function classroomErrorMessage(code) {
 }
 
 /**
+ * GATE 5F.D2.POST-2 — shared token-provider contract used by Start/Status/Close alike (through
+ * this module's existing `getIdToken` injection seam — see createClassroomLaunchController below).
+ * Root cause this closes: production evidence (Gate 5F.D2.POST-1) proved a real Close request
+ * reached the Classroom backend with an EMPTY Authorization value ("Bearer " with nothing after),
+ * rejected 401 UNAUTHENTICATED — and external Firebase JS SDK source (POST-1A) confirms
+ * getIdToken() can legitimately resolve to an empty string if the STS backend's response is ever
+ * malformed; the SDK does not itself guard against this. postJson() must never receive that value.
+ * `getCurrentUser()` is injected (not `firebase/auth` imported directly) so this stays fully
+ * unit-testable without a browser or real Firebase, matching this module's existing design
+ * principle (see the file header comment).
+ */
+export function createGetClassroomIdToken(getCurrentUser) {
+  return async function getClassroomIdToken({ forceRefresh = false } = {}) {
+    const user = getCurrentUser();
+    if (!user) {
+      throw Object.assign(new Error("no current user"), { classroomCode: "UNAUTHENTICATED" });
+    }
+    let token;
+    try {
+      token = await user.getIdToken(forceRefresh);
+    } catch {
+      throw Object.assign(new Error("getIdToken failed"), { classroomCode: "UNAUTHENTICATED" });
+    }
+    if (typeof token !== "string" || token.trim() === "") {
+      throw Object.assign(new Error("empty id token"), { classroomCode: "UNAUTHENTICATED" });
+    }
+    return token;
+  };
+}
+
+/**
  * GATE 5F.C — the launch/close state machine. Every side effect is injected:
  *   - windowOpenImpl(url, target): like window.open — MUST be called synchronously as the first
  *     statement of a start() invoked directly from a trusted click handler (see start() below).
  *   - fetchImpl(url, init): like fetch.
- *   - getIdToken(): () => Promise<string> — the current Firebase ID token.
+ *   - getIdToken({forceRefresh}={}): () => Promise<string> — the current Firebase ID token; see
+ *     createGetClassroomIdToken above for the shared, tested implementation this should be built
+ *     from. Never resolves to an empty/non-string value — throws classroomCode:"UNAUTHENTICATED"
+ *     instead (Gate 5F.D2.POST-2).
  *   - now(): () => number — for tests only; unused in real operation beyond being injectable.
  * projectionSessionId lives ONLY in this closure (module-level per controller instance) — never
  * written to browser storage of any kind, never a new backend lookup endpoint (Gate 5F.C Part J).
@@ -426,24 +460,53 @@ export function createClassroomLaunchController({
       const prev = { state, knowledge };
       epoch++; // any status response still in flight is now obsolete
       state = "closing";
+      const body = buildCloseRequestBody({ knowledgeSessionId: session.id });
+      const attemptClose = (forceRefresh) => getIdToken({ forceRefresh }).then((idToken) => postJson("/projections/close", idToken, body));
+
+      // GATE 5F.D2.POST-2 — exactly one forced-refresh retry, and only for UNAUTHENTICATED (a
+      // locally-detected empty/missing token, or the backend's own 401 — postJson already surfaces
+      // the backend's error.code as classroomCode, so both converge on the same branch here). Close
+      // is idempotent (a successful response, closed true OR false, means no active grant remains)
+      // and this failure mode is provably pre-write (the backend's authenticate() throws before
+      // closeProjection()'s own logic ever runs — Gate 5F.D2.POST-1A), so retrying is always safe.
+      // Never retried for 403/409/5xx/NETWORK/etc. — this is not a blanket retry-on-any-error policy.
+      let result;
+      let finalErr = null;
       try {
-        const idToken = await getIdToken();
-        const body = buildCloseRequestBody({ knowledgeSessionId: session.id });
-        const result = await postJson("/projections/close", idToken, body);
+        result = await attemptClose(false);
+      } catch (err) {
+        if (err.classroomCode === "UNAUTHENTICATED") {
+          try {
+            result = await attemptClose(true);
+          } catch (err2) {
+            finalErr = err2;
+          }
+        } else {
+          finalErr = err;
+        }
+      }
+
+      if (!finalErr) {
         // Close is idempotent: a successful response (closed true OR false) means no active grant
         // remains for this session — that confirmed result defines the state.
         projectionSessionId = null;
         state = "idle";
         knowledge = "inactive";
         return { ok: true, closed: !!result.closed };
-      } catch (err) {
-        // Close failing does not silently pretend the projection ended — the state before the
-        // attempt is restored, so the lecturer can see Close is still needed and retry.
-        state = prev.state === "active" ? "active" : "idle";
-        knowledge = prev.knowledge === "checking" ? "unavailable" : prev.knowledge;
-        const code = err.classroomCode || "NETWORK";
-        return { ok: false, code, message: classroomErrorMessage(code) };
       }
+
+      // Close failing (even after the one allowed retry) does not silently pretend the projection
+      // ended — the state before the attempt is restored, so the lecturer can see Close is still
+      // needed and retry.
+      state = prev.state === "active" ? "active" : "idle";
+      knowledge = prev.knowledge === "checking" ? "unavailable" : prev.knowledge;
+      const code = finalErr.classroomCode || "NETWORK";
+      const closeResult = { ok: false, code, message: classroomErrorMessage(code) };
+      // GATE 5F.D2.POST-2 — recheck Status only when the FINAL failure isn't itself an auth
+      // failure: re-checking with auth we've already proven broken (after the one allowed retry)
+      // would just fail the same way again, for no benefit.
+      if (code !== "UNAUTHENTICATED") closeResult.recheckStatus = true;
+      return closeResult;
     },
   };
 }

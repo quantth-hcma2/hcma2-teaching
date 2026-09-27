@@ -60,6 +60,14 @@ button, input, select, textarea{font-family:inherit; font-size:inherit;}
 /* Cards / layout */
 .card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:20px;}
 .card + .card{margin-top:14px;}
+.library-hub-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:18px;align-items:stretch;}
+.library-hub-card{width:100%;min-height:240px;padding:24px;text-align:left;border:1px solid var(--border);border-radius:16px;background:linear-gradient(145deg,#fff,#f3f9fa);box-shadow:var(--shadow);color:var(--text);display:flex;flex-direction:column;align-items:flex-start;cursor:pointer;transition:transform .15s,box-shadow .15s,border-color .15s;}
+.library-hub-card:not([disabled]):hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(15,23,42,.10);border-color:var(--accent);}
+.library-hub-card[disabled]{cursor:default;opacity:.82;}
+.library-hub-card .library-card-icon{font-size:34px;margin-bottom:14px;}
+.library-hub-card .library-card-title{font-size:20px;font-weight:800;line-height:1.25;margin-bottom:10px;}
+.library-hub-card .library-card-copy{color:var(--text-mute);margin-bottom:24px;}
+.library-hub-card .library-card-action{margin-top:auto;color:var(--brand);font-weight:800;letter-spacing:.2px;}
 .grid{display:grid; gap:14px;}
 .grid-2{grid-template-columns:repeat(2,1fr);}
 .grid-3{grid-template-columns:repeat(3,1fr);}
@@ -835,6 +843,7 @@ const STATE = {
   authReady: false,
   listeners: [],       // các onSnapshot đang mở, dọn dẹp khi đổi route
   teacherNav: "overview",
+  teacherLibraryScreen: null,
   teacherLibraryView: "questions",
   adminNav: "overview",
   wizard: null,        // trạng thái wizard tạo phiên
@@ -2829,26 +2838,36 @@ const TEACHER_MENU = [
 ];
 let teacherRouteGeneration=0;
 function navigateTeacherTopLevel(key){
+  const libraryTarget=arguments[1]||null;
   // Compatibility aliases: callers cũ vẫn có thể điều hướng bằng library/questionSets.
-  // Top-level thực tế luôn là Library Hub, với tab tương ứng được chọn rõ ràng.
+  // Click top-level Library mở Hub; deep caller truyền target để vào thẳng nội dung cũ.
   if(key==="questionSets"){
     key="library";
+    STATE.teacherLibraryScreen="interaction";
     STATE.teacherLibraryView="questionSets";
   }else if(key==="library"){
-    STATE.teacherLibraryView="questions";
+    STATE.teacherLibraryScreen=libraryTarget?"interaction":"hub";
+    if(libraryTarget) STATE.teacherLibraryView=libraryTarget;
   }
   STATE.teacherNav=key;
   clearListeners();
   if(window.location.hash){ window.location.hash=""; return; }
   teacherRoute();
 }
+function normalizeTeacherLibraryStateForShell(){
+  if(STATE.teacherNav==="questionSets"){
+    STATE.teacherNav="library";
+    STATE.teacherLibraryScreen="interaction";
+    STATE.teacherLibraryView="questionSets";
+  }else if(STATE.teacherNav==="library" && !STATE.teacherLibraryScreen){
+    STATE.teacherLibraryScreen="interaction";
+    STATE.teacherLibraryView="questions";
+  }
+}
 function renderTeacherShell(){
   clearListeners();
   if(STATE.teacherNav==="history") STATE.teacherNav="create";
-  if(STATE.teacherNav==="questionSets"){
-    STATE.teacherNav="library";
-    STATE.teacherLibraryView="questionSets";
-  }
+  normalizeTeacherLibraryStateForShell();
   appRoot().innerHTML = shellTemplate("Giảng viên", TEACHER_MENU, STATE.teacherNav, STATE.profile.displayName || STATE.profile.email);
   wireShellNav(TEACHER_MENU, navigateTeacherTopLevel);
   teacherRoute();
@@ -2867,8 +2886,15 @@ function teacherRoute(){
   if(key==="questionSets"){
     // Fail-safe cho state/caller cũ không đi qua navigateTeacherTopLevel().
     STATE.teacherNav="library";
+    STATE.teacherLibraryScreen="interaction";
     STATE.teacherLibraryView="questionSets";
     key="library";
+  }
+  if(key==="library" && !STATE.teacherLibraryScreen){
+    STATE.teacherLibraryScreen="interaction";
+    STATE.teacherLibraryView="questions";
+  }else if(key!=="library"){
+    STATE.teacherLibraryScreen=null;
   }
   if(key==="overview") return teacherOverview(c);
   if(key==="knowledge") return knowledgeModule(c, false);
@@ -2901,7 +2927,7 @@ async function teacherOverview(c){
   $("#btnNewSession").onclick = ()=>{ window.location.hash = "#/wizard"; };
   $("#btnQuickGroup").onclick=()=>{STATE.teacherNav="groups";teacherRoute();};
   $("#btnQuickQr").onclick=()=>{STATE.teacherNav="qrlinks";teacherRoute();};
-  $("#btnQuickLib").onclick=()=>navigateTeacherTopLevel("library");
+  $("#btnQuickLib").onclick=()=>navigateTeacherTopLevel("library","questions");
   $("#btnQuickSets").onclick=()=>navigateTeacherTopLevel("questionSets");
   try{
     const classesQ = query(collection(db,"classes"), where("ownerId","==",uid));
@@ -3007,20 +3033,40 @@ async function deleteClass(id){
 
 /* ---------- Library Hub ---------- */
 function teacherLibraryHub(c){
+  if(STATE.teacherLibraryScreen!=="interaction"){
+    STATE.teacherLibraryScreen="hub";
+    c.innerHTML=`<div class="section-title"><div><h2>THƯ VIỆN</h2><p class="mut">Kho tài nguyên phục vụ giảng dạy.</p></div></div>
+      <div class="library-hub-grid" aria-label="Các thư viện">
+        <button class="library-hub-card" id="openInteractionLibrary" type="button">
+          <span class="library-card-icon" aria-hidden="true">📚</span>
+          <span class="library-card-title">THƯ VIỆN<br>TẠO TƯƠNG TÁC</span>
+          <span class="library-card-copy">Câu hỏi, bộ câu hỏi và tài nguyên tương tác.</span>
+          <span class="library-card-action">MỞ THƯ VIỆN →</span>
+        </button>
+        <article class="library-hub-card" aria-labelledby="groupLibraryCardTitle">
+          <span class="library-card-icon" aria-hidden="true">👥</span>
+          <span class="library-card-title" id="groupLibraryCardTitle">THƯ VIỆN<br>THẢO LUẬN NHÓM</span>
+          <span class="library-card-copy">Tài nguyên phục vụ hoạt động nhóm.</span>
+          <span class="library-card-action mut">SẮP PHÁT TRIỂN</span>
+        </article>
+      </div>`;
+    $("#openInteractionLibrary").onclick=()=>{
+      STATE.teacherLibraryScreen="interaction";
+      STATE.teacherLibraryView="questions";
+      teacherLibraryHub(c);
+    };
+    return;
+  }
   const view=STATE.teacherLibraryView==="questionSets"?"questionSets":"questions";
   STATE.teacherLibraryView=view;
-  c.innerHTML=`<div class="section-title"><div><h2>THƯ VIỆN</h2><p class="mut">Kho nội dung dùng lại cho các hoạt động giảng dạy.</p></div></div>
-    <section class="card" aria-labelledby="interactionLibraryTitle">
+  c.innerHTML=`<button class="btn btn-ghost" id="backToLibraryHub" type="button">← THƯ VIỆN</button>
+    <section class="card mt-14" aria-labelledby="interactionLibraryTitle">
       <h3 id="interactionLibraryTitle" style="margin-top:0">THƯ VIỆN TẠO TƯƠNG TÁC</h3>
       <div class="flex gap-8 mt-8" role="tablist" aria-label="Thư viện tạo tương tác">
         <button class="btn ${view==="questions"?"":"btn-outline"}" id="libraryQuestionsTab" type="button" role="tab" aria-selected="${view==="questions"}" aria-controls="teacherLibraryView">CÂU HỎI</button>
         <button class="btn ${view==="questionSets"?"":"btn-outline"}" id="libraryQuestionSetsTab" type="button" role="tab" aria-selected="${view==="questionSets"}" aria-controls="teacherLibraryView">BỘ CÂU HỎI</button>
       </div>
       <div id="teacherLibraryView" role="tabpanel" class="mt-20"></div>
-    </section>
-    <section class="card mt-20" aria-labelledby="groupLibraryTitle">
-      <h3 id="groupLibraryTitle" style="margin-top:0">THƯ VIỆN THẢO LUẬN NHÓM</h3>
-      <div class="empty-state" style="padding:20px"><div class="ic">👥</div>Sắp phát triển</div>
     </section>`;
   const switchView=(nextView)=>{
     if(nextView===STATE.teacherLibraryView) return;
@@ -3030,6 +3076,11 @@ function teacherLibraryHub(c){
   };
   $("#libraryQuestionsTab").onclick=()=>switchView("questions");
   $("#libraryQuestionSetsTab").onclick=()=>switchView("questionSets");
+  $("#backToLibraryHub").onclick=()=>{
+    clearListeners();
+    STATE.teacherLibraryScreen="hub";
+    teacherLibraryHub(c);
+  };
   const viewHost=$("#teacherLibraryView");
   if(view==="questionSets") teacherQuestionSets(viewHost);
   else teacherLibrary(viewHost);

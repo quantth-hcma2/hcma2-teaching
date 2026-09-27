@@ -1,0 +1,14 @@
+import {spawnSync} from "node:child_process";
+import {readdirSync,existsSync} from "node:fs";
+import path from "node:path";
+import {fileURLToPath} from "node:url";
+const root=process.cwd(),here=path.dirname(fileURLToPath(import.meta.url));
+const jdkRoots=[path.join(root,".local-tools","jdk21"),path.join(root,"..","library-hub-card-port-04e7eb6",".local-tools","jdk21")];
+const jdkHome=jdkRoots.filter(existsSync).flatMap(dir=>readdirSync(dir,{withFileTypes:true}).filter(e=>e.isDirectory()).map(e=>path.join(dir,e.name))).find(p=>existsSync(path.join(p,"bin","java.exe")))||"C:\\Program Files\\Eclipse Adoptium\\jre-21.0.12.101-hotspot";
+const npxRoots=[path.join(root,".local-tools","npm-cache","_npx"),path.join(root,"..","library-hub-card-port-04e7eb6",".local-tools","npm-cache","_npx")];
+const firebaseCli=npxRoots.filter(existsSync).flatMap(dir=>readdirSync(dir,{withFileTypes:true}).filter(e=>e.isDirectory()).map(e=>path.join(dir,e.name,"node_modules","firebase-tools","lib","bin","firebase.js"))).find(existsSync)||path.join(root,"..","production-candidate-prep","node_modules","firebase-tools","lib","bin","firebase.js");
+if(!jdkHome||!firebaseCli)throw new Error("Local emulator runtime unavailable");
+const env={...process.env,JAVA_HOME:jdkHome,PATH:`${path.join(jdkHome,"bin")};${process.env.PATH||process.env.Path||""}`,XDG_CONFIG_HOME:path.join(root,".local-tools","config")};
+const command=`"${process.execPath}" --test --test-concurrency=1 "${path.join(here,"compatibility.test.mjs")}"`;
+const result=spawnSync(process.execPath,[firebaseCli,"emulators:exec","--config",path.join(here,"firebase.json"),"--project","demo-group-v2-runner","--only","firestore",command],{cwd:root,env,encoding:"utf8"});
+process.stdout.write(result.stdout||"");process.stderr.write(result.stderr||"");process.exit(result.status??1);

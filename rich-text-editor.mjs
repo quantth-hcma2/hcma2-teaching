@@ -719,6 +719,7 @@ export class RichTextEditor {
 
     const newBlock = this.doc.createElement("div");
     newBlock.setAttribute(DATA_BLOCK_ATTR, "paragraph");
+    newBlock.setAttribute("contenteditable", "true");
 
     // Move every sibling AFTER the split point into the new block.
     let moveStart;

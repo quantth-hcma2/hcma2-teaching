@@ -894,6 +894,9 @@ service cloud.firestore {
       return isAdmin() ||
         (isActiveTeacher() && activity.ownerId == request.auth.uid);
     }
+    function groupNotDeleted(activity) {
+      return !('deletedAt' in activity) || activity.deletedAt == null;
+    }
     function isGroupOwnerOrAdmin(activityId) {
       return groupActorCanManage(groupActivityData(activityId));
     }
@@ -988,6 +991,36 @@ service cloud.firestore {
       function isGroupContractRuntime() {
         return ('configRevision' in resource.data) && !isGroupConfigApply();
       }
+      function groupDeletionKeysChanged() {
+        return request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'deletedAt','deletedBy','statusBeforeDelete'
+        ]);
+      }
+      function validGroupSoftDelete() {
+        return groupNotDeleted(resource.data) &&
+          resource.data.status in ['draft','open','closed'] &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status','statusBeforeDelete','deletedAt','deletedBy','updatedAt'
+          ]) &&
+          request.resource.data.keys().hasAll(['statusBeforeDelete','deletedAt','deletedBy']) &&
+          request.resource.data.status == 'deleted' &&
+          request.resource.data.statusBeforeDelete == resource.data.status &&
+          request.resource.data.deletedAt == request.time &&
+          request.resource.data.deletedBy == request.auth.uid &&
+          request.resource.data.updatedAt == request.time;
+      }
+      function validGroupRestore() {
+        return !groupNotDeleted(resource.data) &&
+          resource.data.status == 'deleted' &&
+          resource.data.keys().hasAll(['statusBeforeDelete','deletedBy']) &&
+          resource.data.statusBeforeDelete in ['draft','open','closed'] &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status','statusBeforeDelete','deletedAt','deletedBy','updatedAt'
+          ]) &&
+          !request.resource.data.keys().hasAny(['statusBeforeDelete','deletedAt','deletedBy']) &&
+          request.resource.data.status == resource.data.statusBeforeDelete &&
+          request.resource.data.updatedAt == request.time;
+      }
       function validGroupActivationTarget(activityId) {
         let cfg = getAfter(/databases/$(database)/documents/groupActivities/$(activityId)/configVersions/$(request.resource.data.currentConfigId)).data;
         return cfg.revision == 0 && cfg.parentConfigId == null &&
@@ -1014,7 +1047,8 @@ service cloud.firestore {
       }
       // Chủ sở hữu/Admin được đọc; học viên đã đăng nhập ẩn danh có thể GET cấu hình
       // của phòng để biết số nhóm, nhiệm vụ, thời gian và trạng thái.
-      allow get: if isOwnerOrAdmin(resource.data.ownerId) || isSignedIn();
+      allow get: if isOwnerOrAdmin(resource.data.ownerId) ||
+        (isSignedIn() && groupNotDeleted(resource.data));
 
       // LIST toàn collection chỉ cho Admin, hoặc teacher với query ownerId == uid.
       allow list: if isAdmin() ||
@@ -1051,8 +1085,12 @@ service cloud.firestore {
       // (Gate 1A edit, open, close, restart/pause timer) ever changes on this document today.
       // GATE 1B.2B: legacy branch now additionally requires the activity to NOT already be
       // contract-activated — see the identical reasoning on the sessions family above.
-      allow update: if groupActorCanManage(resource.data) &&
+      allow update: if isSignedIn() && !isAnon() && groupActorCanManage(resource.data) &&
         request.resource.data.ownerId == resource.data.ownerId &&
+        (groupDeletionKeysChanged()
+          ? (validGroupSoftDelete() || validGroupRestore())
+          : groupNotDeleted(resource.data) &&
+            request.resource.data.status in ['draft','open','closed'] &&
         (
           (isGroupLegacyEdit() &&
             request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -1096,10 +1134,10 @@ service cloud.firestore {
             request.resource.data.diff(resource.data).affectedKeys().hasOnly([
               'status','startedAt','pausedRemainingSec','updatedAt'
             ]))
-        );
+        ));
 
-      allow delete: if isAdmin() ||
-        (isActiveTeacher() && resource.data.ownerId == request.auth.uid);
+      // Candidate 4A has no permanent-delete path. Keep the root and descendants recoverable.
+      allow delete: if false;
 
       // ---------------- GATE 1B.2B: CONTRACT VERSIONS (immutable) ----------------
       match /configVersions/{configId} {
@@ -1316,7 +1354,9 @@ service cloud.firestore {
 
     // Mã tham gia phòng nhóm. Học viên chỉ GET đúng mã QR; không được LIST.
     match /groupJoinCodes/{code} {
-      allow get: if isSignedIn();
+      allow get: if isSignedIn() &&
+        exists(/databases/$(database)/documents/groupActivities/$(resource.data.activityId)) &&
+        groupNotDeleted(groupActivityData(resource.data.activityId));
       allow list: if isAdmin();
 
       // Mapping thường được tạo cùng batch với activity mới nên dùng getAfter().
@@ -1325,8 +1365,8 @@ service cloud.firestore {
         groupActivityDataAfter(request.resource.data.activityId).ownerId == request.auth.uid;
 
       allow update: if false;
-      allow delete: if isAdmin() ||
-        (isActiveTeacher() && resource.data.ownerId == request.auth.uid);
+      // Keep the mapping reserved while its activity is soft-deleted.
+      allow delete: if false;
     }
 
 

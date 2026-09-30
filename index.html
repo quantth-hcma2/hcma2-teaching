@@ -604,7 +604,7 @@ import { uploadThenCreateGroupSubmission, reportGroupSubmissionImageLoadError } 
 // GATE 5F.C: Knowledge Co-creation dashboard launch/close control for the Classroom Second Brain
 // (V2) projection. Talks only to the accepted, frozen Gate 5C HTTP contract — never touches
 // Firestore Rules/indexes, the Public Second Brain V1 service, or any Classroom backend file.
-import { canLaunchClassroomProjection, createClassroomLaunchController, createGetClassroomIdToken, startStagingProjection, classroomErrorMessage as classroomStagingErrorMessage } from "./classroom-projection-launch.mjs";
+import { canLaunchClassroomProjection, createClassroomLaunchController, createGetClassroomIdToken, startStagingProjection, STAGING_API_ORIGIN, classroomErrorMessage as classroomStagingErrorMessage } from "./classroom-projection-launch.mjs";
 // GATE 5F.D2.POST-2: one shared token provider for the Classroom controller's Start/Status/Close
 // (see createGetClassroomIdToken in classroom-projection-launch.mjs). auth.currentUser is read
 // fresh on every call (matches the original closure's behavior), never captured/cached here.
@@ -5799,6 +5799,7 @@ knowledgeRenderAi();
       fetchImpl:(url,init)=>fetch(url,init),
       getIdToken:getClassroomIdToken,
       knowledgeSessionId:session.id,
+      origin:STAGING_API_ORIGIN,
     });
     if(btn)btn.disabled=false;
     if(!statusEl)return;

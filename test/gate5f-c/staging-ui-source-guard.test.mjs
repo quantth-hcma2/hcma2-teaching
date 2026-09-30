@@ -36,6 +36,14 @@ test("the staging control has its own button id, entirely separate from the norm
   assert.ok(indexHtml.includes("knClassroomStagingStatus"));
 });
 
+test("GATE P3S-FIX1 — index.html's staging call site passes the fixed STAGING_API_ORIGIN literal, never a dynamic/computed/DOM/storage-derived value", () => {
+  const idx = indexHtml.indexOf("await startStagingProjection({");
+  assert.ok(idx > -1);
+  const block = indexHtml.slice(idx, indexHtml.indexOf("});", idx) + 3);
+  assert.match(block, /origin:STAGING_API_ORIGIN,/, "the call site must pass the imported constant by name, not a string built from any runtime value");
+  assert.ok(!/origin:\s*(location|window|document|localStorage|sessionStorage)/.test(block), "must never derive origin from the page's own location/DOM/storage");
+});
+
 test("onClassroomStagingStartClick uses the existing authenticated getClassroomIdToken — never a separate/duplicated auth path", () => {
   const idx = indexHtml.indexOf("async function onClassroomStagingStartClick");
   assert.ok(idx > -1);

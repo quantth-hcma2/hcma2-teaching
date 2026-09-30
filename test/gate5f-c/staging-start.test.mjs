@@ -7,13 +7,24 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   CLASSROOM_ORIGIN,
+  STAGING_API_ORIGIN,
   buildStagingStartRequestBody,
   validateStagingBootstrapUrl,
   startStagingProjection,
+  createClassroomLaunchController,
   classroomErrorMessage,
 } from "../../classroom-projection-launch.mjs";
 
 const STAGING_ORIGIN = "https://staging---example-as.a.run.app";
+const SYNTHETIC_SESSION = { id: "synthetic-session-001", ownerId: "owner-uid-001", status: "open" };
+
+// -----------------------------------------------------------------------------------
+// GATE P3S-FIX1 — routing fix regression
+// -----------------------------------------------------------------------------------
+test("STAGING_API_ORIGIN is the fixed staging Cloud Run tag origin, distinct from CLASSROOM_ORIGIN", () => {
+  assert.equal(STAGING_API_ORIGIN, "https://staging---hcma2-classroom-projection-vtap4scxpq-as.a.run.app");
+  assert.notEqual(STAGING_API_ORIGIN, CLASSROOM_ORIGIN);
+});
 
 test("staging Start body is exactly {knowledgeSessionId, idempotencyKey} — same shape as normal Start", () => {
   const body = buildStagingStartRequestBody({ knowledgeSessionId: "abc123", idempotencyKey: "0123456789abcdef" });
@@ -66,11 +77,39 @@ test("startStagingProjection: popup window is opened before any async token/fetc
   assert.ok(calls.indexOf("windowOpen") < calls.indexOf("getIdToken"), "window.open must happen strictly before getIdToken/fetch");
 });
 
-test("startStagingProjection: posts to /projections/start-staging on the classroom origin, not any staging origin itself", async () => {
+test("GATE P3S-FIX1 — startStagingProjection: by default (no origin override), posts to /projections/start-staging on the FIXED STAGING origin, never CLASSROOM_ORIGIN", async () => {
   const { calls, windowOpenImpl, fetchImpl, getIdToken } = fakeStagingCall();
   await startStagingProjection({ windowOpenImpl, fetchImpl, getIdToken, knowledgeSessionId: "sess-1" });
   const fetchCall = calls.find((c) => c.startsWith("fetch:"));
-  assert.equal(fetchCall, `fetch:${CLASSROOM_ORIGIN}/projections/start-staging`);
+  assert.equal(fetchCall, `fetch:${STAGING_API_ORIGIN}/projections/start-staging`, "root cause of the P3 incident: this previously defaulted to CLASSROOM_ORIGIN, which routes to production 00006-kag — a revision that never has this route, so its CORS preflight 404s and the browser blocks the real POST before it's ever sent");
+  assert.notEqual(fetchCall, `fetch:${CLASSROOM_ORIGIN}/projections/start-staging`);
+});
+
+test("GATE P3S-FIX1 — normal Start (createClassroomLaunchController) is completely unaffected: still targets CLASSROOM_ORIGIN, never STAGING_API_ORIGIN", async () => {
+  const calls = [];
+  const controller = createClassroomLaunchController({
+    windowOpenImpl: () => ({ location: { href: null }, close() {} }),
+    fetchImpl: async (url) => { calls.push(url); return { ok: true, json: async () => ({ bootstrapUrl: `${CLASSROOM_ORIGIN}/classroom/bootstrap?b=t`, projectionSessionId: "p1" }) }; },
+    getIdToken: async () => "t",
+  });
+  await controller.start(SYNTHETIC_SESSION);
+  assert.equal(calls[0], `${CLASSROOM_ORIGIN}/projections/start`);
+  assert.ok(!calls[0].includes("staging"), "normal Start must never target the staging origin");
+});
+
+test("GATE P3S-FIX1 — the staging destination is not client-controlled: it is a fixed literal constant, never derived from a returned bootstrapUrl, DOM value, or prior response", async () => {
+  // The server's own response (including any bootstrapUrl it returns) is read AFTER the
+  // /projections/start-staging request has already been sent — it is structurally impossible for
+  // server-returned data to have influenced which origin that request itself was sent to. This
+  // test proves the request origin is fixed regardless of what the eventual response contains.
+  const { calls, windowOpenImpl, getIdToken } = fakeStagingCall();
+  const attackerControlledFetch = async (url) => {
+    calls.push(`fetch:${url}`);
+    return { ok: true, json: async () => ({ bootstrapUrl: "https://attacker.example.com/classroom/bootstrap?b=x", projectionSessionId: "p1" }) };
+  };
+  await startStagingProjection({ windowOpenImpl, fetchImpl: attackerControlledFetch, getIdToken, knowledgeSessionId: "sess-1" });
+  const fetchCall = calls.find((c) => c.startsWith("fetch:"));
+  assert.equal(fetchCall, `fetch:${STAGING_API_ORIGIN}/projections/start-staging`, "the REQUEST origin must be the fixed constant regardless of anything in the eventual response");
 });
 
 test("startStagingProjection: navigates the opened window to the returned staging bootstrapUrl", async () => {

@@ -25,7 +25,26 @@
 
 // GATE 5F.B architecture decision #1 (frozen) — the one place this hostname is defined. Every
 // caller in this module builds URLs from this constant; nothing else in this file hardcodes it.
+// Normal Start/Status/Close (createClassroomLaunchController) always use this — untouched by
+// GATE P3S-FIX1 below.
 export const CLASSROOM_ORIGIN = "https://classroom.quantth.vn";
+
+// GATE P3S-FIX1 — the fixed, permanent Cloud Run tag origin for staged authenticated E2E (see the
+// P3S design's "fixed tag convention"). A hardcoded literal, exactly like CLASSROOM_ORIGIN above —
+// never derived from user input, a query string, the DOM, browser storage, a server response, or
+// any other runtime-controlled value. Used ONLY by startStagingProjection() below; normal
+// Start/Status/Close never read this constant and are completely unaffected by it.
+//
+// Root cause this fixes: startStagingProjection() previously defaulted its request origin to
+// CLASSROOM_ORIGIN, so POST /projections/start-staging was sent to https://classroom.quantth.vn —
+// which routes 100% of production traffic to hcma2-classroom-projection-00006-kag, an image built
+// before this route existed. That revision's CORS preflight for the unknown path fell through to a
+// bare 404 with no Access-Control-Allow-Origin header, so Chrome blocked the real POST before it
+// was ever sent (confirmed directly from Cloud Run request logs: OPTIONS .../start-staging → 404 on
+// 00006-kag, zero requests of any kind reaching 00011-voh). The admin-only staging Start call must
+// instead go directly to the tagged staging origin, which already has the route, the three staging
+// env vars, and the same fixed teachingOrigin CORS approval as every other revision.
+export const STAGING_API_ORIGIN = "https://staging---hcma2-classroom-projection-vtap4scxpq-as.a.run.app";
 
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_-]{16,128}$/; // exact Gate 5C contract (projections.mjs)
 
@@ -556,7 +575,7 @@ export function createClassroomLaunchController({
  * Deliberately does NOT log, store, or return the raw bootstrap token or the Firebase ID token —
  * only a non-sensitive { ok, projectionSessionId } or { ok:false, code, message }.
  */
-export function startStagingProjection({ windowOpenImpl, fetchImpl, getIdToken, knowledgeSessionId, randomUUID, origin = CLASSROOM_ORIGIN }) {
+export function startStagingProjection({ windowOpenImpl, fetchImpl, getIdToken, knowledgeSessionId, randomUUID, origin = STAGING_API_ORIGIN }) {
   // GATE P3S-I — mirrors the FIX1 ordering: window.open() is the first thing this function does,
   // with no preceding await, so it runs synchronously within the caller's trusted click-event call
   // stack regardless of state becoming an async function here.

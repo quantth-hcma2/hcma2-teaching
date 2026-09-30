@@ -604,7 +604,7 @@ import { uploadThenCreateGroupSubmission, reportGroupSubmissionImageLoadError } 
 // GATE 5F.C: Knowledge Co-creation dashboard launch/close control for the Classroom Second Brain
 // (V2) projection. Talks only to the accepted, frozen Gate 5C HTTP contract — never touches
 // Firestore Rules/indexes, the Public Second Brain V1 service, or any Classroom backend file.
-import { canLaunchClassroomProjection, createClassroomLaunchController, createGetClassroomIdToken } from "./classroom-projection-launch.mjs";
+import { canLaunchClassroomProjection, createClassroomLaunchController, createGetClassroomIdToken, startStagingProjection, classroomErrorMessage as classroomStagingErrorMessage } from "./classroom-projection-launch.mjs";
 // GATE 5F.D2.POST-2: one shared token provider for the Classroom controller's Start/Status/Close
 // (see createGetClassroomIdToken in classroom-projection-launch.mjs). auth.currentUser is read
 // fresh on every call (matches the original closure's behavior), never captured/cached here.
@@ -5626,7 +5626,7 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
       <div class="grid grid-2 mt-14"><div class="card"><h3>QR / liên kết công khai</h3><div class="flex gap-14" style="align-items:center;flex-wrap:wrap"><div class="pres-qr-wrap clickable" id="knQrWrap" role="button" tabindex="0" aria-label="Phóng to mã QR"><div id="knQr"></div><div class="pres-qr-hint">🔍 Nhấp để phóng to mã QR</div></div><div style="flex:1;min-width:220px"><input id="knUrl" value="${esc(url)}" readonly><div class="flex gap-8 mt-8"><button class="btn btn-sm" id="knCopy">SAO CHÉP</button><button class="btn btn-sm btn-outline" id="knSessionInfo">SỬA PHIÊN</button><button class="btn btn-sm ${session.status==='open'?'btn-danger':'btn-ok'}" id="knToggle">${session.status==='open'?'ĐÓNG PHIÊN':'MỞ LẠI'}</button></div></div></div></div>
       ${session.collectParticipantProfile===true?`<div class="card mt-14" id="knPfCard"><div class="section-title"><div><h3>👥 Người tham gia</h3><p class="mut">Thông tin cá nhân chỉ tải khi mở mục này — không cập nhật theo thời gian thực; bấm "Làm mới danh sách" để lấy dữ liệu mới nhất.</p></div><button class="btn btn-outline btn-sm" id="knPfExpand">⤢ MỞ RỘNG</button></div><div id="knPfWrap" class="kn-pf-compact"><div class="center-screen"><span class="spinner"></span></div></div></div>`:""}
       <div class="card"><h3>🤖 AI Analysis — Phase 2</h3><p class="mut">AI đọc bản sao theo lô; dữ liệu gốc không bị sửa hoặc ghi đè.</p><div class="flex gap-8" style="flex-wrap:wrap"><button class="btn" id="knAiRun">PHÂN TÍCH BẰNG AI</button><button class="btn btn-outline" id="knAiRetry" style="display:none">TIẾP TỤC / THỬ LẠI</button><button class="btn btn-outline" id="knAiJson" disabled>XUẤT AI JSON</button><button class="btn btn-outline" id="knAiCsv" disabled>XUẤT AI CSV</button></div><button class="btn btn-outline mt-8" id="knCsv">XUẤT CSV DỮ LIỆU GỐC</button><div id="knAiStatus" class="mt-14"><span class="mut small">Chưa có bản phân tích.</span></div></div></div>
-      ${canLaunchClassroomProjection({session,isAdminView,actorUid:STATE.user.uid})?`<div class="card second-brain-card mt-14" id="knSecondBrainCard"><div class="second-brain-head"><span class="second-brain-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 4.5a3 3 0 0 0-3 3v.3A3.2 3.2 0 0 0 4.5 10.8a3.2 3.2 0 0 0 1 5.4A3 3 0 0 0 8.5 20a2.7 2.7 0 0 0 2.5-1.6"/><path d="M15 4.5a3 3 0 0 1 3 3v.3a3.2 3.2 0 0 1 1.5 3 3.2 3.2 0 0 1-1 5.4A3 3 0 0 1 15.5 20a2.7 2.7 0 0 1-2.5-1.6"/><path d="M12 4.5v14"/><circle cx="7.2" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="16.8" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="14.5" r=".9" fill="currentColor" stroke="none"/><circle cx="16" cy="14.5" r=".9" fill="currentColor" stroke="none"/></svg></span><div><h3>SECOND BRAIN LIVE</h3><p>Trình chiếu không gian tri thức được hình thành theo thời gian thực</p></div></div><div id="knSecondBrainAction"></div></div>`:""}
+      ${canLaunchClassroomProjection({session,isAdminView,actorUid:STATE.user.uid})?`<div class="card second-brain-card mt-14" id="knSecondBrainCard"><div class="second-brain-head"><span class="second-brain-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 4.5a3 3 0 0 0-3 3v.3A3.2 3.2 0 0 0 4.5 10.8a3.2 3.2 0 0 0 1 5.4A3 3 0 0 0 8.5 20a2.7 2.7 0 0 0 2.5-1.6"/><path d="M15 4.5a3 3 0 0 1 3 3v.3a3.2 3.2 0 0 1 1.5 3 3.2 3.2 0 0 1-1 5.4A3 3 0 0 1 15.5 20a2.7 2.7 0 0 1-2.5-1.6"/><path d="M12 4.5v14"/><circle cx="7.2" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="16.8" cy="9" r=".9" fill="currentColor" stroke="none"/><circle cx="8" cy="14.5" r=".9" fill="currentColor" stroke="none"/><circle cx="16" cy="14.5" r=".9" fill="currentColor" stroke="none"/></svg></span><div><h3>SECOND BRAIN LIVE</h3><p>Trình chiếu không gian tri thức được hình thành theo thời gian thực</p></div></div><div id="knSecondBrainAction"></div>${isAdminView?`<div class="mt-8" id="knSecondBrainStaging"><button class="btn btn-sm btn-outline" id="knClassroomStagingStart" style="border-style:dashed" title="Chỉ dành cho Admin kiểm thử staged E2E trên phiên bản Cloud Run gắn tag riêng, không ảnh hưởng phiên chiếu thật">🧪 STAGING TEST (chỉ Admin)</button> <span class="small mut" id="knClassroomStagingStatus"></span></div>`:""}</div>`:""}
       <div id="knAiDashboard" class="mt-14"></div>
       <div class="card mt-14"><div class="section-title"><div><h3>Tình huống gần đây</h3><p class="mut">Chỉ tải tối đa ${recentLimit} bản ghi trên màn hình; CSV chỉ tải toàn bộ khi được yêu cầu.</p></div></div>
       <div class="grid grid-2"><input id="knSearch" placeholder="Tìm trong các bản ghi đang hiển thị…"><select id="knSeq"><option value="">Mọi thứ tự</option><option value="1">Tình huống 1</option><option value="2">Tình huống 2</option><option value="3">Tình huống 3</option><option value="more">Từ 4 trở đi</option></select></div><div id="knRecent" class="knowledge-list mt-14"></div><button class="btn btn-ghost btn-sm mt-14" id="knMore">TẢI THÊM 50</button></div>`;
@@ -5637,6 +5637,8 @@ async function knowledgeDashboard(c,sessionId,isAdminView){
     $("#knCopy").onclick=()=>navigator.clipboard.writeText(url).then(()=>toast("Đã sao chép liên kết.","ok")).catch(()=>toast("Hãy sao chép liên kết trong ô.","warn"));
     $("#knSessionInfo").onclick=()=>openSessionInfoEditor("knowledgeSessions",sessionId);
     $("#knToggle").onclick=async()=>{try{await updateDoc(sRef,{status:session.status==="open"?"closed":"open",updatedAt:serverTimestamp()});toast("Đã cập nhật trạng thái phiên.","ok");}catch(e){toast(mapError(e),"err");}};
+    // GATE P3S-I — admin-only, isolated from the normal Second Brain Start/Close flow entirely.
+    if($("#knClassroomStagingStart"))$("#knClassroomStagingStart").onclick=onClassroomStagingStartClick;
     // GATE 5F.C: re-render only the Second Brain action area (Start/Active+Close) — the card
     // itself was already re-rendered above from scratch on every session-doc snapshot, and this
     // keeps the controller's own state (starting/active/closing) reflected without needing a
@@ -5781,6 +5783,26 @@ knowledgeRenderAi();
     }
     toast("Đã mở Trình chiếu Second Brain.","ok");
     renderSecondBrainAction();
+  }
+  // GATE P3S-I — admin-only staging affordance, deliberately isolated from classroomController's
+  // own Start/Close state machine above: never reads or writes state/knowledge/projectionSessionId,
+  // never blocks or is blocked by the normal Start/Close button, never re-renders the normal action
+  // area. window.open() runs first inside startStagingProjection(), synchronously within this
+  // trusted click handler — same popup-safety ordering as normal Start. Never logs the bootstrap
+  // token or the Firebase ID token; the only UI feedback is the existing mapped Vietnamese message.
+  async function onClassroomStagingStartClick(){
+    const btn=$("#knClassroomStagingStart");const statusEl=$("#knClassroomStagingStatus");
+    if(btn)btn.disabled=true;
+    if(statusEl)statusEl.textContent="Đang mở…";
+    const result=await startStagingProjection({
+      windowOpenImpl:(url,target)=>window.open(url,target),
+      fetchImpl:(url,init)=>fetch(url,init),
+      getIdToken:getClassroomIdToken,
+      knowledgeSessionId:session.id,
+    });
+    if(btn)btn.disabled=false;
+    if(!statusEl)return;
+    statusEl.textContent=result.ok?"Đã mở tab staging.":(result.message||classroomStagingErrorMessage(result.code));
   }
   async function onClassroomCloseClick(){
     const btn=$("#knClassroomClose"); if(btn)btn.disabled=true;

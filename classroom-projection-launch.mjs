@@ -72,6 +72,13 @@ export function buildStatusRequestBody({ knowledgeSessionId }) {
   return { knowledgeSessionId };
 }
 
+// GATE P3S-I — exact staging-Start contract (server.mjs): body is {knowledgeSessionId,
+// idempotencyKey}, identical shape to normal Start — the server enforces admin-only + TEST-session
+// allowlist authorization, never this client. Verified against source, not guessed.
+export function buildStagingStartRequestBody({ knowledgeSessionId, idempotencyKey }) {
+  return { knowledgeSessionId, idempotencyKey };
+}
+
 export const STATUS_TIMEOUT_MS = 8000;
 
 /**
@@ -135,6 +142,28 @@ const DEFAULT_ERROR_MESSAGE = "Không thể thực hiện thao tác. Vui lòng t
 
 export function classroomErrorMessage(code) {
   return ERROR_MESSAGES[code] || DEFAULT_ERROR_MESSAGE;
+}
+
+// GATE P3S-I — shape-only check for the staging bootstrapUrl: https, exact
+// /classroom/bootstrap path, a present "b" token. Deliberately does NOT pin an exact origin the
+// way validateBootstrapUrl() does for normal Start: the staging origin is a server-side
+// (STAGING_BOOTSTRAP_ORIGIN) operational value, intentionally re-pointable release to release
+// without a Teaching redeploy (see the P3S design's fixed-Cloud-Run-tag recommendation) — Teaching
+// has no independent, hardcoded "correct" origin to compare against for this admin-only,
+// explicitly-invoked path. The real boundary against an open redirect is server-side: server.mjs
+// never accepts any client-supplied origin/URL for this endpoint, only its own startup-validated
+// STAGING_BOOTSTRAP_ORIGIN — verified directly in server.mjs, not assumed here.
+export function validateStagingBootstrapUrl(bootstrapUrl) {
+  let parsed;
+  try {
+    parsed = new URL(bootstrapUrl);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:") return false;
+  if (parsed.pathname !== "/classroom/bootstrap") return false;
+  if (!parsed.searchParams.get("b")) return false;
+  return true;
 }
 
 /**
@@ -509,4 +538,76 @@ export function createClassroomLaunchController({
       return closeResult;
     },
   };
+}
+
+/**
+ * GATE P3S-I — staging-only Start variant, entirely separate from createClassroomLaunchController's
+ * state machine: never touches state/knowledge/projectionSessionId/epoch, never shares a closure
+ * with a normal controller instance. Admin-only, TEST-session-only — both authoritatively enforced
+ * server-side (POST /projections/start-staging); this function assumes neither and simply surfaces
+ * whatever the server decides (a 403 here just means "not authorized for staging Start", mapped to
+ * the existing Vietnamese FORBIDDEN message like any other Start rejection).
+ *
+ * Same popup-safety ordering as normal Start (window.open() first, synchronously, before any
+ * await) and the same injected-effects philosophy as this whole module — every external effect
+ * (windowOpenImpl, fetchImpl, getIdToken, randomUUID) is a parameter, never imported directly, so
+ * this stays fully unit-testable without a browser or real Firebase.
+ *
+ * Deliberately does NOT log, store, or return the raw bootstrap token or the Firebase ID token —
+ * only a non-sensitive { ok, projectionSessionId } or { ok:false, code, message }.
+ */
+export function startStagingProjection({ windowOpenImpl, fetchImpl, getIdToken, knowledgeSessionId, randomUUID, origin = CLASSROOM_ORIGIN }) {
+  // GATE P3S-I — mirrors the FIX1 ordering: window.open() is the first thing this function does,
+  // with no preceding await, so it runs synchronously within the caller's trusted click-event call
+  // stack regardless of state becoming an async function here.
+  const win = windowOpenImpl("about:blank", "_blank");
+  if (!win) {
+    return Promise.resolve({ ok: false, code: "POPUP_BLOCKED", message: classroomErrorMessage("POPUP_BLOCKED"), popupBlocked: true });
+  }
+  return doStagingStart({ win, fetchImpl, getIdToken, knowledgeSessionId, randomUUID, origin });
+}
+
+async function doStagingStart({ win, fetchImpl, getIdToken, knowledgeSessionId, randomUUID, origin }) {
+  const closeQuietly = (w) => {
+    try {
+      w.close();
+    } catch {
+      // Best-effort — mirrors doStart()'s own closeQuietly().
+    }
+  };
+  try {
+    const idToken = await getIdToken();
+    const idempotencyKey = generateIdempotencyKey(randomUUID);
+    const body = buildStagingStartRequestBody({ knowledgeSessionId, idempotencyKey });
+    let res;
+    try {
+      res = await fetchImpl(`${origin}/projections/start-staging`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${idToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      throw Object.assign(new Error("network failure"), { classroomCode: "NETWORK" });
+    }
+    let json;
+    try {
+      json = await res.json();
+    } catch {
+      json = {};
+    }
+    if (!res.ok) {
+      throw Object.assign(new Error(json?.error?.message || `HTTP ${res.status}`), { classroomCode: json?.error?.code || "NETWORK" });
+    }
+    const { bootstrapUrl, projectionSessionId } = json;
+    if (!validateStagingBootstrapUrl(bootstrapUrl)) {
+      closeQuietly(win);
+      return { ok: false, code: "INVALID_BOOTSTRAP_URL", message: classroomErrorMessage("INVALID_BOOTSTRAP_URL") };
+    }
+    win.location.href = bootstrapUrl;
+    return { ok: true, projectionSessionId };
+  } catch (err) {
+    closeQuietly(win);
+    const code = err.classroomCode || "NETWORK";
+    return { ok: false, code, message: classroomErrorMessage(code) };
+  }
 }

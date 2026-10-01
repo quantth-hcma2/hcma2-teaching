@@ -553,7 +553,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import {
   getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, getDoc, getDocs,
-  query, where, orderBy, limit, onSnapshot, serverTimestamp, Timestamp, writeBatch, increment, deleteField,
+  query, where, orderBy, limit, onSnapshot, serverTimestamp, Timestamp, writeBatch, increment,
   getCountFromServer, collectionGroup, runTransaction, connectFirestoreEmulator
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 import {
@@ -2019,14 +2019,14 @@ async function groupModule(c,isAdminView){
   </div>
   <div class="card mt-14">
     <div class="flex-between"><h3 style="margin:0">${isAdminView?"Lịch sử toàn hệ thống":"Hoạt động của tôi"}</h3><span class="small mut" id="groupCountLabel"></span></div>
-    <div class="flex gap-8 mt-12"><button class="btn btn-sm" id="groupActiveBtn">ĐANG HOẠT ĐỘNG</button><button class="btn btn-sm btn-outline" id="groupDeletedBtn">ĐÃ XÓA</button></div>
     ${isAdminView?`<div class="grid grid-2 mt-12"><input id="groupSearch" placeholder="Tìm tên hoạt động, giảng viên, email, mã phòng…"><select id="groupSort"><option value="newest">Mới nhất trước</option><option value="oldest">Cũ nhất trước</option></select></div>`:""}
     <div id="groupHistory" class="table-wrap mt-12"><div class="mut">Đang tải…</div></div>
-    <button class="btn btn-sm btn-outline mt-12 hidden" id="groupMoreBtn">XEM THÊM</button>
   </div>`;
   if(!isAdminView) $("#groupNewBtn").onclick=()=>openGroupCreateForm(c);
 
-  let cache=[], ownerMap={}, mode="active", pageSize=100, activeUnsub=null;
+  const q = isAdminView ? query(collection(db,GROUP_COLLECTION)) :
+    query(collection(db,GROUP_COLLECTION),where("ownerId","==",STATE.user.uid));
+  let cache=[], ownerMap={};
   if(isAdminView){
     try{
       const us=await getDocs(collection(db,"users"));
@@ -2041,50 +2041,33 @@ async function groupModule(c,isAdminView){
       if($("#groupSort")?.value==="oldest") arr.sort((a,b)=>qrDateValue(a.createdAt)-qrDateValue(b.createdAt));
       else arr.sort((a,b)=>qrDateValue(b.createdAt)-qrDateValue(a.createdAt));
     }else arr.sort((a,b)=>qrDateValue(b.createdAt)-qrDateValue(a.createdAt));
-    $("#groupCountLabel").textContent=`${arr.length}/${cache.length} ${mode==="deleted"?"đã xóa":"hoạt động"}`;
-    $("#groupMoreBtn").classList.toggle("hidden",cache.length<pageSize);
-    if(!arr.length){$("#groupHistory").innerHTML=`<div class="empty-state"><div class="ic">👥</div>${mode==="deleted"?"Không có hoạt động nào chờ khôi phục.":"Chưa có hoạt động nhóm nào."}</div>`;return;}
+    $("#groupCountLabel").textContent=isAdminView?`${arr.length}/${cache.length} hoạt động`:`${arr.length} hoạt động`;
+    if(!arr.length){$("#groupHistory").innerHTML=`<div class="empty-state"><div class="ic">👥</div>Chưa có hoạt động nhóm nào.</div>`;return;}
     $("#groupHistory").innerHTML=`<table><thead><tr><th>Hoạt động</th>${isAdminView?"<th>Giảng viên</th>":""}<th>Lớp</th><th>Nhóm</th><th>Mã</th><th>Trạng thái</th><th>Ngày tạo</th><th></th></tr></thead><tbody>
       ${arr.map(x=>`<tr>
         <td><b>${esc(x.title||"—")}</b>${x.instructions?`<div class="small mut">${esc(x.instructions).slice(0,100)}</div>`:""}</td>
         ${isAdminView?`<td>${esc(ownerMap[x.ownerId]?.name||"—")}<div class="group-admin-owner">${esc(ownerMap[x.ownerId]?.email||"")}</div></td>`:""}
         <td>${esc(x.className||"—")}</td><td>${x.groupCount||0}</td><td><b>${esc(x.joinCode||"")}</b></td><td>${groupStatusBadge(x.status)}</td>
-        <td>${fmtDateShort(mode==="deleted"?x.deletedAt:x.createdAt)}</td>
-        <td><div class="flex gap-8" style="flex-wrap:wrap">${mode==="deleted"
-          ? `<button class="btn btn-sm btn-outline" data-group-restore="${x.id}" data-title="${esc(x.title||"")}">KHÔI PHỤC</button>`
-          : `<button class="btn btn-sm btn-outline" data-group-open="${x.id}">MỞ</button><button class="btn btn-sm btn-outline" data-group-info="${x.id}">SỬA PHIÊN</button>${!isAdminView?`<button class="btn btn-sm btn-outline" data-group-clone="${x.id}">NHÂN BẢN</button>`:""}<button class="btn btn-sm btn-danger" data-group-del="${x.id}" data-title="${esc(x.title||"")}">XÓA</button>`}</div></td>
+        <td>${fmtDateShort(x.createdAt)}</td>
+        <td><div class="flex gap-8" style="flex-wrap:wrap"><button class="btn btn-sm btn-outline" data-group-open="${x.id}">MỞ</button><button class="btn btn-sm btn-outline" data-group-info="${x.id}">SỬA PHIÊN</button>${!isAdminView?`<button class="btn btn-sm btn-outline" data-group-clone="${x.id}">NHÂN BẢN</button>`:""}
+        ${(isAdminView || x.ownerId===STATE.user.uid)?`<button class="btn btn-sm btn-danger" data-group-del="${x.id}" data-title="${esc(x.title||"")}">XÓA</button>`:""}</div></td>
       </tr>`).join("")}</tbody></table>`;
     $$("[data-group-info]").forEach(b=>b.onclick=()=>openSessionInfoEditor("groupActivities",b.dataset.groupInfo));
     $$("[data-group-open]").forEach(b=>b.onclick=()=>{window.location.hash="#/group/"+encodeURIComponent(b.dataset.groupOpen);});
     $$("[data-group-clone]").forEach(b=>b.onclick=()=>openGroupCloneForm(c,b.dataset.groupClone).catch(e=>toast(mapError(e),"err")));
     $$("[data-group-del]").forEach(b=>b.onclick=async()=>{
       const id=b.dataset.groupDel;
-      if(!confirm(`Đưa hoạt động nhóm “${b.dataset.title}” vào danh sách đã xóa? Toàn bộ ý kiến, ảnh, tệp và mã tham gia được giữ để khôi phục.`)) return;
-      try{await softDeleteGroupActivity(id);toast("Đã chuyển hoạt động vào danh sách đã xóa.","ok");}catch(e){toast(mapError(e),"err");}
-    });
-    $$("[data-group-restore]").forEach(b=>b.onclick=async()=>{
-      if(!confirm(`Khôi phục hoạt động nhóm “${b.dataset.title}” cùng nội dung và mã tham gia cũ?`)) return;
-      try{await restoreGroupActivity(b.dataset.groupRestore);toast("Đã khôi phục hoạt động nhóm.","ok");}catch(e){toast(mapError(e),"err");}
+      if(!confirm(`Xóa hoạt động nhóm “${b.dataset.title}”? Ý kiến, ảnh và tệp đã gửi cũng sẽ bị xóa.`)) return;
+      try{await deleteGroupActivityDeep(id);toast("Đã xóa hoạt động nhóm.","ok");}catch(e){toast(mapError(e),"err");}
     });
   };
   if(isAdminView){
     $("#groupSearch").addEventListener("input",render);
     $("#groupSort").addEventListener("change",render);
   }
-  function bindGroupList(){
-    activeUnsub?.();
-    const filters=isAdminView?[]:[where("ownerId","==",STATE.user.uid)];
-    const q=mode==="deleted"
-      ? query(collection(db,GROUP_COLLECTION),...filters,where("status","==","deleted"),orderBy("deletedAt","desc"),limit(pageSize))
-      : query(collection(db,GROUP_COLLECTION),...filters,where("status","in",["draft","open","closed"]),orderBy("createdAt","desc"),limit(pageSize));
-    activeUnsub=onSnapshot(q,snap=>{cache=snap.docs.map(d=>({id:d.id,...d.data()}));render();},
-      e=>{$("#groupHistory").innerHTML=errorBlock(e,()=>groupModule(c,isAdminView));});
-    track(activeUnsub);
-  }
-  $("#groupActiveBtn").onclick=()=>{mode="active";pageSize=100;cache=[];$("#groupActiveBtn").classList.remove("btn-outline");$("#groupDeletedBtn").classList.add("btn-outline");bindGroupList();};
-  $("#groupDeletedBtn").onclick=()=>{mode="deleted";pageSize=100;cache=[];$("#groupDeletedBtn").classList.remove("btn-outline");$("#groupActiveBtn").classList.add("btn-outline");bindGroupList();};
-  $("#groupMoreBtn").onclick=()=>{pageSize+=100;bindGroupList();};
-  bindGroupList();
+  const unsub=onSnapshot(q,snap=>{cache=snap.docs.map(d=>({id:d.id,...d.data()}));render();},
+    e=>{$("#groupHistory").innerHTML=errorBlock(e,()=>groupModule(c,isAdminView));});
+  track(unsub);
 }
 
 async function openGroupCreateForm(c,preset=null){
@@ -2189,21 +2172,19 @@ async function openGroupCreateForm(c,preset=null){
   };
 }
 
-async function softDeleteGroupActivity(id){
+async function deleteGroupActivityDeep(id){
   const aRef=doc(db,GROUP_COLLECTION,id); const s=await getDoc(aRef); if(!s.exists()) return;
   const a=s.data();
   if(!(STATE.profile.role==="admin" || a.ownerId===STATE.user.uid)) throw {code:"permission-denied"};
-  if(a.status==="deleted") return;
-  await updateDoc(aRef,{status:"deleted",statusBeforeDelete:a.status,
-    deletedAt:serverTimestamp(),deletedBy:STATE.user.uid,updatedAt:serverTimestamp()});
-}
-async function restoreGroupActivity(id){
-  const aRef=doc(db,GROUP_COLLECTION,id); const s=await getDoc(aRef); if(!s.exists()) throw {code:"not-found"};
-  const a=s.data();
-  if(!(STATE.profile.role==="admin" || a.ownerId===STATE.user.uid)) throw {code:"permission-denied"};
-  if(a.status!=="deleted" || !["draft","open","closed"].includes(a.statusBeforeDelete)) throw new Error("Hoạt động không ở trạng thái có thể khôi phục.");
-  await updateDoc(aRef,{status:a.statusBeforeDelete,statusBeforeDelete:deleteField(),
-    deletedAt:deleteField(),deletedBy:deleteField(),updatedAt:serverTimestamp()});
+  // GATE 2A-AUTH-I3-UI-FIX: "members" added — the deep-delete previously left orphaned
+  // groupActivities/{id}/members/{uid} docs behind after normal activity deletion. Same chunked
+  // batch-delete pattern as every other child collection here, no other change to this function.
+  for(const sub of ["topics","notes","photos","files","members"]){
+    const snap=await getDocs(collection(db,GROUP_COLLECTION,id,sub));
+    await deleteRefsInChunks(snap.docs.map(d=>d.ref));
+  }
+  if(a.joinCode) await deleteDoc(doc(db,GROUP_JOIN_COLLECTION,a.joinCode)).catch(()=>{});
+  await deleteDoc(aRef);
 }
 
 // GATE 2A-S: the only place a groupActivities file document is turned into anchor HTML. Every
@@ -2230,10 +2211,6 @@ async function groupLive(c,id,isAdminView){
   const a={id,...snap.data()};
   const canManage=isAdminView || a.ownerId===STATE.user.uid;
   if(!canManage){c.innerHTML=`<div class="empty-state"><div class="ic">🔒</div>Bạn không có quyền mở hoạt động này.</div>`;return;}
-  if(a.status==="deleted"){
-    c.innerHTML=`<div class="empty-state"><div class="ic">↩️</div>Hoạt động này đang ở danh sách đã xóa. Hãy khôi phục trước khi tiếp tục.</div>`;
-    return;
-  }
   // Gate 1B.1: fail closed on contract sessions — no versioned-group writer/renderer exists yet.
   if(isContractSession(a)){c.innerHTML=`<div class="empty-state"><div class="ic">⚠️</div>Phiên này dùng cấu hình phiên bản mới; giao diện hiện tại chưa hỗ trợ.</div>`;return;}
   const join=groupJoinLink(a.joinCode);
@@ -2394,7 +2371,7 @@ async function groupLive(c,id,isAdminView){
   };
   document.addEventListener("keydown",groupKeyHandler); track(()=>document.removeEventListener("keydown",groupKeyHandler));
 
-  track(onSnapshot(doc(db,GROUP_COLLECTION,id),s=>{if(!s.exists())return;current={id,...s.data()};if(current.status==="deleted"){clearListeners();c.innerHTML=`<div class="empty-state"><div class="ic">↩️</div>Hoạt động này đã được chuyển vào danh sách đã xóa.</div>`;return;}$("#gLiveTitle").textContent=current.title||"";renderCommonInstructions();$("#gInstructionsCard").classList.toggle("hidden",!(current.instructions||richTextToPlainText(current.instructionsRich)));$("#gStatusBadge").innerHTML=groupStatusBadge(current.status);renderPanels();updateTimer();}));
+  track(onSnapshot(doc(db,GROUP_COLLECTION,id),s=>{if(!s.exists())return;current={id,...s.data()};$("#gLiveTitle").textContent=current.title||"";renderCommonInstructions();$("#gInstructionsCard").classList.toggle("hidden",!(current.instructions||richTextToPlainText(current.instructionsRich)));$("#gStatusBadge").innerHTML=groupStatusBadge(current.status);renderPanels();updateTimer();}));
   track(onSnapshot(collection(db,GROUP_COLLECTION,id,"topics"),s=>{topics={};s.forEach(d=>topics[d.id]=d.data());renderTopics();renderPanels();}));
   track(onSnapshot(collection(db,GROUP_COLLECTION,id,"notes"),s=>{notes=s.docs.map(d=>({id:d.id,...d.data()}));renderPanels();}));
   track(onSnapshot(collection(db,GROUP_COLLECTION,id,"photos"),s=>{photos=s.docs.map(d=>({id:d.id,...d.data()}));renderPanels();}));

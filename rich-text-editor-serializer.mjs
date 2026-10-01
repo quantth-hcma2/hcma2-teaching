@@ -18,7 +18,9 @@
 //                                                                   surface — a pure DOM container,
 //                                                                   never persisted, never itself a
 //                                                                   block in the contract.
-//     <block-container data-rt-block="paragraph">        one per RichText paragraph block
+//     <block-container data-rt-block="paragraph" data-rt-align="..."?>   one per RichText
+//                                                          paragraph block; data-rt-align is
+//                                                          present only for a non-"left" alignment
 //       <br>                                              ONLY when the paragraph has zero runs
 //       -- or --
 //       <span data-rt-run="1" data-rt-bold="1"? data-rt-italic="1"? data-rt-font="..."?
@@ -41,7 +43,7 @@
 // else, so a hostile/oversized result still fails closed rather than being silently accepted.
 
 import { validateRichText, normalizeRichText, DEFAULT_SIZE, MAX_RUN_TEXT_LENGTH } from "./rich-text-contract.mjs";
-import { FONT_CSS_MAP, SIZE_CSS_MAP, COLOR_CSS_MAP } from "./rich-text-renderer.mjs";
+import { FONT_CSS_MAP, SIZE_CSS_MAP, COLOR_CSS_MAP, ALIGN_CSS_MAP } from "./rich-text-renderer.mjs";
 
 export const DATA_BLOCK_ATTR = "data-rt-block";
 export const DATA_RUN_ATTR = "data-rt-run";
@@ -50,6 +52,10 @@ export const DATA_ITALIC_ATTR = "data-rt-italic";
 export const DATA_FONT_ATTR = "data-rt-font";
 export const DATA_SIZE_ATTR = "data-rt-size";
 export const DATA_COLOR_ATTR = "data-rt-color";
+// Paragraph-level (block, not run) alignment. "left" is never represented by this attribute at
+// all — its absence IS "left", matching every other formatting field's "absent means default"
+// convention (see createBlockElement/setBlockAlign below).
+export const DATA_ALIGN_ATTR = "data-rt-align";
 export const DATA_IMAGE_PATH_ATTR = "data-rt-image-path";
 export const DATA_IMAGE_MIME_ATTR = "data-rt-image-mime";
 export const DATA_IMAGE_SIZE_ATTR = "data-rt-image-size";
@@ -92,10 +98,37 @@ export function createRunSpan(doc, run) {
   return span;
 }
 
-function createBlockElement(doc) {
+function createBlockElement(doc, align) {
   const el = doc.createElement("div");
   el.setAttribute(DATA_BLOCK_ATTR, "paragraph");
+  if (align) setBlockAlign(el, align);
   return el;
+}
+
+// Pure DOM surgery (no Range/Selection knowledge) applying or clearing a paragraph block's
+// alignment: sets both the semantic data-rt-align attribute (the only thing ever read back by
+// readRecognizedBlock below) and the matching textAlign CSS so the editing surface visually
+// matches rich-text-renderer.mjs's own read-only rendering. "left" (or anything falsy, or a value
+// outside ALIGN_CSS_MAP) clears both — mirroring createRunSpan's own attribute+style pairing for
+// bold/italic/font/size/color, and never writing a stored token directly into a CSS value (only
+// ever through the fixed ALIGN_CSS_MAP lookup).
+export function setBlockAlign(blockEl, align) {
+  if (align && align !== "left" && Object.prototype.hasOwnProperty.call(ALIGN_CSS_MAP, align)) {
+    blockEl.setAttribute(DATA_ALIGN_ATTR, align);
+    blockEl.style.textAlign = ALIGN_CSS_MAP[align] || "";
+  } else {
+    blockEl.removeAttribute(DATA_ALIGN_ATTR);
+    blockEl.style.textAlign = "";
+  }
+}
+
+// The block's CURRENT EFFECTIVE alignment for editor-side reflection (toolbar state, Enter
+// inheritance) — "left" when the attribute is absent, matching the default. Unlike
+// readRecognizedBlock's export-time read (below), this is never written into a persisted block
+// object, so defaulting to "left" here is purely a display/UX convenience, not a contract concern.
+export function effectiveBlockAlign(blockEl) {
+  const align = blockEl.getAttribute(DATA_ALIGN_ATTR);
+  return align === null ? "left" : align;
 }
 
 // Editability now lives on the shared region, not on each individual paragraph — this is what lets
@@ -147,7 +180,7 @@ export function richTextToDom(doc, richValue) {
       frag.appendChild(el); continue;
     }
     if (!openRegion) openRegion = createTextRegionElement(doc);
-    const blockEl = createBlockElement(doc);
+    const blockEl = createBlockElement(doc, block.align);
     appendRunsOrPlaceholder(doc, blockEl, block.runs);
     openRegion.appendChild(blockEl);
   }
@@ -284,7 +317,17 @@ function readRunsFromBlock(blockEl) {
 function readRecognizedBlock(node) {
   if (!isElement(node) || node.tagName !== "DIV") return null;
   const kind = node.getAttribute(DATA_BLOCK_ATTR);
-  if (kind === "paragraph") return { type: "paragraph", runs: readRunsFromBlock(node) };
+  if (kind === "paragraph") {
+    const block = { type: "paragraph", runs: readRunsFromBlock(node) };
+    // Only added when the attribute is actually present — an ordinary (never-aligned) paragraph
+    // round-trips with no `align` key at all, exactly like today's documents. Read as-is,
+    // unvalidated: same documented policy as readRunFromMarkedSpan's `size` attribute above — a
+    // tampered/invalid value is passed through for validateRichTextV1's ALIGN_TOKENS allowlist to
+    // reject fail-closed downstream, not silently repaired here.
+    const align = node.getAttribute(DATA_ALIGN_ATTR);
+    if (align !== null) block.align = align;
+    return block;
+  }
   if (kind === "image") {
     return { type:"image", storagePath:node.getAttribute(DATA_IMAGE_PATH_ATTR)||"", alt:node.querySelector('[data-rt-image-alt="1"]')?.value||"", mimeType:node.getAttribute(DATA_IMAGE_MIME_ATTR)||"", size:Number(node.getAttribute(DATA_IMAGE_SIZE_ATTR)||0) };
   }
@@ -451,6 +494,19 @@ export function computeFormatState(runLikeObjects) {
   }
   result.mixed = mixed;
   return result;
+}
+
+// Block-level analog of computeFormatState above, for paragraph alignment: given the effective
+// alignment ("left"/"center"/"right"/"justify") of every paragraph touched by the current
+// selection, returns the uniform value, or null + mixed:true when they disagree, for toolbar
+// reflection (Word-like: applying one alignment to a mixed selection makes all of them that value).
+// An empty array (nothing selected / no content) reports "left", matching computeFormatState's own
+// all-default behavior.
+export function computeAlignState(alignValues) {
+  if (alignValues.length === 0) return { align: "left", mixed: false };
+  const first = alignValues[0];
+  const uniform = alignValues.every((a) => a === first);
+  return { align: uniform ? first : null, mixed: !uniform };
 }
 
 // ---------------- Pure paste-text normalization (no DOM at all). ----------------

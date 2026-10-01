@@ -6,7 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   RICH_TEXT_VERSION, MAX_BLOCKS, MAX_RUNS_PER_BLOCK, MAX_RUN_TEXT_LENGTH, MAX_TOTAL_TEXT_LENGTH,
-  MAX_SERIALIZED_BYTE_LENGTH, FONT_TOKENS, SIZE_TOKENS, COLOR_TOKENS, DEFAULT_SIZE,
+  MAX_SERIALIZED_BYTE_LENGTH, FONT_TOKENS, SIZE_TOKENS, COLOR_TOKENS, ALIGN_TOKENS, DEFAULT_SIZE,
   validateRichTextV1, normalizeRichTextV1, richTextToPlainText,
   codePointLength, truncateToCodePoints
 } from "../../rich-text-contract.mjs";
@@ -385,4 +385,53 @@ test("F: mixed Vietnamese text + emoji truncates safely at a code-point boundary
   const truncated = truncateToCodePoints(text, 10);
   assert.equal(codePointLength(truncated), 10);
   assert.equal(truncated, Array.from(text).slice(0, 10).join(""));
+});
+
+// =====================================================================================
+// G. PARAGRAPH ALIGNMENT (GATE RICHTEXT-ALIGN)
+// =====================================================================================
+
+test("G: each of the four alignment tokens is a valid paragraph block", () => {
+  for (const align of ALIGN_TOKENS) {
+    assert.equal(validateRichTextV1(doc({ type: "paragraph", align, runs: [run("x")] })), true, `align=${align} must be valid`);
+  }
+});
+
+test("G: a paragraph with no align field is valid (existing documents, unchanged)", () => {
+  assert.equal(validateRichTextV1(doc(paragraph(run("Nội dung cũ")))), true);
+  assert.equal(Object.keys(paragraph(run("x"))).includes("align"), false);
+});
+
+test("G: an invalid align value fails closed, same as any other out-of-allowlist token", () => {
+  assert.equal(validateRichTextV1(doc({ type: "paragraph", align: "justify-all", runs: [] })), false);
+  assert.equal(validateRichTextV1(doc({ type: "paragraph", align: "center; }</style>", runs: [] })), false);
+  assert.equal(validateRichTextV1(doc({ type: "paragraph", align: 1, runs: [] })), false, "non-string align must be rejected");
+  assert.equal(validateRichTextV1(doc({ type: "paragraph", align: null, runs: [] })), false, "null align must be rejected, not treated as absent");
+});
+
+test("G: align is a block-level field, not a run field — an unknown block key is still rejected", () => {
+  assert.equal(validateRichTextV1(doc({ type: "paragraph", align: "center", bogus: true, runs: [] })), false);
+  assert.equal(validateRichTextV1(doc(paragraph(run("x", { align: "center" })))), false, "align on a RUN (not a block) must be rejected — unknown run key");
+});
+
+test("G: normalization omits align when \"left\" or absent, keeps it otherwise, and does not itself enforce the allowlist", () => {
+  assert.deepEqual(normalizeRichTextV1(doc({ type: "paragraph", align: "left", runs: [run("x")] })),
+    { version: RICH_TEXT_VERSION, blocks: [{ type: "paragraph", runs: [{ text: "x" }] }] });
+  assert.deepEqual(normalizeRichTextV1(doc(paragraph(run("x")))),
+    { version: RICH_TEXT_VERSION, blocks: [{ type: "paragraph", runs: [{ text: "x" }] }] });
+  assert.deepEqual(normalizeRichTextV1(doc({ type: "paragraph", align: "center", runs: [run("x")] })),
+    { version: RICH_TEXT_VERSION, blocks: [{ type: "paragraph", align: "center", runs: [{ text: "x" }] }] });
+  // Pass-through of an invalid value — isValidBlock's job (tested above) to reject it downstream.
+  const normalizedInvalid = normalizeRichTextV1(doc({ type: "paragraph", align: "not-a-real-token", runs: [] }));
+  assert.equal(normalizedInvalid.blocks[0].align, "not-a-real-token");
+  assert.equal(validateRichTextV1(normalizedInvalid), false);
+});
+
+test("G: round-trip through normalize -> validate is stable for every alignment value", () => {
+  for (const align of ALIGN_TOKENS) {
+    const input = { type: "paragraph", align, runs: [run("Đoạn văn", { bold: true })] };
+    const normalized = normalizeRichTextV1(doc(input));
+    assert.equal(validateRichTextV1(normalized), true);
+    assert.equal(normalized.blocks[0].align, align === "left" ? undefined : align);
+  }
 });

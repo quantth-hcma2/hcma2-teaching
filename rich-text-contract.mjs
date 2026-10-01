@@ -12,12 +12,14 @@
 //   {
 //     version: 1,
 //     blocks: [
-//       { type: "paragraph", runs: [ { text: "...", bold, italic, font, size, color } ] }
+//       { type: "paragraph", align?, runs: [ { text: "...", bold, italic, font, size, color } ] }
 //     ]
 //   }
 //
-// V1 supports ONLY: paragraph blocks, text runs, bold, italic, a font token, a size token, and a
-// color token. No links, no HTML, no images, no tables, no lists, no arbitrary CSS/attributes.
+// V1 supports ONLY: paragraph blocks, text runs, bold, italic, a font token, a size token, a color
+// token, and a paragraph-level alignment token (`align`, optional — "left" is the implicit default
+// and is never itself stored). No links, no HTML, no images, no tables, no lists, no arbitrary
+// CSS/attributes.
 
 export const RICH_TEXT_VERSION = 1;
 export const RICH_TEXT_VERSION_V2 = 2;
@@ -67,6 +69,12 @@ export const ALLOWED_BLOCK_TYPES = Object.freeze(["paragraph"]);
 export const FONT_TOKENS = Object.freeze(["default", "arial", "times", "roboto"]);
 export const SIZE_TOKENS = Object.freeze([14, 16, 18, 20, 24]);
 export const COLOR_TOKENS = Object.freeze(["default", "red", "blue", "green", "orange", "purple"]);
+// GATE RICHTEXT-ALIGN: paragraph-level (never run-level) alignment — a structured semantic token,
+// exactly like FONT_TOKENS/COLOR_TOKENS above, never an arbitrary CSS string. "left" is the
+// implicit default and is never itself persisted (see normalizeBlock below) — an absent `align`
+// field on an existing (pre-this-feature) paragraph means left, so no production document needs
+// migration.
+export const ALIGN_TOKENS = Object.freeze(["left", "center", "right", "justify"]);
 export const MAX_TABLE_ROWS = 10;
 export const MAX_TABLE_COLUMNS = 8;
 export const MAX_TABLE_CELL_LENGTH = 1000;
@@ -75,13 +83,14 @@ export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const IMAGE_MIME_TYPES = Object.freeze(["image/jpeg", "image/png", "image/webp"]);
 
 const TOP_LEVEL_KEYS = new Set(["version", "blocks"]);
-const BLOCK_KEYS = new Set(["type", "runs"]);
+const BLOCK_KEYS = new Set(["type", "runs", "align"]);
 const IMAGE_BLOCK_KEYS = new Set(["type", "storagePath", "alt", "mimeType", "size"]);
 const TABLE_BLOCK_KEYS = new Set(["type", "rows"]);
 const RUN_KEYS = new Set(["text", "bold", "italic", "font", "size", "color"]);
 const FONT_TOKEN_SET = new Set(FONT_TOKENS);
 const SIZE_TOKEN_SET = new Set(SIZE_TOKENS);
 const COLOR_TOKEN_SET = new Set(COLOR_TOKENS);
+const ALIGN_TOKEN_SET = new Set(ALIGN_TOKENS);
 
 function isPlainObject(v) {
   return v !== null && typeof v === "object" && !Array.isArray(v);
@@ -136,6 +145,7 @@ function isValidBlock(block) {
   if (block.type !== "paragraph") return false;
   if (!Array.isArray(block.runs)) return false;
   if (block.runs.length > MAX_RUNS_PER_BLOCK) return false;
+  if ("align" in block && !ALIGN_TOKEN_SET.has(block.align)) return false;
   return block.runs.every(isValidRun);
 }
 
@@ -248,6 +258,7 @@ export function validateRichText(value, imageContext) {
 //   - omits `font` when "default"
 //   - omits `size` when the default size (16)
 //   - omits `color` when "default"
+//   - omits a paragraph block's `align` when "left"
 // This keeps the canonical stored form minimal (smaller payload) and matches the schema's own
 // "absent means default" semantics. Throws (rather than silently coercing) on structurally
 // unsound input — that indicates a bug in the calling editor code, not user-supplied data to be
@@ -278,7 +289,14 @@ function normalizeBlock(block) {
   if (!isPlainObject(block)) throw new TypeError("normalizeRichTextV1: block must be an object");
   if (block.type !== "paragraph") throw new TypeError("normalizeRichTextV1: unsupported block type");
   if (!Array.isArray(block.runs)) throw new TypeError("normalizeRichTextV1: block.runs must be an array");
-  return { type: "paragraph", runs: block.runs.map(normalizeRun) };
+  const out = { type: "paragraph", runs: block.runs.map(normalizeRun) };
+  // "left" (and any other non-string/absent value) stays unrepresented — matching bold/italic/
+  // font/size/color's own "absent means default" canonical form. Does NOT enforce the ALIGN_TOKENS
+  // allowlist itself (same split as the rest of this function — isValidBlock's job, called
+  // separately): an invalid string here is passed through unchanged for validateRichTextV1 to
+  // reject fail-closed downstream, exactly like `color`/`font` above.
+  if (typeof block.align === "string" && block.align !== "left") out.align = block.align;
+  return out;
 }
 
 function normalizeRun(run) {

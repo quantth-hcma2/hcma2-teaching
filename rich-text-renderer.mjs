@@ -48,6 +48,15 @@ export const COLOR_CSS_MAP = Object.freeze({
   orange: "#c2410c",
   purple: "#7e22ce"
 });
+// Paragraph-level alignment — same fixed-map-only policy as the maps above: a stored `align` token
+// is only ever looked up here, never interpolated into CSS directly. "left" maps to null (the
+// browser/CSS default; no inline style written), matching FONT_CSS_MAP's own "default: null".
+export const ALIGN_CSS_MAP = Object.freeze({
+  left: null,
+  center: "center",
+  right: "right",
+  justify: "justify"
+});
 
 function resolveDoc(explicitDoc) {
   if (explicitDoc) return explicitDoc;
@@ -145,6 +154,9 @@ export function renderRichText(container, richValue, legacyPlainText, doc, optio
     const p = d.createElement("p");
     p.style.whiteSpace = "pre-wrap";
     p.style.margin = "0 0 0.5em 0";
+    if (block.align && Object.prototype.hasOwnProperty.call(ALIGN_CSS_MAP, block.align) && ALIGN_CSS_MAP[block.align]) {
+      p.style.textAlign = ALIGN_CSS_MAP[block.align];
+    }
     for (const run of block.runs) {
       p.appendChild(renderRun(run, d));
     }

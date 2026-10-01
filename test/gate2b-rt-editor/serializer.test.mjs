@@ -10,6 +10,7 @@ import {
   DATA_BLOCK_ATTR,
   DATA_RUN_ATTR,
   DATA_TEXT_REGION_ATTR,
+  DATA_ALIGN_ATTR,
   createRunSpan,
   richTextToDom,
   legacyPlainTextToDom,
@@ -17,12 +18,15 @@ import {
   emptyRichTextDocument,
   serializeToRichText,
   splitRunAtOffset,
+  setBlockAlign,
+  effectiveBlockAlign,
+  computeAlignState,
   computeFormatState,
   normalizePastedPlainText,
   pastedTextToParagraphLines,
   PASTE_TAB_REPLACEMENT
 } from "../../rich-text-editor-serializer.mjs";
-import { validateRichTextV1, MAX_BLOCKS, MAX_RUNS_PER_BLOCK, MAX_RUN_TEXT_LENGTH, MAX_TOTAL_TEXT_LENGTH } from "../../rich-text-contract.mjs";
+import { validateRichTextV1, MAX_BLOCKS, MAX_RUNS_PER_BLOCK, MAX_RUN_TEXT_LENGTH, MAX_TOTAL_TEXT_LENGTH, ALIGN_TOKENS } from "../../rich-text-contract.mjs";
 
 function mount(doc, frag) {
   const root = doc.createElement("div");
@@ -531,4 +535,91 @@ test("40: the interactive editor module imports validateRichTextV1/richTextToPla
   assert.match(src, /serializeToRichText/);
   assert.doesNotMatch(src, /function\s+validateRichTextV1/, "must not define its own validator");
   assert.doesNotMatch(src, /\.innerHTML\s*=/, "must never assign innerHTML anywhere");
+});
+
+// ===================================================================================
+// 41+: PARAGRAPH ALIGNMENT (GATE RICHTEXT-ALIGN) — DOM write/read round-trip
+// ===================================================================================
+
+test("41: richTextToDom writes data-rt-align only for a non-left alignment, never for left/absent", () => {
+  const doc = new FakeDocument();
+  const value = { version: 1, blocks: [
+    { type: "paragraph", runs: [{ text: "a" }] },
+    { type: "paragraph", align: "left", runs: [{ text: "b" }] },
+    { type: "paragraph", align: "center", runs: [{ text: "c" }] },
+    { type: "paragraph", align: "right", runs: [{ text: "d" }] },
+    { type: "paragraph", align: "justify", runs: [{ text: "e" }] }
+  ] };
+  const root = mount(doc, richTextToDom(doc, value));
+  const region = root.firstChild;
+  const blocks = Array.from(region.childNodes);
+  assert.equal(blocks.length, 5);
+  assert.equal(blocks[0].getAttribute(DATA_ALIGN_ATTR), null);
+  assert.equal(blocks[1].getAttribute(DATA_ALIGN_ATTR), null, "explicit align:\"left\" must not be written to the DOM either");
+  assert.equal(blocks[2].getAttribute(DATA_ALIGN_ATTR), "center");
+  assert.equal(blocks[3].getAttribute(DATA_ALIGN_ATTR), "right");
+  assert.equal(blocks[4].getAttribute(DATA_ALIGN_ATTR), "justify");
+  assert.equal(blocks[2].style.textAlign, "center");
+  assert.equal(blocks[3].style.textAlign, "right");
+  assert.equal(blocks[4].style.textAlign, "justify");
+  assert.ok(!blocks[0].style.textAlign, "left/absent must not carry an inline textAlign style either");
+});
+
+test("42: serializeToRichText reads data-rt-align back, omitting the key for an ordinary (left) paragraph", () => {
+  const doc = new FakeDocument();
+  const value = { version: 1, blocks: [
+    { type: "paragraph", runs: [{ text: "a" }] },
+    { type: "paragraph", align: "center", runs: [{ text: "b" }] }
+  ] };
+  const root = mount(doc, richTextToDom(doc, value));
+  const result = serializeToRichText(root);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value, value);
+  assert.equal(Object.prototype.hasOwnProperty.call(result.value.blocks[0], "align"), false);
+});
+
+test("43: full richTextToDom -> serializeToRichText round-trip is exact for every alignment value, including mixed consecutive paragraphs", () => {
+  const doc = new FakeDocument();
+  const value = { version: 1, blocks: ALIGN_TOKENS.map((align, i) => ({ type: "paragraph", ...(align === "left" ? {} : { align }), runs: [{ text: `p${i}` }] })) };
+  const root = mount(doc, richTextToDom(doc, value));
+  const result = serializeToRichText(root);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value, value);
+});
+
+test("44: an invalid data-rt-align attribute value fails closed on export (fail-safe, not silently dropped)", () => {
+  const doc = new FakeDocument();
+  const root = mount(doc, richTextToDom(doc, { version: 1, blocks: [{ type: "paragraph", runs: [{ text: "x" }] }] }));
+  root.firstChild.firstChild.setAttribute(DATA_ALIGN_ATTR, "not-a-real-alignment");
+  const result = serializeToRichText(root);
+  assert.deepEqual(result, { ok: false, reason: "limit_exceeded" });
+});
+
+test("45: legacyPlainTextToDom produces paragraphs with no alignment (left, same as before this feature)", () => {
+  const doc = new FakeDocument();
+  const root = mount(doc, legacyPlainTextToDom(doc, "Line one\nLine two"));
+  const blocks = Array.from(root.firstChild.childNodes);
+  assert.ok(blocks.every(b => b.getAttribute(DATA_ALIGN_ATTR) === null));
+});
+
+test("46: setBlockAlign / effectiveBlockAlign are a correct, independent pure-DOM pair", () => {
+  const doc = new FakeDocument();
+  const el = doc.createElement("div");
+  assert.equal(effectiveBlockAlign(el), "left", "no attribute means left by default");
+  setBlockAlign(el, "center");
+  assert.equal(el.getAttribute(DATA_ALIGN_ATTR), "center");
+  assert.equal(effectiveBlockAlign(el), "center");
+  setBlockAlign(el, "left");
+  assert.equal(el.getAttribute(DATA_ALIGN_ATTR), null, "setting back to left clears the attribute");
+  assert.equal(effectiveBlockAlign(el), "left");
+  setBlockAlign(el, "right");
+  setBlockAlign(el, "not-a-real-value");
+  assert.equal(el.getAttribute(DATA_ALIGN_ATTR), null, "an unrecognized value clears the attribute rather than writing it through");
+});
+
+test("47: computeAlignState reports a uniform value, or null+mixed:true when paragraphs disagree", () => {
+  assert.deepEqual(computeAlignState([]), { align: "left", mixed: false });
+  assert.deepEqual(computeAlignState(["center"]), { align: "center", mixed: false });
+  assert.deepEqual(computeAlignState(["center", "center", "center"]), { align: "center", mixed: false });
+  assert.deepEqual(computeAlignState(["left", "center", "right"]), { align: null, mixed: true });
 });

@@ -4,7 +4,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { renderRichText, FONT_CSS_MAP, SIZE_CSS_MAP, COLOR_CSS_MAP } from "../../rich-text-renderer.mjs";
+import { renderRichText, FONT_CSS_MAP, SIZE_CSS_MAP, COLOR_CSS_MAP, ALIGN_CSS_MAP } from "../../rich-text-renderer.mjs";
 import { RICH_TEXT_VERSION, MAX_BLOCKS } from "../../rich-text-contract.mjs";
 import { FakeDocument } from "./fake-dom.mjs";
 
@@ -145,6 +145,29 @@ for (const malicious of LEGACY_XSS_STRINGS) {
     assert.equal(typeof container.children[0].innerHTML, "undefined");
   });
 }
+
+// =====================================================================================
+// D+: PARAGRAPH ALIGNMENT (GATE RICHTEXT-ALIGN) — rendered <p> style, fixed-map-only policy
+// =====================================================================================
+
+test("D: a paragraph's align token maps to the matching CSS textAlign via the fixed ALIGN_CSS_MAP, and only that", () => {
+  const { d, container } = newContainer();
+  renderRichText(container, doc(
+    { type: "paragraph", align: "center", runs: [run("giữa")] },
+    { type: "paragraph", align: "right", runs: [run("phải")] },
+    { type: "paragraph", align: "justify", runs: [run("đều")] }
+  ), "", d);
+  assert.equal(container.children[0].style.textAlign, ALIGN_CSS_MAP.center);
+  assert.equal(container.children[1].style.textAlign, ALIGN_CSS_MAP.right);
+  assert.equal(container.children[2].style.textAlign, ALIGN_CSS_MAP.justify);
+});
+
+test("D: a paragraph with no align field (or explicit \"left\") renders with no textAlign override at all", () => {
+  const { d, container } = newContainer();
+  renderRichText(container, doc(paragraph(run("mặc định")), { type: "paragraph", align: "left", runs: [run("trái")] }), "", d);
+  assert.equal(container.children[0].style.textAlign, undefined);
+  assert.equal(container.children[1].style.textAlign, undefined);
+});
 
 // =====================================================================================
 // E. XSS CORPUS — RichText documents. Each must either be rejected outright (whole-document

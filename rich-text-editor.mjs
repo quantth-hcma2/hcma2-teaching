@@ -23,6 +23,7 @@ import {
   DATA_BLOCK_ATTR,
   DATA_RUN_ATTR,
   DATA_TEXT_REGION_ATTR,
+  DATA_ALIGN_ATTR,
   createRunSpan,
   richTextToDom,
   legacyPlainTextToDom,
@@ -33,6 +34,9 @@ import {
   splitRunAtOffset,
   readRunFromMarkedSpan,
   computeFormatState,
+  setBlockAlign,
+  effectiveBlockAlign,
+  computeAlignState,
   normalizePastedPlainText,
   pastedTextToParagraphLines
 } from "./rich-text-editor-serializer.mjs";
@@ -128,6 +132,29 @@ export class RichTextEditor {
       this.colorSelect.appendChild(opt);
     }
 
+    // Paragraph alignment — a block-level control, grouped with the other text-formatting controls
+    // (not the block-insertion buttons below). Plain Vietnamese text labels, matching this
+    // toolbar's existing "Chèn ảnh"/"Chèn bảng 3×3" convention rather than introducing an icon
+    // system the toolbar does not otherwise have; the fuller Vietnamese phrase goes in
+    // aria-label/title for teachers relying on either.
+    this.alignButtons = [];
+    for (const [align, label, title] of [
+      ["left", "Trái", "Căn trái"],
+      ["center", "Giữa", "Căn giữa"],
+      ["right", "Phải", "Căn phải"],
+      ["justify", "Đều", "Căn đều hai bên"]
+    ]) {
+      const btn = doc.createElement("button");
+      btn.type = "button";
+      btn.setAttribute("data-rt-action", `align-${align}`);
+      btn.setAttribute("aria-label", title);
+      btn.title = title;
+      btn.setAttribute("aria-pressed", String(align === "left"));
+      btn.textContent = label;
+      this.alignButtons.push([align, btn]);
+    }
+    [this.alignLeftBtn, this.alignCenterBtn, this.alignRightBtn, this.alignJustifyBtn] = this.alignButtons.map(([, btn]) => btn);
+
     this.imageBtn = doc.createElement("button"); this.imageBtn.type="button"; this.imageBtn.textContent="Chèn ảnh"; this.imageBtn.setAttribute("data-rt-action","image");
     this.imageInput = doc.createElement("input"); this.imageInput.type="file"; this.imageInput.accept="image/jpeg,image/png,image/webp"; this.imageInput.hidden=true;
     this.tableBtn = doc.createElement("button"); this.tableBtn.type="button"; this.tableBtn.textContent="Chèn bảng 3×3"; this.tableBtn.setAttribute("data-rt-action","table");
@@ -137,6 +164,7 @@ export class RichTextEditor {
     this.toolbarEl.appendChild(this.fontSelect);
     this.toolbarEl.appendChild(this.sizeSelect);
     this.toolbarEl.appendChild(this.colorSelect);
+    for (const [, btn] of this.alignButtons) this.toolbarEl.appendChild(btn);
     this.toolbarEl.appendChild(this.imageBtn);
     this.toolbarEl.appendChild(this.tableBtn);
     this.toolbarEl.appendChild(this.imageInput);
@@ -192,6 +220,7 @@ export class RichTextEditor {
     this._onToolbarButtonMouseDown = (e) => e.preventDefault();
     this.boldBtn.addEventListener("mousedown", this._onToolbarButtonMouseDown);
     this.italicBtn.addEventListener("mousedown", this._onToolbarButtonMouseDown);
+    for (const [, btn] of this.alignButtons) btn.addEventListener("mousedown", this._onToolbarButtonMouseDown);
 
     // <select> controls cannot have their own mousedown prevented (that would block the dropdown
     // from opening at all), so instead we snapshot whatever Selection Range was live in the editor
@@ -210,6 +239,11 @@ export class RichTextEditor {
     this._onFontChange = () => this._applyExplicitFormat("font", this.fontSelect.value);
     this._onSizeChange = () => this._applyExplicitFormat("size", Number(this.sizeSelect.value));
     this._onColorChange = () => this._applyExplicitFormat("color", this.colorSelect.value);
+    this._onAlignClicks = this.alignButtons.map(([align, btn]) => {
+      const handler = () => this._applyAlignment(align);
+      btn.addEventListener("click", handler);
+      return handler;
+    });
     this._onImageClick = () => { if (this.onImageUpload) this.imageInput.click(); };
     this._onImageChange = async () => { const file=this.imageInput.files?.[0]; this.imageInput.value=""; if(!file||!this.onImageUpload)return; this.imageBtn.disabled=true; try { const block=await this.onImageUpload(file); if(block) this.insertBlock(block); } finally { this.imageBtn.disabled=false; } };
     this._onTableClick = () => this.insertBlock({type:"table",rows:Array.from({length:3},()=>({cells:Array.from({length:3},()=>({runs:[]}))}))});
@@ -266,6 +300,10 @@ export class RichTextEditor {
     this.italicBtn.removeEventListener("click", this._onItalicClick);
     this.boldBtn.removeEventListener("mousedown", this._onToolbarButtonMouseDown);
     this.italicBtn.removeEventListener("mousedown", this._onToolbarButtonMouseDown);
+    this.alignButtons.forEach(([, btn], i) => {
+      btn.removeEventListener("mousedown", this._onToolbarButtonMouseDown);
+      btn.removeEventListener("click", this._onAlignClicks[i]);
+    });
     this.fontSelect.removeEventListener("change", this._onFontChange);
     this.sizeSelect.removeEventListener("change", this._onSizeChange);
     this.colorSelect.removeEventListener("change", this._onColorChange);
@@ -531,6 +569,43 @@ export class RichTextEditor {
     this._replaceSpansWithFormat(spans, { [prop]: value }, range);
   }
 
+  // ---------------- Paragraph alignment ----------------
+  // Block-level, not run-level: unlike bold/italic/font/size/color, alignment never splits or
+  // touches run spans at all — it only ever sets/clears data-rt-align (+ matching CSS) on whichever
+  // paragraph <div> element(s) the caret/selection touches. Word-like semantics: a collapsed caret
+  // aligns just its own paragraph; a selection aligns every paragraph it touches, even partially,
+  // always SETTING the clicked alignment (never toggling) — exactly like clicking one of several
+  // mutually exclusive alignment buttons in Word, including when the touched paragraphs started out
+  // with mixed alignment.
+
+  // Every DATA_BLOCK_ATTR="paragraph" element the given Range touches, in document order. A
+  // collapsed range (caret only) resolves to that caret's own paragraph (never a table cell — table
+  // cells are a structurally different block kind, matched by data-rt-cell, and are deliberately
+  // excluded: alignment is a paragraph-only feature in this gate). A non-collapsed range uses the
+  // standard Range.intersectsNode so a selection that starts/ends mid-paragraph still includes that
+  // whole paragraph, matching Word's own "partially selected paragraph is affected" behavior; this
+  // naturally also covers a selection spanning across an Image/Table block into a different text
+  // region, since it simply asks each paragraph element in the editor whether the Range touches it.
+  _paragraphsTouchedByRange(range) {
+    if (range.collapsed) {
+      const block = this._blockAncestor(range.startContainer);
+      return block && block.getAttribute(DATA_BLOCK_ATTR) === "paragraph" ? [block] : [];
+    }
+    const all = Array.from(this.editableEl.querySelectorAll(`[${DATA_BLOCK_ATTR}="paragraph"]`));
+    return all.filter((block) => range.intersectsNode(block));
+  }
+
+  _applyAlignment(align) {
+    const sel = this._restoreActiveSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const blocks = this._paragraphsTouchedByRange(range);
+    if (blocks.length === 0) return;
+    for (const block of blocks) setBlockAlign(block, align);
+    this._refreshToolbarFromSelection();
+    this.onChange();
+  }
+
   _runInfoFromSpan(span) {
     const run = readRunFromMarkedSpan(span);
     return {
@@ -605,8 +680,11 @@ export class RichTextEditor {
   _refreshToolbarFromSelection() {
     const sel = this._getSelection();
     let infos;
+    let alignBlocks;
     if (!sel || !this._selectionIsInsideEditor(sel) || sel.rangeCount === 0) {
       infos = [this._pendingFormat];
+      const fallback = this._currentBlock();
+      alignBlocks = fallback && fallback.getAttribute(DATA_BLOCK_ATTR) === "paragraph" ? [fallback] : [];
     } else {
       const range = sel.getRangeAt(0);
       if (range.collapsed) {
@@ -615,6 +693,7 @@ export class RichTextEditor {
         const spans = this._getTouchedSpansReadOnly(range);
         infos = spans.length > 0 ? spans.map((s) => this._runInfoFromSpan(s)) : [this._pendingFormat];
       }
+      alignBlocks = this._paragraphsTouchedByRange(range);
     }
     const state = computeFormatState(infos);
     this.boldBtn.setAttribute("aria-pressed", state.mixed.bold ? "mixed" : String(state.bold));
@@ -622,6 +701,12 @@ export class RichTextEditor {
     this.fontSelect.value = state.mixed.font ? "" : state.font;
     this.sizeSelect.value = state.mixed.size ? "" : String(state.size);
     this.colorSelect.value = state.mixed.color ? "" : state.color;
+
+    const alignValues = alignBlocks.length > 0 ? alignBlocks.map((b) => effectiveBlockAlign(b)) : [];
+    const alignState = computeAlignState(alignValues);
+    for (const [align, btn] of this.alignButtons) {
+      btn.setAttribute("aria-pressed", alignState.mixed ? "mixed" : String(alignState.align === align));
+    }
   }
 
   _handleSelectionChange() {
@@ -732,6 +817,13 @@ export class RichTextEditor {
     // paragraph individually — the new block inherits it natively from that same region.
     const newBlock = this.doc.createElement("div");
     newBlock.setAttribute(DATA_BLOCK_ATTR, "paragraph");
+    // Word-like Enter inheritance: the newly-split paragraph starts with the SAME alignment as the
+    // paragraph it split from (e.g. Enter from a Centered title keeps the next line Centered until
+    // the user chooses otherwise). Reads the raw attribute directly (not effectiveBlockAlign) so a
+    // currentBlock with no explicit alignment (the ordinary "left" case) correctly leaves newBlock
+    // with no attribute either, rather than writing out an explicit "left".
+    const inheritedAlign = currentBlock.getAttribute(DATA_ALIGN_ATTR);
+    if (inheritedAlign !== null) setBlockAlign(newBlock, inheritedAlign);
 
     // Move every sibling AFTER the split point into the new block.
     let moveStart;

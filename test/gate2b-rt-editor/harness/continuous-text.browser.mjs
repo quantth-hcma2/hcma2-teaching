@@ -1,19 +1,17 @@
 // Targeted regression for the GATE 2B-RT-CONTINUOUS candidate (consecutive paragraphs grouped into
-// one shared contenteditable text region, Image/Table remain separate siblings). Run with a locally
-// installed Playwright package; serves only this repository on loopback. Uses the EXISTING
-// gate2b-rt-editor harness (index.html) — no new throwaway page.
+// one shared contenteditable text region, Image/Table remain separate siblings), plus the
+// first-keystroke caret-preservation fix layered on top of it (see the "FIRST-KEYSTROKE CARET FIX"
+// block of checks below). Run with a locally installed Playwright package; serves only this
+// repository on loopback. Uses the EXISTING gate2b-rt-editor harness (index.html) — no new
+// throwaway page.
 //
-// Content-seeding note: initial text in each check is seeded via a synthetic paste (the existing,
-// already-covered-by-the-prior-hotfix-suite _handlePaste path, which explicitly restores the
-// caret after inserting) rather than page.keyboard.type() from a bare empty paragraph. Confirmed
-// during this investigation, and reproduced IDENTICALLY against the untouched pre-candidate
-// baseline (66ca3816a3dce4ef7eda0a5900ca37f3465627d9) with its original per-paragraph architecture:
-// _normalizeBlock's bare-text-node->span replacement on the very first native keystroke into an
-// empty block does not explicitly restore the Selection afterward, which can leave the caret at a
-// stale offset for that one keystroke — a pre-existing, out-of-scope latent issue unrelated to this
-// candidate, not something introduced here. Real keyboard Enter/Backspace/Delete/Arrow presses are
-// used throughout for the actual behaviors this candidate exists to prove, always applied to
-// paste-seeded (already-wrapped-in-span) content, which does not hit that pre-existing path.
+// Content-seeding note: most checks below seed initial content via a synthetic paste (seed() /
+// pasteAtCaret(), both using the real _handlePaste path) rather than page.keyboard.type(), simply
+// to keep those checks focused on paragraph/region STRUCTURE rather than on typing mechanics —
+// paste and real typing now both correctly preserve/restore the caret (see the dedicated
+// caret-preservation checks below, which exercise real page.keyboard.type()/press() specifically,
+// including into previously-bare paragraphs, per the owner's explicit requirement not to hide that
+// behavior behind paste-based seeding).
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
@@ -76,17 +74,9 @@ async function seed(text) {
   }, text);
 }
 // Inserts text at whatever the CURRENT caret position is (e.g. right after a real Enter press),
-// via the same proven-correct paste path as seed() above, instead of page.keyboard.type(). This is
-// required whenever the current caret sits in a bare/empty paragraph (such as one just created by
-// Enter): confirmed during this investigation (A/B tested against the untouched pre-candidate
-// baseline, 66ca3816a3dce4ef7eda0a5900ca37f3465627d9, with identical results) that real native
-// typing's first keystroke into any bare paragraph anywhere in the document hits a pre-existing,
-// out-of-scope bug in _normalizeBlock() where replacing the raw text node with a <span> destroys
-// the live Selection without explicitly restoring it, silently corrupting caret position for that
-// keystroke (and, once triggered, for interactions later in the same session). This is reported
-// separately to the owner as a pre-existing production issue; real page.keyboard.type()/press() is
-// reserved in this suite for Enter/Backspace/Delete/Arrow/Cut mechanics on top of content that was
-// seeded this way, which this candidate's architecture is responsible for and actually tests.
+// via the same paste path as seed() above, instead of page.keyboard.type() — used in checks that
+// are specifically about paragraph/region structure rather than about typing mechanics (both paths
+// are exercised directly and separately by their own dedicated checks elsewhere in this file).
 async function pasteAtCaret(text) {
   await page.evaluate((t) => {
     const editable = document.querySelector("#mount [data-rt-editable]");
@@ -135,7 +125,7 @@ try {
     await reset();
     await seed("Dòng một");
     await page.keyboard.press("Enter");
-    await pasteAtCaret("Dòng hai");
+    await page.keyboard.type("Dòng hai");
     const blocks = await paragraphs();
     assert.deepEqual(blocks.map(b => b.text), ["Dòng một", "Dòng hai"]);
   });
@@ -146,7 +136,7 @@ try {
     await seed("Trước");
     await page.keyboard.press("Enter");
     await page.keyboard.press("Enter");
-    await pasteAtCaret("Sau");
+    await page.keyboard.type("Sau");
     const blocks = await paragraphs();
     assert.deepEqual(blocks.map(b => b.text), ["Trước", "", "Sau"]);
   });
@@ -156,7 +146,7 @@ try {
     await reset();
     await seed("A");
     for (let i = 0; i < 4; i++) await page.keyboard.press("Enter");
-    await pasteAtCaret("B");
+    await page.keyboard.type("B");
     const blocks = await paragraphs();
     assert.deepEqual(blocks.map(b => b.text), ["A", "", "", "", "B"]);
   });
@@ -172,7 +162,7 @@ try {
     await reset();
     await seed("Alpha");
     await page.keyboard.press("Enter");
-    await pasteAtCaret("Beta");
+    await page.keyboard.type("Beta");
     let blocks = await paragraphs();
     assert.equal(blocks.length, 2);
     await placeCaretAt(1, 0);
@@ -191,7 +181,7 @@ try {
     await reset();
     await seed("Undo one");
     await page.keyboard.press("Enter");
-    await pasteAtCaret("Undo two");
+    await page.keyboard.type("Undo two");
     let blocks = await paragraphs();
     assert.equal(blocks.length, 2, "precondition: two paragraphs exist before merging");
     await placeCaretAt(1, 0);
@@ -217,7 +207,7 @@ try {
     await reset();
     await seed("Gamma");
     await page.keyboard.press("Enter");
-    await pasteAtCaret("Delta");
+    await page.keyboard.type("Delta");
     let blocks = await paragraphs();
     assert.equal(blocks.length, 2);
     await placeCaretAt(0, 5); // end of "Gamma"
@@ -232,7 +222,7 @@ try {
     await reset();
     await seed("One");
     await page.keyboard.press("Enter");
-    await pasteAtCaret("Two");
+    await page.keyboard.type("Two");
     await placeCaretAt(1, 0);
     await page.keyboard.press("ArrowLeft");
     const pos = await page.evaluate(() => {
@@ -249,7 +239,7 @@ try {
     await reset();
     await seed("First");
     await page.keyboard.press("Enter");
-    await pasteAtCaret("Second");
+    await page.keyboard.type("Second");
     const spanText = await page.evaluate(() => {
       const blocks = document.querySelectorAll('#mount [data-rt-block="paragraph"]');
       const firstSpan = blocks[0].querySelector("span");
@@ -462,7 +452,7 @@ try {
     await reset();
     await seed("Formatted one");
     await page.keyboard.press("Enter");
-    await pasteAtCaret("Formatted two");
+    await page.keyboard.type("Formatted two");
     await page.evaluate(() => {
       const blocks = document.querySelectorAll('#mount [data-rt-block="paragraph"]');
       const range = document.createRange();
@@ -484,7 +474,7 @@ try {
     await reset();
     await seed("Merge A");
     await page.keyboard.press("Enter");
-    await pasteAtCaret("Merge B");
+    await page.keyboard.type("Merge B");
     await placeCaretAt(1, 0);
     await page.keyboard.press("Backspace");
     const exported = await page.evaluate(() => window.__editor.getRichText());
@@ -533,6 +523,162 @@ try {
     const result = await page.evaluate(() => window.__editor.getRichText());
     assert.equal(result.ok, true);
     assert.equal(result.value.blocks[0].runs.map(r => r.text).join(""), "Xế");
+  });
+
+  // ===================================================================================
+  // FIRST-KEYSTROKE CARET FIX — real native keyboard typing throughout (no paste seeding anywhere
+  // in this section), per the owner's explicit fix request. Proves _captureCaretForNormalize /
+  // _restoreCaretAfterNormalize (rich-text-editor.mjs) correctly preserve the caret across
+  // _normalizeBlock's bare-text-node -> <span> replacement, for both plain typing and IME
+  // composition, including the very first keystroke into a genuinely empty paragraph.
+  // ===================================================================================
+
+  await check("caret-fix 1: typing into a genuinely empty initial paragraph produces exactly the typed text", async () => {
+    await reset();
+    await page.locator('#mount [data-rt-block="paragraph"]').first().click();
+    await page.keyboard.type("abcdef");
+    const blocks = await paragraphs();
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0].text, "abcdef");
+  });
+
+  await check("caret-fix 2: Enter then typing into the new paragraph stays in typed order", async () => {
+    await reset();
+    await page.locator('#mount [data-rt-block="paragraph"]').first().click();
+    await page.keyboard.type("abcdef");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("ghijkl");
+    const blocks = await paragraphs();
+    assert.deepEqual(blocks.map(b => b.text), ["abcdef", "ghijkl"]);
+  });
+
+  await check("caret-fix 3: Enter twice then typing into the paragraph after the blank line", async () => {
+    await reset();
+    await page.locator('#mount [data-rt-block="paragraph"]').first().click();
+    await page.keyboard.type("A");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("B");
+    const blocks = await paragraphs();
+    assert.deepEqual(blocks.map(b => b.text), ["A", "", "B"]);
+  });
+
+  await check("caret-fix 4: Vietnamese text types normally into a fresh paragraph", async () => {
+    await reset();
+    await page.locator('#mount [data-rt-block="paragraph"]').first().click();
+    const text = "Phân tích tình huống sư phạm thường gặp";
+    await page.keyboard.type(text);
+    const blocks = await paragraphs();
+    assert.equal(blocks[0].text, text);
+  });
+
+  await check("caret-fix 5: rapid typing with no per-key delay is not reordered or dropped", async () => {
+    await reset();
+    await page.locator('#mount [data-rt-block="paragraph"]').first().click();
+    const text = "thequickbrownfoxjumpsoverthelazydog0123456789";
+    await page.keyboard.type(text, { delay: 0 });
+    const blocks = await paragraphs();
+    assert.equal(blocks[0].text, text);
+  });
+
+  await check("caret-fix 6: moving the caret into the middle of existing text and typing inserts at that point", async () => {
+    await reset();
+    await page.locator('#mount [data-rt-block="paragraph"]').first().click();
+    await page.keyboard.type("acdef");
+    await page.keyboard.press("Home");
+    await page.keyboard.press("ArrowRight"); // caret lands between 'a' and 'c'
+    await page.keyboard.type("b");
+    const blocks = await paragraphs();
+    assert.equal(blocks[0].text, "abcdef");
+  });
+
+  await check("caret-fix 7: moving the caret to the start, then to the end, and typing at each lands correctly", async () => {
+    await reset();
+    await page.locator('#mount [data-rt-block="paragraph"]').first().click();
+    await page.keyboard.type("middle");
+    await page.keyboard.press("Home");
+    await page.keyboard.type("S-");
+    await page.keyboard.press("End");
+    await page.keyboard.type("-E");
+    const blocks = await paragraphs();
+    assert.equal(blocks[0].text, "S-middle-E");
+  });
+
+  await check("caret-fix 8: Backspace and Delete after native typing remove the correct characters", async () => {
+    await reset();
+    await page.locator('#mount [data-rt-block="paragraph"]').first().click();
+    await page.keyboard.type("xyz123");
+    await page.keyboard.press("Backspace");
+    await page.keyboard.press("Backspace");
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Delete");
+    const blocks = await paragraphs();
+    assert.equal(blocks[0].text, "yz1");
+  });
+
+  await check("caret-fix 9: native typing immediately after a native paragraph merge inserts at the merge point", async () => {
+    await reset();
+    await page.locator('#mount [data-rt-block="paragraph"]').first().click();
+    await page.keyboard.type("Foo");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("Bar");
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Backspace"); // merges into "FooBar", caret left at the merge point
+    await page.keyboard.type("Z");
+    const blocks = await paragraphs();
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0].text, "FooZBar");
+  });
+
+  await check("caret-fix 10: undo/redo after native typing does not corrupt structure or character order", async () => {
+    await reset();
+    await page.locator('#mount [data-rt-block="paragraph"]').first().click();
+    await page.keyboard.type("UndoMe");
+    await page.keyboard.press("Control+Z");
+    await page.waitForTimeout(50);
+    const afterUndo = await paragraphs();
+    assert.equal(afterUndo.length, 1);
+    assert.ok("UndoMe".startsWith(afterUndo[0].text) && afterUndo[0].text.length < "UndoMe".length,
+      "native undo must remove from the end without reordering or corrupting the remaining text");
+    await page.keyboard.press("Control+Y");
+    await page.waitForTimeout(50);
+    const afterRedo = await paragraphs();
+    assert.equal(afterRedo[0].text, "UndoMe", "native redo must exactly restore the typed text");
+  });
+
+  // IME/composition into a genuinely empty paragraph (the scenario this fix also covers via
+  // compositionend, see _onCompositionEnd in rich-text-editor.mjs). Also confirms the pre-existing,
+  // unchanged _isComposing guard still suppresses normalization WHILE composing is in progress (no
+  // destructive mid-composition normalization), which this fix does not alter. A fully faithful,
+  // browser-native IME composition cannot be driven through Playwright (real OS/browser IME engines
+  // are not scriptable this way); this dispatches the same compositionstart/input/compositionend
+  // event sequence and bare-text-node DOM shape a real IME produces, which is the strongest
+  // available check in this harness — documented here as that limitation.
+  await check("caret-fix IME: composition into a genuinely empty paragraph lands the caret correctly for continued typing", async () => {
+    await reset();
+    const midComposition = await page.evaluate(() => {
+      const editable = document.querySelector("#mount [data-rt-editable]");
+      const target = editable.querySelector('[data-rt-block="paragraph"]');
+      target.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "" }));
+      for (const br of Array.from(target.querySelectorAll("br"))) br.remove();
+      const textNode = document.createTextNode("ế");
+      target.appendChild(textNode);
+      const sel = window.getSelection();
+      const r = document.createRange();
+      r.setStart(textNode, 1);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      target.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertCompositionText" }));
+      // Captured BEFORE compositionend: proves the bare text node survives untouched while composing.
+      const bareNodeSurvived = target.firstChild === textNode && target.firstChild.nodeType === 3;
+      target.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "ế" }));
+      return { bareNodeSurvived };
+    });
+    assert.equal(midComposition.bareNodeSurvived, true, "normalization must not run while composing is in progress");
+    await page.keyboard.type("m");
+    const blocks = await paragraphs();
+    assert.equal(blocks[0].text, "ếm");
   });
 
   // 24. Common-task and Per-group-task both use the identical implementation — a second,

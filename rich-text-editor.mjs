@@ -164,7 +164,16 @@ export class RichTextEditor {
     this._onKeyDown = (e) => this._handleKeyDown(e);
     this._onInput = (e) => this._handleInput(e);
     this._onCompositionStart = () => { this._isComposing = true; };
-    this._onCompositionEnd = () => { this._isComposing = false; this._normalizeAllBlocks(); this._refreshToolbarFromSelection(); this.onChange(); };
+    this._onCompositionEnd = () => {
+      this._isComposing = false;
+      // Same bare-text-node caret loss this fix addresses in _handleInput below can also happen
+      // for IME composition landing in a previously-bare paragraph (see _captureCaretForNormalize).
+      const restore = this._captureCaretForNormalize();
+      this._normalizeAllBlocks();
+      this._restoreCaretAfterNormalize(restore);
+      this._refreshToolbarFromSelection();
+      this.onChange();
+    };
     this._onPaste = (e) => this._handlePaste(e);
     this._onSelectionChange = () => this._handleSelectionChange();
 
@@ -786,9 +795,50 @@ export class RichTextEditor {
 
   _handleInput() {
     if (this._isComposing) return;
+    const restore = this._captureCaretForNormalize();
     this._normalizeAllBlocks();
+    this._restoreCaretAfterNormalize(restore);
     this._handleSelectionChange();
     this.onChange();
+  }
+
+  // Captures the caret as a block-relative character offset (the same DOM-mutation-independent
+  // technique _insertTextAtCaret already uses for paste, via _blockCharOffset/_locateBlockOffset)
+  // BEFORE _normalizeAllBlocks can run. Native typing's "input" event, and a composition's
+  // "compositionend", both fire AFTER the browser has already inserted a bare text node directly
+  // under the block div when typing/composing into a previously bare/empty paragraph (e.g. one
+  // just created by Enter, or the first paragraph of a blank document). _normalizeBlock's
+  // block.replaceChild(fresh, bareTextNode) then silently drops the Selection's anchor with no
+  // restoration, so without this capture-and-restore pair the caret resets to the start of the
+  // block on that one keystroke/composition. When typing continues into an ALREADY-normalized
+  // paragraph (the common case), the browser mutates the existing run span's text node in place —
+  // no bare node appears, _normalizeBlock never touches that span, and this capture/restore pair is
+  // a no-op (the located offset round-trips exactly), so this does not change already-correct
+  // behavior.
+  _captureCaretForNormalize() {
+    const sel = this._getSelection();
+    if (!sel || sel.rangeCount === 0 || !this._selectionIsInsideEditor(sel)) return null;
+    const range = sel.getRangeAt(0);
+    if (!range.collapsed) return null;
+    const block = this._blockAncestor(range.startContainer);
+    if (!block) return null;
+    return { block, charOffset: this._blockCharOffset(block, range.startContainer, range.startOffset) };
+  }
+
+  _restoreCaretAfterNormalize(restore) {
+    if (!restore) return;
+    const sel = this._getSelection();
+    if (!sel) return;
+    const located = this._locateBlockOffset(restore.block, restore.charOffset);
+    const newRange = this.doc.createRange();
+    if (located) {
+      newRange.setStart(located.span.firstChild, located.offset);
+    } else {
+      newRange.setStart(restore.block, 0);
+    }
+    newRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
   }
 
   // Wraps any bare Text node the browser inserted directly under a block div into a proper run

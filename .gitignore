@@ -48,3 +48,6 @@ test/gate2b-rt-integration/public/
 # Scratch regression-run logs (this repo's ad hoc full-regression invocations write here) — not
 # source, never the source of truth.
 .regression-logs/
+
+# Candidate 4A local emulator/Admin runtime and cache; never commit these generated files.
+.local-tools/

@@ -2856,7 +2856,6 @@ const TEACHER_MENU = [
   {key:"library", label:"THƯ VIỆN", icon:"📚"},
   {key:"qrlinks", label:"QR vĩnh viễn", icon:"🔗"},
   {key:"trash", label:"Thùng rác", icon:"🗑️"},
-  {key:"reports", label:"Báo cáo", icon:"📄"},
   {key:"account", label:"Tài khoản", icon:"👤"},
 ];
 let teacherRouteGeneration=0;
@@ -2889,7 +2888,7 @@ function normalizeTeacherLibraryStateForShell(){
 }
 function renderTeacherShell(){
   clearListeners();
-  if(STATE.teacherNav==="history") STATE.teacherNav="create";
+  if(STATE.teacherNav==="history" || STATE.teacherNav==="reports") STATE.teacherNav="create";
   normalizeTeacherLibraryStateForShell();
   appRoot().innerHTML = shellTemplate("Giảng viên", TEACHER_MENU, STATE.teacherNav, STATE.profile.displayName || STATE.profile.email);
   wireShellNav(TEACHER_MENU, navigateTeacherTopLevel);
@@ -2906,6 +2905,10 @@ function teacherRoute(){
   if(hash.startsWith("#/knowledge/")) return knowledgeDashboard(c, decodeURIComponent(hash.split("/")[2]), false);
   if(hash.startsWith("#/wizard")){ const parts=hash.split("/"); return teacherWizard(c, parts[2]?decodeURIComponent(parts[2]):null); }
   let key = STATE.teacherNav;
+  if(key==="history" || key==="reports"){
+    STATE.teacherNav="create";
+    key="create";
+  }
   if(key==="questionSets"){
     // Fail-safe cho state/caller cũ không đi qua navigateTeacherTopLevel().
     STATE.teacherNav="library";
@@ -2926,9 +2929,7 @@ function teacherRoute(){
   if(key==="library") return teacherLibraryHub(c);
   if(key==="qrlinks") return qrManager(c, false);
   if(key==="groups") return groupModule(c, false);
-  if(key==="history"){ STATE.teacherNav="create"; return teacherHistory(c,routeGeneration); }
   if(key==="trash") return teacherTrash(c);
-  if(key==="reports") return teacherReportsList(c);
   if(key==="account") return teacherAccount(c);
 }
 
@@ -4727,7 +4728,7 @@ async function teacherHistory(c,routeGeneration=teacherRouteGeneration){
   c.innerHTML = `<div class="flex-between" style="gap:12px;flex-wrap:wrap;"><div><h2 style="margin-bottom:4px;">Tạo tương tác</h2>
     <p class="mut" style="margin:0;">Tạo phiên mới hoặc quản lý các phiên tương tác hiện có.</p></div>
     <button class="btn btn-lg" id="btnCreateInteractionSession">➕ TẠO PHIÊN TƯƠNG TÁC</button></div>
-    <h3 class="mt-20" style="margin-bottom:4px;">CÁC PHIÊN TƯƠNG TÁC</h3>
+    <h3 class="mt-20" style="margin-bottom:4px;">LỊCH SỬ / KẾT QUẢ</h3>
     <p class="mut">Có thể mở lại kết quả, điều khiển phiên hoặc chuyển các phiên không còn cần thiết vào Thùng rác. Phiên đang mở phải được đóng trước khi xóa.</p>
     <div class="card"><div class="flex-between mt-8"><input type="text" id="hSearch" placeholder="Tìm theo tên hoạt động…" style="max-width:280px;">
     <select id="hFilter"><option value="">Tất cả trạng thái</option><option value="draft">Nháp</option><option value="ready">Sẵn sàng</option><option value="open">Đang mở</option><option value="closed">Đã đóng</option><option value="archived">Lưu trữ</option></select></div>
@@ -4774,22 +4775,6 @@ async function teacherHistory(c,routeGeneration=teacherRouteGeneration){
     $("#hTable").innerHTML = errorBlock(e, ()=>teacherHistory(c));
   }
 }
-async function teacherReportsList(c){
-  c.innerHTML = `<h2>Báo cáo</h2><p class="mut">Chọn một phiên để xem báo cáo chi tiết, in, hoặc xuất dữ liệu.</p>
-    <div class="table-wrap card" id="repTable"><div class="center-screen" style="min-height:120px;"><span class="spinner"></span></div></div>`;
-  try{
-    const classMap = await loadTeacherClassMap();
-    const snap = await getDocs(query(collection(db,"sessions"), where("ownerId","==",STATE.user.uid), orderBy("createdAt","desc"), limit(300)));
-    const repDocs=snap.docs.filter(d=>!d.data().deletedAt);
-    if(!repDocs.length){ $("#repTable").innerHTML = `<div class="empty-state"><div class="ic">📄</div>Chưa có phiên nào để tạo báo cáo.</div>`; return; }
-    $("#repTable").innerHTML = `<table><thead><tr><th>Hoạt động</th><th>Lớp</th><th>Ngày</th><th>Trạng thái</th><th></th></tr></thead><tbody>
-      ${repDocs.map(d=>{ const s=d.data(); return `<tr><td>${esc(s.title)}</td><td>${esc(classMap[s.classId]?.name||"—")}</td><td>${fmtDateShort(s.createdAt)}</td><td>${sessionStatusBadge(s.status)}</td>
-        <td><button class="btn btn-sm btn-outline" data-r="${d.id}">XEM BÁO CÁO</button></td></tr>`; }).join("")}
-    </tbody></table>`;
-    $$("[data-r]").forEach(b=>b.onclick=()=>{ window.location.hash = "#/report/"+encodeURIComponent(b.dataset.r); });
-  }catch(e){ $("#repTable").innerHTML = errorBlock(e, ()=>teacherReportsList(c)); }
-}
-
 async function teacherReportView(c, sessionId){
   c.innerHTML = `<div class="center-screen" style="min-height:200px;"><span class="spinner"></span></div>`;
   try{
@@ -4853,7 +4838,7 @@ async function teacherReportView(c, sessionId){
       <a href="mailto:quantth@hcma2.edu.vn">quantth@hcma2.edu.vn</a>
     </div>
     `;
-    $("#btnBackRep").onclick = ()=>{ window.history.length>1 ? window.location.hash="" : (window.location.hash=""); STATE.teacherNav="reports"; teacherRoute(); };
+    $("#btnBackRep").onclick = ()=>navigateTeacherTopLevel("create");
     $("#btnPrint").onclick = ()=>window.print();
     $("#btnCsv").onclick = ()=>exportSessionCSV(session, className, questionBlocks);
     $("#btnJson").onclick = ()=>exportSessionJSON(session, className, questionBlocks, displaySemantics.title);

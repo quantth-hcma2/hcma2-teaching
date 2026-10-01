@@ -25,18 +25,43 @@ export const RICH_TEXT_VERSION_V2 = 2;
 // ---------------- Contract limits (classroom-scale, deliberately conservative — see GATE
 // 2B-RT-DESIGN §17/§18; these are PRODUCT limits, not derived from Firestore's 1 MiB document
 // limit, which is far larger and not relied upon here). ----------------
-export const MAX_BLOCKS = 20;
-export const MAX_V2_BLOCKS = 40;
+// GATE 2B-RT-CONTINUOUS §8: raised 4x (10,000 -> 40,000 code points) so a teacher can compose
+// several pages of flowing instructional text, now that the continuous-text editing region makes
+// that actually comfortable to type/edit. MAX_BLOCKS (paragraph-only V1 documents) is raised to the
+// SAME value as MAX_V2_BLOCKS rather than left at its old, much lower 20: a long document made of
+// many short paragraphs separated by blank lines is pure-paragraph (stays version 1) and was
+// previously block-count-limited long before MAX_TOTAL_TEXT_LENGTH ever became binding — raising
+// only the V2 cap would not have helped the exact "long text" case this exists to serve. No
+// per-paragraph limit is introduced (MAX_RUN_TEXT_LENGTH stays an invisible internal export
+// chunk-size, not a user-facing cap, and MAX_RUNS_PER_BLOCK was never the binding constraint).
+// Compatibility: raising a maximum is backward-compatible by construction — every existing document
+// that satisfied the old, stricter limits still satisfies these. Firestore headroom: the detailed
+// worst-case byte math lives on MAX_SERIALIZED_BYTE_LENGTH below; both this and that guard were
+// raised by the same 4x factor the text-length increase itself represents, not derived independently.
+export const MAX_BLOCKS = 80;
+export const MAX_V2_BLOCKS = 80;
 export const MAX_RUNS_PER_BLOCK = 20;
 export const MAX_RUN_TEXT_LENGTH = 500;
-export const MAX_TOTAL_TEXT_LENGTH = 10000;
+export const MAX_TOTAL_TEXT_LENGTH = 40000;
 
 // A conservative guard on the serialized JSON payload size itself, independent of the
 // block/run/text counting above (defense in depth against a document that is structurally within
 // every count limit above but still unreasonably large, e.g. via unusual Unicode expansion).
 // This is a product-level guard, not a Firestore-imposed one (Firestore's own per-document limit
 // is 1 MiB — this is deliberately far smaller).
-export const MAX_SERIALIZED_BYTE_LENGTH = 64 * 1024; // 64 KiB
+// GATE 2B-RT-CONTINUOUS §8: raised 4x alongside MAX_TOTAL_TEXT_LENGTH. Worst-case accounting at the
+// new ceiling: 40,000 code points of worst-case 3-byte-UTF-8 Vietnamese diacritic text is up to
+// ~120 KiB of raw text; maximally fragmenting that into MAX_BLOCKS(80) x MAX_RUNS_PER_BLOCK(20) =
+// 1,600 distinctly-formatted runs adds up to ~75 bytes of JSON key/structure overhead per run
+// (text+bold+italic+font+size+color all populated) - roughly another ~120 KiB - for a worst-case
+// richValue JSON of ~240 KiB, comfortably under this 256 KiB guard. The write path additionally
+// stores a plain-text mirror of the same content alongside (richTextToPlainText, no JSON
+// structure overhead) - worst case another ~120 KiB - for a combined worst-case Firestore cost of
+// roughly 360 KiB for this one rich field + its mirror, still well under Firestore's 1 MiB
+// per-document ceiling with ample headroom for every other field on the same document (title,
+// groupCount, durationSec, etc., all small) and for future growth. Deliberately NOT simply removed
+// or set to Firestore's own ceiling - this stays a real, meaningful, independently-enforced cap.
+export const MAX_SERIALIZED_BYTE_LENGTH = 256 * 1024; // 256 KiB
 
 export const ALLOWED_BLOCK_TYPES = Object.freeze(["paragraph"]);
 export const FONT_TOKENS = Object.freeze(["default", "arial", "times", "roboto"]);

@@ -81,11 +81,30 @@ test("A: MAX_TOTAL_TEXT_LENGTH is enforced across all runs/blocks combined", () 
   assert.equal(validateRichTextV1({ version: RICH_TEXT_VERSION, blocks }), false);
 });
 
-test("A: total text exactly at MAX_TOTAL_TEXT_LENGTH is valid (split across runs to respect MAX_RUN_TEXT_LENGTH)", () => {
-  const runsNeeded = MAX_TOTAL_TEXT_LENGTH / MAX_RUN_TEXT_LENGTH; // 20, each run at the 500 cap
-  assert.ok(runsNeeded <= MAX_RUNS_PER_BLOCK, "test construction sanity check");
-  const runs = Array.from({ length: runsNeeded }, () => run("a".repeat(MAX_RUN_TEXT_LENGTH)));
-  const d = doc({ type: "paragraph", runs });
+test("A: total text exactly at MAX_TOTAL_TEXT_LENGTH is valid (split across runs and, if needed, blocks to respect MAX_RUN_TEXT_LENGTH/MAX_RUNS_PER_BLOCK)", () => {
+  // A single block can hold at most MAX_RUNS_PER_BLOCK * MAX_RUN_TEXT_LENGTH characters, which
+  // (since GATE 2B-RT-CONTINUOUS §8 raised MAX_TOTAL_TEXT_LENGTH well past that) can be smaller
+  // than MAX_TOTAL_TEXT_LENGTH itself — so reaching the document-level cap legitimately requires
+  // spreading the text across multiple paragraph blocks, same as real multi-paragraph content.
+  const perBlockMax = MAX_RUNS_PER_BLOCK * MAX_RUN_TEXT_LENGTH;
+  const blocksNeeded = Math.ceil(MAX_TOTAL_TEXT_LENGTH / perBlockMax);
+  assert.ok(blocksNeeded <= MAX_BLOCKS, "test construction sanity check");
+  let remaining = MAX_TOTAL_TEXT_LENGTH;
+  const blocks = Array.from({ length: blocksNeeded }, () => {
+    const blockLength = Math.min(remaining, perBlockMax);
+    remaining -= blockLength;
+    const runsNeeded = Math.ceil(blockLength / MAX_RUN_TEXT_LENGTH) || 1;
+    let blockRemaining = blockLength;
+    const runs = Array.from({ length: runsNeeded }, () => {
+      const runLength = Math.min(blockRemaining, MAX_RUN_TEXT_LENGTH);
+      blockRemaining -= runLength;
+      return run("a".repeat(runLength));
+    });
+    return { type: "paragraph", runs };
+  });
+  const d = doc(...blocks);
+  const actualTotal = blocks.reduce((sum, b) => sum + b.runs.reduce((s, r) => s + codePointLength(r.text), 0), 0);
+  assert.equal(actualTotal, MAX_TOTAL_TEXT_LENGTH, "test construction sanity check");
   assert.equal(validateRichTextV1(d), true);
 });
 

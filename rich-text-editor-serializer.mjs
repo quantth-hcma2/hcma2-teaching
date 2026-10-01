@@ -13,12 +13,22 @@
 //
 // Canonical editor DOM shape (owned entirely by this module + rich-text-editor.mjs — nothing else
 // in the codebase creates or reads these nodes):
-//   <block-container data-rt-block="paragraph">        one per RichText block (V1: paragraph only)
-//     <br>                                              ONLY when the paragraph has zero runs
-//     -- or --
-//     <span data-rt-run="1" data-rt-bold="1"? data-rt-italic="1"? data-rt-font="..."?
-//           data-rt-size="..."? data-rt-color="...">text via textContent only</span>
-//     ... one span per run ...
+//   <text-region data-rt-text-region="1" contenteditable="true">   groups 1+ CONSECUTIVE paragraph
+//                                                                   blocks under one native editing
+//                                                                   surface — a pure DOM container,
+//                                                                   never persisted, never itself a
+//                                                                   block in the contract.
+//     <block-container data-rt-block="paragraph">        one per RichText paragraph block
+//       <br>                                              ONLY when the paragraph has zero runs
+//       -- or --
+//       <span data-rt-run="1" data-rt-bold="1"? data-rt-italic="1"? data-rt-font="..."?
+//             data-rt-size="..."? data-rt-color="...">text via textContent only</span>
+//       ... one span per run ...
+//     ... one paragraph div per consecutive paragraph ...
+//   </text-region>
+//   <block-container data-rt-block="image">...</block-container>     sibling, NEVER inside a region
+//   <block-container data-rt-block="table">...</block-container>     sibling, NEVER inside a region
+//   <text-region>...</text-region>   a NEW region resumes after an image/table interrupts the run
 //
 // Hostile/unexpected DOM policy (see GATE 2B-RT-EDITOR report item on this): if the export walk
 // encounters a node it did not create (missing/incorrect markers, wrong tag name, or any element
@@ -44,6 +54,13 @@ export const DATA_IMAGE_PATH_ATTR = "data-rt-image-path";
 export const DATA_IMAGE_MIME_ATTR = "data-rt-image-mime";
 export const DATA_IMAGE_SIZE_ATTR = "data-rt-image-size";
 export const DATA_TABLE_ATTR = "data-rt-table";
+// A Text region is a container, never a block itself: it groups one or more consecutive paragraph
+// blocks under ONE shared contenteditable="true" surface so native browser editing (Backspace/
+// Delete across paragraphs, arrow-key flow, cross-paragraph selection/copy, undo) works for free.
+// Image/Table blocks are never placed inside a region — they always sit as siblings, which is what
+// splits the document into separate regions. Purely a DOM/editor concept: never persisted, never
+// part of the RichText V1/V2 block contract.
+export const DATA_TEXT_REGION_ATTR = "data-rt-text-region";
 
 // ---------------- DOM writing (RichText -> editor DOM). createElement/textContent/setAttribute
 // only — never innerHTML, matching the safe renderer's hard rule. ----------------
@@ -78,6 +95,14 @@ export function createRunSpan(doc, run) {
 function createBlockElement(doc) {
   const el = doc.createElement("div");
   el.setAttribute(DATA_BLOCK_ATTR, "paragraph");
+  return el;
+}
+
+// Editability now lives on the shared region, not on each individual paragraph — this is what lets
+// native contenteditable handle Backspace/Delete/arrow-navigation/selection across paragraphs.
+export function createTextRegionElement(doc) {
+  const el = doc.createElement("div");
+  el.setAttribute(DATA_TEXT_REGION_ATTR, "1");
   el.setAttribute("contenteditable", "true");
   return el;
 }
@@ -91,11 +116,19 @@ function appendRunsOrPlaceholder(doc, blockEl, runs) {
 }
 
 // Builds a DocumentFragment for a validated RichText V1 document. Caller is responsible for having
-// already validated `richValue` (the editor's loader does this before calling in).
+// already validated `richValue` (the editor's loader does this before calling in). Consecutive
+// paragraph blocks are grouped under one shared text-region wrapper; an image/table block always
+// flushes the current region (it is never placed inside one) and the next paragraph, if any,
+// starts a fresh region — this is pure DOM grouping, invisible to the flat block array itself.
 export function richTextToDom(doc, richValue) {
   const frag = doc.createDocumentFragment();
+  let openRegion = null;
+  function flushRegion() {
+    if (openRegion) { frag.appendChild(openRegion); openRegion = null; }
+  }
   for (const block of richValue.blocks) {
     if (block.type === "image") {
+      flushRegion();
       const el = doc.createElement("div"); el.setAttribute(DATA_BLOCK_ATTR, "image");
       el.setAttribute(DATA_IMAGE_PATH_ATTR, block.storagePath); el.setAttribute(DATA_IMAGE_MIME_ATTR, block.mimeType); el.setAttribute(DATA_IMAGE_SIZE_ATTR, String(block.size));
       const label = doc.createElement("span"); label.textContent = "Ảnh: ";
@@ -104,6 +137,7 @@ export function richTextToDom(doc, richValue) {
       el.appendChild(label); el.appendChild(alt); el.appendChild(remove); frag.appendChild(el); continue;
     }
     if (block.type === "table") {
+      flushRegion();
       const el = doc.createElement("div"); el.setAttribute(DATA_BLOCK_ATTR, "table"); el.setAttribute(DATA_TABLE_ATTR, "1");
       const table = doc.createElement("table"); const tbody = doc.createElement("tbody");
       block.rows.forEach(row => { const tr=doc.createElement("tr"); row.cells.forEach(cell => { const td=doc.createElement("td"); const input=doc.createElement("div"); input.contentEditable="true"; input.setAttribute("role","textbox"); input.setAttribute("data-rt-cell","1"); appendRunsOrPlaceholder(doc,input,typeof cell === "string" ? (cell ? [{text:cell}] : []) : cell.runs); td.appendChild(input); tr.appendChild(td); }); tbody.appendChild(tr); });
@@ -112,10 +146,12 @@ export function richTextToDom(doc, richValue) {
       const remove=doc.createElement("button"); remove.type="button"; remove.textContent="Xóa bảng"; remove.setAttribute("data-rt-remove-block","1"); el.appendChild(remove);
       frag.appendChild(el); continue;
     }
+    if (!openRegion) openRegion = createTextRegionElement(doc);
     const blockEl = createBlockElement(doc);
     appendRunsOrPlaceholder(doc, blockEl, block.runs);
-    frag.appendChild(blockEl);
+    openRegion.appendChild(blockEl);
   }
+  flushRegion();
   return frag;
 }
 
@@ -129,6 +165,16 @@ export function createEmptyDocumentDom(doc) {
   return richTextToDom(doc, emptyRichTextDocument());
 }
 
+// A single bare empty paragraph div (no region wrapper) — for the rare defensive case where a
+// text region ends up with no paragraph child left (e.g. after an unanticipated native multi-
+// paragraph deletion) and needs exactly one re-inserted into the EXISTING region, as opposed to
+// createEmptyDocumentDom's own fresh region-wrapped fragment used when the whole document is empty.
+export function createEmptyParagraphElement(doc) {
+  const el = createBlockElement(doc);
+  el.appendChild(doc.createElement("br"));
+  return el;
+}
+
 // Legacy plain-text loader: splits on any line-ending variant, one paragraph per line, mirroring
 // richTextToPlainText's own "\n"-joins-paragraphs policy in reverse. A blank line becomes an empty
 // paragraph (runs: []), exactly like any other empty paragraph. Export partitions long lines
@@ -138,6 +184,7 @@ export function legacyPlainTextToDom(doc, legacyText) {
   const frag = doc.createDocumentFragment();
   const lines = String(legacyText ?? "").split(/\r\n|\r|\n/);
   const effectiveLines = lines.length === 0 ? [""] : lines;
+  const region = createTextRegionElement(doc);
   for (const line of effectiveLines) {
     const blockEl = createBlockElement(doc);
     if (line.length === 0) {
@@ -145,8 +192,9 @@ export function legacyPlainTextToDom(doc, legacyText) {
     } else {
       blockEl.appendChild(createRunSpan(doc, { text: line }));
     }
-    frag.appendChild(blockEl);
+    region.appendChild(blockEl);
   }
+  frag.appendChild(region);
   return frag;
 }
 
@@ -230,30 +278,63 @@ function readRunsFromBlock(blockEl) {
   return runs;
 }
 
+// Reads one of the three recognized block kinds from a marked DIV, or returns null for anything
+// else (a bare text-region wrapper, a stray node, etc.) so callers can apply their own hostile-DOM
+// fallback for whatever this does not recognize.
+function readRecognizedBlock(node) {
+  if (!isElement(node) || node.tagName !== "DIV") return null;
+  const kind = node.getAttribute(DATA_BLOCK_ATTR);
+  if (kind === "paragraph") return { type: "paragraph", runs: readRunsFromBlock(node) };
+  if (kind === "image") {
+    return { type:"image", storagePath:node.getAttribute(DATA_IMAGE_PATH_ATTR)||"", alt:node.querySelector('[data-rt-image-alt="1"]')?.value||"", mimeType:node.getAttribute(DATA_IMAGE_MIME_ATTR)||"", size:Number(node.getAttribute(DATA_IMAGE_SIZE_ATTR)||0) };
+  }
+  if (kind === "table") {
+    const rows=Array.from(node.querySelectorAll("tr")).map(tr=>({cells:Array.from(tr.querySelectorAll('[data-rt-cell="1"]')).map(input=>({runs:readRunsFromBlock(input)}))}));
+    return { type:"table", rows };
+  }
+  return null;
+}
+
+// Hostile-DOM fallback for a node that is neither a recognized block nor a text-region container:
+// its whole textContent becomes its own single-run paragraph (or an empty paragraph if blank),
+// rather than being dropped or aborting the export.
+function inertParagraphFromNode(node) {
+  const text = node?.textContent ?? "";
+  return { type: "paragraph", runs: text.length > 0 ? [inertTextRun(text)] : [] };
+}
+
 // Walks the editor root's children into an intermediate { version, blocks } object. Always
 // structurally sound by construction (every value has the right JS type and shape), so the only
-// way normalizeRichTextV1() can throw afterward is a genuine bug in this function itself.
+// way normalizeRichTextV1() can throw afterward is a genuine bug in this function itself. A
+// text-region wrapper is transparent here: it is never itself a block — its paragraph children are
+// flattened straight into the same flat `blocks` array the contract has always used, exactly
+// preserving document order across region/image/table boundaries.
 function domToRichTextIntermediate(rootEl) {
   const blocks = [];
   const children = rootEl.childNodes || [];
   for (const child of children) {
-    if (isElement(child) && child.tagName === "DIV" && child.getAttribute(DATA_BLOCK_ATTR) === "paragraph") {
-      blocks.push({ type: "paragraph", runs: readRunsFromBlock(child) });
+    if (isElement(child) && child.getAttribute(DATA_TEXT_REGION_ATTR) === "1") {
+      const inner = child.childNodes || [];
+      let any = false;
+      for (const grandchild of inner) {
+        const recognized = readRecognizedBlock(grandchild);
+        if (recognized) { blocks.push(recognized); any = true; continue; }
+        if (isElement(grandchild) || isTextNode(grandchild)) {
+          const text = grandchild.textContent ?? "";
+          if (text.length > 0) { blocks.push(inertParagraphFromNode(grandchild)); any = true; }
+        }
+      }
+      // A region that somehow ended up with no usable content still contributes one empty
+      // paragraph, matching the same "never silently drop a structural position" policy as the
+      // whole-document fallback below — this should not occur in practice (_ensureBlockHasContent
+      // always leaves a <br> placeholder behind), but a region must never vanish without a trace.
+      if (!any) blocks.push({ type: "paragraph", runs: [] });
       continue;
     }
-    if (isElement(child) && child.tagName === "DIV" && child.getAttribute(DATA_BLOCK_ATTR) === "image") {
-      blocks.push({ type:"image", storagePath:child.getAttribute(DATA_IMAGE_PATH_ATTR)||"", alt:child.querySelector('[data-rt-image-alt="1"]')?.value||"", mimeType:child.getAttribute(DATA_IMAGE_MIME_ATTR)||"", size:Number(child.getAttribute(DATA_IMAGE_SIZE_ATTR)||0) });
-      continue;
-    }
-    if (isElement(child) && child.tagName === "DIV" && child.getAttribute(DATA_BLOCK_ATTR) === "table") {
-      const rows=Array.from(child.querySelectorAll("tr")).map(tr=>({cells:Array.from(tr.querySelectorAll('[data-rt-cell="1"]')).map(input=>({runs:readRunsFromBlock(input)}))}));
-      blocks.push({ type:"table", rows }); continue;
-    }
-    // Unexpected top-level node (not a recognized block div) — hostile-DOM policy: treat its
-    // whole textContent as its own single-run paragraph (or an empty paragraph if blank), rather
-    // than dropping it or aborting the export.
-    const text = child.textContent ?? "";
-    blocks.push({ type: "paragraph", runs: text.length > 0 ? [inertTextRun(text)] : [] });
+    const recognized = readRecognizedBlock(child);
+    if (recognized) { blocks.push(recognized); continue; }
+    // Unexpected top-level node (not a recognized block div, not a region) — hostile-DOM policy.
+    blocks.push(inertParagraphFromNode(child));
   }
   if (blocks.length === 0) blocks.push({ type: "paragraph", runs: [] });
   return { version: blocks.some(block => block.type !== "paragraph") ? 2 : 1, blocks };

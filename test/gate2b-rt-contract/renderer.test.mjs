@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { renderRichText, FONT_CSS_MAP, SIZE_CSS_MAP, COLOR_CSS_MAP } from "../../rich-text-renderer.mjs";
-import { RICH_TEXT_VERSION } from "../../rich-text-contract.mjs";
+import { RICH_TEXT_VERSION, MAX_BLOCKS } from "../../rich-text-contract.mjs";
 import { FakeDocument } from "./fake-dom.mjs";
 
 function run(text, extra = {}) { return { text, ...extra }; }
@@ -235,7 +235,7 @@ test("E: oversized run text makes the document invalid -> legacy fallback", () =
 });
 
 test("E: oversized block count makes the document invalid -> legacy fallback", () => {
-  const blocks = Array.from({ length: 21 }, () => paragraph(run("x")));
+  const blocks = Array.from({ length: MAX_BLOCKS + 1 }, () => paragraph(run("x")));
   assertWholeDocumentFallback({ version: 1, blocks });
 });
 

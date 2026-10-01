@@ -9,6 +9,7 @@ import { FakeDocument } from "./fake-editor-dom.mjs";
 import {
   DATA_BLOCK_ATTR,
   DATA_RUN_ATTR,
+  DATA_TEXT_REGION_ATTR,
   createRunSpan,
   richTextToDom,
   legacyPlainTextToDom,
@@ -81,7 +82,11 @@ test("4: block DOM shape uses the documented data-rt-block/data-rt-run markers, 
   const doc = new FakeDocument();
   const value = { version: 1, blocks: [{ type: "paragraph", runs: [{ text: "x", bold: true }] }] };
   const root = mount(doc, richTextToDom(doc, value));
-  const blockEl = root.firstChild;
+  // Consecutive paragraph blocks are grouped under a shared text-region wrapper (GATE
+  // 2B-RT-CONTINUOUS); the paragraph itself is one level deeper than the region.
+  const regionEl = root.firstChild;
+  assert.equal(regionEl.getAttribute(DATA_TEXT_REGION_ATTR), "1");
+  const blockEl = regionEl.firstChild;
   assert.equal(blockEl.tagName, "DIV");
   assert.equal(blockEl.getAttribute(DATA_BLOCK_ATTR), "paragraph");
   const runEl = blockEl.firstChild;
@@ -105,7 +110,10 @@ test("6: createEmptyDocumentDom produces a single block with only a <br> placeho
   const doc = new FakeDocument();
   const root = mount(doc, createEmptyDocumentDom(doc));
   assert.equal(root.childNodes.length, 1);
-  const blockEl = root.firstChild;
+  const regionEl = root.firstChild;
+  assert.equal(regionEl.getAttribute(DATA_TEXT_REGION_ATTR), "1");
+  assert.equal(regionEl.childNodes.length, 1);
+  const blockEl = regionEl.firstChild;
   assert.equal(blockEl.childNodes.length, 1);
   assert.equal(blockEl.firstChild.tagName, "BR");
   const result = serializeToRichText(root);

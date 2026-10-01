@@ -1,4 +1,8 @@
-// Targeted regression for the "_insertParagraphBreakAtCaret missing contenteditable" hotfix.
+// Targeted regression for the "_insertParagraphBreakAtCaret missing contenteditable" hotfix, kept
+// current for the continuous-text-region candidate: editability now lives on the shared text
+// region ancestor rather than on each paragraph individually, so these checks ask the functional
+// question ("is this paragraph actually reachable for editing?") via closest('[contenteditable]')
+// rather than asserting exactly which element carries the attribute.
 // Run with a locally installed Playwright package; serves only this repository on loopback.
 // Uses the EXISTING gate2b-rt-editor harness (index.html) — no new throwaway page.
 import assert from "node:assert/strict";
@@ -32,7 +36,7 @@ async function check(name, fn) { await fn(); checks.push(name); console.log("PAS
 function paragraphs() {
   return page.evaluate(() =>
     Array.from(document.querySelectorAll('#mount [data-rt-block="paragraph"]')).map(b => ({
-      contenteditable: b.getAttribute("contenteditable"),
+      contenteditable: b.closest("[contenteditable]")?.getAttribute("contenteditable") ?? null,
       text: b.textContent
     }))
   );
@@ -79,26 +83,38 @@ try {
     assert.equal(editableCount, 20, `expected 20/20 editable, got ${editableCount}/20`);
   });
 
-  // 5, 6, 7. Click/focus first, middle, last paragraph.
-  await check("5. click/focus FIRST paragraph focuses it", async () => {
-    await page.locator('#mount [data-rt-block="paragraph"]').first().click();
-    const active = await page.evaluate(() => document.activeElement?.getAttribute("data-rt-block"));
-    assert.equal(active, "paragraph");
-  });
-  await check("6. click/focus MIDDLE paragraph focuses it", async () => {
+  // 5, 6, 7. Click/focus first, middle, last paragraph. In a true continuous contenteditable
+  // region, document.activeElement is correctly the REGION (same as any real multi-paragraph
+  // editor, e.g. Gmail compose) — the thing that must land in the clicked paragraph is the CARET,
+  // via the live Selection, not activeElement.
+  async function caretLandsInNth(n) {
     const blocks = page.locator('#mount [data-rt-block="paragraph"]');
-    await blocks.nth(9).click();
-    const activeText = await page.evaluate(() => document.activeElement?.textContent);
-    const expectedText = await blocks.nth(9).textContent();
-    assert.equal(activeText, expectedText);
-    const activeAttr = await page.evaluate(() => document.activeElement?.getAttribute("data-rt-block"));
-    assert.equal(activeAttr, "paragraph", "activeElement must be the clicked paragraph block itself, not body");
+    await blocks.nth(n).click();
+    return page.evaluate((index) => {
+      const target = document.querySelectorAll('#mount [data-rt-block="paragraph"]')[index];
+      const active = document.activeElement;
+      const isRegion = active?.hasAttribute("data-rt-text-region");
+      const sel = window.getSelection();
+      const node = sel.rangeCount ? sel.getRangeAt(0).startContainer : null;
+      const caretInside = !!node && !!target && (target === node || target.contains(node));
+      return { isRegion, caretInside };
+    }, n);
+  }
+  await check("5. click/focus FIRST paragraph lands the caret there (region owns activeElement)", async () => {
+    const r = await caretLandsInNth(0);
+    assert.equal(r.isRegion, true);
+    assert.equal(r.caretInside, true);
   });
-  await check("7. click/focus LAST paragraph focuses it", async () => {
-    const blocks = page.locator('#mount [data-rt-block="paragraph"]');
-    await blocks.last().click();
-    const activeAttr = await page.evaluate(() => document.activeElement?.getAttribute("data-rt-block"));
-    assert.equal(activeAttr, "paragraph", "activeElement must be the clicked paragraph block itself, not body");
+  await check("6. click/focus MIDDLE paragraph lands the caret there", async () => {
+    const r = await caretLandsInNth(9);
+    assert.equal(r.isRegion, true);
+    assert.equal(r.caretInside, true);
+  });
+  await check("7. click/focus LAST paragraph lands the caret there", async () => {
+    const count = await page.locator('#mount [data-rt-block="paragraph"]').count();
+    const r = await caretLandsInNth(count - 1);
+    assert.equal(r.isRegion, true);
+    assert.equal(r.caretInside, true);
   });
 
   // 8. Table cells remain editable (unrelated code path, must be unaffected).
@@ -136,6 +152,10 @@ try {
     const blocks = await paragraphs();
     assert.equal(blocks.length, 3);
     for (const b of blocks) assert.equal(b.contenteditable, "true");
+    // The 3 rebuilt paragraphs must also all share the SAME text region (one continuous editing
+    // surface), not three separate ones.
+    const regionCount = await page.evaluate(() => document.querySelectorAll('#mount [data-rt-text-region]').length);
+    assert.equal(regionCount, 1, "3 consecutive paragraphs must be grouped into exactly one text region");
   });
 
   // 11. General Task and Per-group Task share the same fix: two independent editor instances of
@@ -157,7 +177,7 @@ try {
       const dt = new DataTransfer();
       dt.setData("text/plain", "group line 1\ngroup line 2\ngroup line 3");
       editable2.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
-      const blocks = Array.from(mount2.querySelectorAll('[data-rt-block="paragraph"]')).map(b => b.getAttribute("contenteditable"));
+      const blocks = Array.from(mount2.querySelectorAll('[data-rt-block="paragraph"]')).map(b => b.closest("[contenteditable]")?.getAttribute("contenteditable") ?? null);
       editor2.destroy();
       mount2.remove();
       return blocks;

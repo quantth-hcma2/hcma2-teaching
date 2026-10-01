@@ -22,10 +22,12 @@ import { validateRichText, richTextToPlainText, DEFAULT_SIZE, MAX_TABLE_ROWS, MA
 import {
   DATA_BLOCK_ATTR,
   DATA_RUN_ATTR,
+  DATA_TEXT_REGION_ATTR,
   createRunSpan,
   richTextToDom,
   legacyPlainTextToDom,
   createEmptyDocumentDom,
+  createEmptyParagraphElement,
   emptyRichTextDocument,
   serializeToRichText,
   splitRunAtOffset,
@@ -717,9 +719,10 @@ export class RichTextEditor {
       void right;
     }
 
+    // Editability now lives on the shared text region (currentBlock.parentNode), not on each
+    // paragraph individually — the new block inherits it natively from that same region.
     const newBlock = this.doc.createElement("div");
     newBlock.setAttribute(DATA_BLOCK_ATTR, "paragraph");
-    newBlock.setAttribute("contenteditable", "true");
 
     // Move every sibling AFTER the split point into the new block.
     let moveStart;
@@ -766,10 +769,17 @@ export class RichTextEditor {
     return null;
   }
 
+  // Falls back to the first actual paragraph/cell block (never a text-region container, which is
+  // not itself a valid Range-anchor block for the callers of this method) when there is no live
+  // selection to anchor to.
+  _firstBlock() {
+    return this.editableEl.querySelector(`[${DATA_BLOCK_ATTR}="paragraph"],[data-rt-cell="1"]`) || this.editableEl.firstChild;
+  }
+
   _currentBlock() {
     const sel = this._getSelection();
-    if (!sel || sel.rangeCount === 0) return this.editableEl.firstChild;
-    return this._blockAncestor(sel.getRangeAt(0).startContainer) || this.editableEl.firstChild;
+    if (!sel || sel.rangeCount === 0) return this._firstBlock();
+    return this._blockAncestor(sel.getRangeAt(0).startContainer) || this._firstBlock();
   }
 
   // ---------------- Input normalization (bare-text-node wrapping, IME-safe) ----------------
@@ -792,6 +802,14 @@ export class RichTextEditor {
       this.editableEl.appendChild(createEmptyDocumentDom(this.doc));
     }
     for (const block of blocks) this._normalizeBlock(block);
+    // Defensive only: native multi-paragraph Backspace/Delete across a selection could in principle
+    // remove every paragraph out of a text region. Re-arm any region left with none, the same way
+    // the whole-editor fallback above re-arms a document left with no paragraph anywhere.
+    for (const region of this.editableEl.querySelectorAll(`[${DATA_TEXT_REGION_ATTR}="1"]`)) {
+      if (!region.querySelector(`[${DATA_BLOCK_ATTR}="paragraph"]`)) {
+        region.appendChild(createEmptyParagraphElement(this.doc));
+      }
+    }
   }
 
   _normalizeBlock(block) {

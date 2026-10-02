@@ -562,13 +562,14 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import {
   getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, getDoc, getDocs,
-  query, where, orderBy, limit, onSnapshot, serverTimestamp, Timestamp, writeBatch, increment, deleteField,
+  query, where, orderBy, limit, startAfter, onSnapshot, serverTimestamp, Timestamp, writeBatch, increment, deleteField,
   getCountFromServer, collectionGroup, runTransaction, connectFirestoreEmulator
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 import {
   getStorage, ref as storageRef, uploadBytes, getBytes, deleteObject, connectStorageEmulator
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 import { cloneRichTextImages, rollbackGroupAssets } from "./group-clone.mjs";
+import { createTrashQueryContract, unifiedTrashView } from "./trash-query-contract.mjs";
 import { normalizeStudentName, buildGroupRosterWorkbook } from "./group-roster.mjs";
 // Gate 1B.1 — reader-only. No document in this shape exists in production yet; see
 // docs/READER-CONTRACT.md. This import is additive: every legacy session (i.e. every real
@@ -4769,9 +4770,19 @@ async function cloneSessionToWizard(sessionId){
     window.location.hash="#/wizard";toast("Đã nhân bản vào màn hình Tạo tương tác. Anh có thể đổi tên, lớp và câu hỏi trước khi lưu.","ok");
   }catch(e){toast(mapError(e),"err");console.error(e);}
 }
-async function teacherTrash(c){
-  c.innerHTML=`<div class="section-title"><div><h2>🗑️ Thùng rác</h2><p class="mut">Các phiên đã chuyển vào đây có thể khôi phục hoặc xóa vĩnh viễn.</p></div></div>
+async function restoreInteractionSession(id){
+  const ref=doc(db,"sessions",id),snap=await getDoc(ref);
+  if(!snap.exists()) throw {code:"not-found"};
+  if(snap.data().ownerId!==STATE.user.uid || !snap.data().deletedAt) throw {code:"permission-denied"};
+  await updateDoc(ref,{deletedAt:null,deletedBy:null,updatedAt:serverTimestamp()});
+  await logAudit("restore","session",id);
+}
+
+// Existing Interaction-local trash remains reachable from Interaction history for parity.
+async function teacherInteractionTrash(c){
+  c.innerHTML=`<button class="btn btn-sm btn-ghost" id="interactionTrashBack">← Tạo tương tác</button><div class="section-title"><div><h2>🗑️ Thùng rác phiên tương tác</h2><p class="mut">Giao diện cũ được giữ trong giai đoạn kiểm tra tương đương.</p></div></div>
     <div class="card"><div id="trashTable" class="table-wrap"><div class="mut">Đang tải…</div></div></div>`;
+  $("#interactionTrashBack").onclick=()=>teacherHistory(c);
   try{
     const snap=await getDocs(query(collection(db,"sessions"),where("ownerId","==",STATE.user.uid),orderBy("createdAt","desc"),limit(300)));
     const list=snap.docs.map(d=>({id:d.id,...d.data()})).filter(x=>x.deletedAt);
@@ -4780,21 +4791,91 @@ async function teacherTrash(c){
       <td>${esc(s.title||"—")}</td><td>${fmtDateShort(s.createdAt)}</td><td>${fmtDateShort(s.deletedAt)}</td>
       <td class="flex gap-8" style="flex-wrap:wrap"><button class="btn btn-sm btn-outline" data-restore="${s.id}">KHÔI PHỤC</button>
       <button class="btn btn-sm btn-danger" data-hard="${s.id}" data-title="${esc(s.title||"")}">XÓA VĨNH VIỄN</button></td></tr>`).join("")}</tbody></table>`;
-    $$("[data-restore]").forEach(b=>b.onclick=async()=>{try{await updateDoc(doc(db,"sessions",b.dataset.restore),{deletedAt:null,deletedBy:null,updatedAt:serverTimestamp()});await logAudit("restore","session",b.dataset.restore);toast("Đã khôi phục phiên.","ok");teacherTrash(c);}catch(e){toast(mapError(e),"err");}});
-    $$("[data-hard]").forEach(b=>b.onclick=()=>confirmAndDeleteSession(b.dataset.hard,b.dataset.title,async()=>{await logAudit("delete_permanent","session",b.dataset.hard,{title:b.dataset.title});teacherTrash(c);}));
-  }catch(e){$("#trashTable").innerHTML=errorBlock(e,()=>teacherTrash(c));}
+    $$("[data-restore]").forEach(b=>b.onclick=async()=>{try{await restoreInteractionSession(b.dataset.restore);toast("Đã khôi phục phiên.","ok");teacherInteractionTrash(c);}catch(e){toast(mapError(e),"err");}});
+    $$("[data-hard]").forEach(b=>b.onclick=()=>confirmAndDeleteSession(b.dataset.hard,b.dataset.title,async()=>{await logAudit("delete_permanent","session",b.dataset.hard,{title:b.dataset.title});teacherInteractionTrash(c);}));
+  }catch(e){$("#trashTable").innerHTML=errorBlock(e,()=>teacherInteractionTrash(c));}
+}
+
+async function teacherTrash(c){
+  const contract=createTrashQueryContract({collection,query,where,orderBy,limit,startAfter,getDocs});
+  const fresh=()=>({items:[],cursor:null,hasMore:false,error:null,loaded:false});
+  const pages={interaction:fresh(),group:fresh()};
+  let filter="all",busy=false,visibleCount=20;
+  c.innerHTML=`<div id="unifiedTrash"><div class="section-title"><div><h2>THÙNG RÁC</h2><p class="mut">Phiên tương tác và hoạt động thảo luận nhóm đã xóa. Dữ liệu gốc vẫn được giữ.</p></div></div>
+    <div class="flex gap-8" id="unifiedTrashFilters" role="group" aria-label="Lọc thùng rác" style="flex-wrap:wrap">
+      <button class="btn btn-sm" data-trash-filter="all">Tất cả</button>
+      <button class="btn btn-sm btn-outline" data-trash-filter="interaction">Tạo tương tác</button>
+      <button class="btn btn-sm btn-outline" data-trash-filter="group">Thảo luận nhóm</button>
+    </div><div class="card mt-14"><div id="unifiedTrashList" class="table-wrap">Đang tải…</div>
+    <button class="btn btn-sm btn-outline mt-12 hidden" id="unifiedTrashMore">XEM THÊM</button></div></div>`;
+  const root=c.querySelector("#unifiedTrash");
+  const alive=()=>root.isConnected && c===document.querySelector("#mainContent");
+  const kinds=()=>filter==="all"?["interaction","group"]:[filter];
+  const render=()=>{
+    if(!alive()) return;
+    root.querySelectorAll("[data-trash-filter]").forEach(b=>{
+      b.classList.toggle("btn-outline",b.dataset.trashFilter!==filter);
+      b.setAttribute("aria-pressed",String(b.dataset.trashFilter===filter));
+    });
+    const view=unifiedTrashView(pages,filter),list=view.items.slice(0,visibleCount),failed=view.failed;
+    const warning=failed.length?`<div class="card" role="alert">Không tải được ${failed.map(k=>k==="interaction"?"Tạo tương tác":"Thảo luận nhóm").join(" và ")}. Kết quả còn lại vẫn hiển thị. <button class="btn btn-sm btn-outline" id="unifiedTrashRetry">THỬ LẠI</button></div>`:"";
+    root.querySelector("#unifiedTrashList").innerHTML=warning+(!list.length?
+      `<div class="empty-state"><div class="ic">🗑️</div>${failed.length?"Chưa có kết quả từ nguồn đã tải thành công.":"Thùng rác trống."}</div>`:
+      `<table><thead><tr><th>Loại</th><th>Tên</th><th>Ngày xóa</th><th>Người xóa</th><th>Trước khi xóa</th><th></th></tr></thead><tbody>${list.map(x=>`<tr>
+        <td>${x.module==="interaction"?"Tạo tương tác":"Thảo luận nhóm"}</td><td><b>${esc(x.title)}</b></td>
+        <td>${fmtDate(x.deletedAt)}</td><td>${x.deletedBy===STATE.user.uid?"Bạn":esc(x.deletedBy||"—")}</td>
+        <td>${esc(x.originalLocation||"—")}${x.module==="group"&&x.originalStatus?` · ${esc(({draft:"Bản nháp",open:"Đang mở",closed:"Đã đóng"})[x.originalStatus]||"—")}`:""}</td>
+        <td><button class="btn btn-sm btn-outline" data-unified-restore="${esc(x.module+":"+x.sourceId)}" ${x.restoreCapability.allowed?"":"disabled"}>KHÔI PHỤC</button></td>
+      </tr>`).join("")}</tbody></table>`);
+    root.querySelector("#unifiedTrashMore").classList.toggle("hidden",!(view.items.length>visibleCount||view.hasMore));
+    root.querySelector("#unifiedTrashRetry")?.addEventListener("click",()=>load(true,failed));
+    root.querySelectorAll("[data-unified-restore]").forEach(b=>b.onclick=async()=>{
+      const [kind,id]=b.dataset.unifiedRestore.split(":");
+      if(!confirm(`Khôi phục ${kind==="interaction"?"phiên tương tác":"hoạt động nhóm"} này?`)) return;
+      b.disabled=true;
+      try{
+        if(kind==="interaction") await restoreInteractionSession(id);
+        else await restoreGroupActivity(id);
+        toast("Đã khôi phục.","ok");
+        pages[kind]=fresh();await load(false,[kind]);
+      }catch(e){b.disabled=false;toast(mapError(e),"err");}
+    });
+  };
+  async function load(reset=false,selected=kinds()){
+    if(busy||!alive()) return;
+    busy=true;
+    if(reset) for(const kind of selected) pages[kind]=fresh();
+    root.querySelector("#unifiedTrashMore").disabled=true;
+    if(!pages.interaction.loaded&&!pages.group.loaded) root.querySelector("#unifiedTrashList").textContent="Đang tải…";
+    await Promise.all(selected.map(async kind=>{
+      const page=pages[kind];
+      try{
+        while(!page.error && (!page.loaded||page.hasMore) && page.items.length<visibleCount){
+          const next=await contract[kind]({db,ownerId:STATE.user.uid,pageSize:20,cursor:page.cursor});
+          page.items.push(...next.items);page.cursor=next.cursor;page.hasMore=next.hasMore;page.loaded=true;
+        }
+        page.error=null;
+      }catch(e){page.error=e;page.loaded=true;}
+    }));
+    busy=false;
+    if(alive()){root.querySelector("#unifiedTrashMore").disabled=false;render();}
+  }
+  root.querySelectorAll("[data-trash-filter]").forEach(b=>b.onclick=()=>{filter=b.dataset.trashFilter;visibleCount=20;render();});
+  root.querySelector("#unifiedTrashMore").onclick=()=>{visibleCount+=20;load(false,kinds());};
+  await load(false,["interaction","group"]);
 }
 
 async function teacherHistory(c,routeGeneration=teacherRouteGeneration){
   c.innerHTML = `<div class="flex-between" style="gap:12px;flex-wrap:wrap;"><div><h2 style="margin-bottom:4px;">Tạo tương tác</h2>
     <p class="mut" style="margin:0;">Tạo phiên mới hoặc quản lý các phiên tương tác hiện có.</p></div>
-    <button class="btn btn-lg" id="btnCreateInteractionSession">➕ TẠO PHIÊN TƯƠNG TÁC</button></div>
+    <div class="flex gap-8" style="flex-wrap:wrap"><button class="btn btn-sm btn-outline" id="btnInteractionLocalTrash">THÙNG RÁC PHIÊN</button><button class="btn btn-lg" id="btnCreateInteractionSession">➕ TẠO PHIÊN TƯƠNG TÁC</button></div></div>
     <h3 class="mt-20" style="margin-bottom:4px;">LỊCH SỬ / KẾT QUẢ</h3>
     <p class="mut">Có thể mở lại kết quả, điều khiển phiên hoặc chuyển các phiên không còn cần thiết vào Thùng rác. Phiên đang mở phải được đóng trước khi xóa.</p>
     <div class="card"><div class="flex-between mt-8"><input type="text" id="hSearch" placeholder="Tìm theo tên hoạt động…" style="max-width:280px;">
     <select id="hFilter"><option value="">Tất cả trạng thái</option><option value="draft">Nháp</option><option value="ready">Sẵn sàng</option><option value="open">Đang mở</option><option value="closed">Đã đóng</option><option value="archived">Lưu trữ</option></select></div>
     <div class="table-wrap mt-14" id="hTable"><div class="center-screen" style="min-height:120px;"><span class="spinner"></span></div></div></div>`;
   $("#btnCreateInteractionSession").onclick = ()=>{ window.location.hash="#/wizard"; };
+  $("#btnInteractionLocalTrash").onclick = ()=>teacherInteractionTrash(c);
   try{
     const classMap = await loadTeacherClassMap();
     if(routeGeneration!==teacherRouteGeneration || c!==$("#mainContent")) return;

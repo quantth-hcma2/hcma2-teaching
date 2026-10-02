@@ -65,6 +65,13 @@ export const SPACING_CSS_MAP = Object.freeze({ compact: "0.15em", normal: "0.5em
 // Fixed px-per-level multiplier applied to the bounded indent LEVEL (an integer 0..MAX_INDENT_LEVEL
 // from the contract) — never arbitrary CSS or a stored pixel value.
 export const INDENT_PX_PER_LEVEL = 24;
+// GATE RICHTEXT-V3-QA-R2: fixed width of the gutter a bullet/number marker sits in, comfortably
+// fitting "•" or a two-digit "80." at this module's font sizes. Shared by both the editor
+// (absolute-positioned marker + matching padding-left — see rich-text-editor-serializer.mjs's
+// createListMarkerElement/renormalizeListMarkers) and this renderer, so a list item's marker
+// gutter is identical in both. Deliberately equal to one indent level, matching how a document
+// editor's first indent level customarily lines up with its own list-marker column.
+export const LIST_MARKER_GUTTER_PX = INDENT_PX_PER_LEVEL;
 
 function resolveDoc(explicitDoc) {
   if (explicitDoc) return explicitDoc;
@@ -190,23 +197,29 @@ export function renderRichText(container, richValue, legacyPlainText, doc, optio
       const listKey = `${block.list}|${indent}`;
       listCounter = listKey === prevListKey ? listCounter + 1 : 1;
       prevListKey = listKey;
-      p.style.display = "flex";
+      // GATE RICHTEXT-V3-QA-R2 root cause fix: a flex (or any block-formatting) container
+      // blockifies EVERY direct child per the CSS display spec, including each inline run span —
+      // turning normal flowing text into independent block boxes that can visibly break/wrap
+      // between formatting runs. The marker must therefore be taken OUT of flow entirely
+      // (position:absolute in a padding-left gutter) rather than ever sharing a flex/grid/block
+      // formatting context with the run spans, which stay plain, unmodified inline content exactly
+      // as they are for a non-list paragraph — this is the one and only change from that case.
+      p.style.position = "relative";
+      p.style.paddingLeft = `${LIST_MARKER_GUTTER_PX}px`;
       const marker = d.createElement("span");
       marker.className = "rt-list-marker";
-      marker.style.flex = "0 0 auto";
-      marker.style.marginRight = "0.5em";
+      marker.style.position = "absolute";
+      marker.style.left = "0";
+      marker.style.top = "0";
+      marker.style.width = `${LIST_MARKER_GUTTER_PX}px`;
       marker.style.userSelect = "none";
       // Marker text is always one of a fixed bullet glyph or a computed small integer — never
       // derived from stored content, so textContent here carries nothing user-authored.
       marker.textContent = block.list === "bullet" ? "•" : `${listCounter}.`;
       p.appendChild(marker);
-      const textWrap = d.createElement("span");
-      for (const run of block.runs) textWrap.appendChild(renderRun(run, d));
-      p.appendChild(textWrap);
-    } else {
-      for (const run of block.runs) {
-        p.appendChild(renderRun(run, d));
-      }
+    }
+    for (const run of block.runs) {
+      p.appendChild(renderRun(run, d));
     }
     container.appendChild(p);
   }

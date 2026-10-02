@@ -43,7 +43,7 @@
 // else, so a hostile/oversized result still fails closed rather than being silently accepted.
 
 import { validateRichText, normalizeRichText, DEFAULT_SIZE, MAX_RUN_TEXT_LENGTH } from "./rich-text-contract.mjs";
-import { FONT_CSS_MAP, SIZE_CSS_MAP, COLOR_CSS_MAP, ALIGN_CSS_MAP, LINE_SPACING_CSS_MAP, SPACING_CSS_MAP, INDENT_PX_PER_LEVEL } from "./rich-text-renderer.mjs";
+import { FONT_CSS_MAP, SIZE_CSS_MAP, COLOR_CSS_MAP, ALIGN_CSS_MAP, LINE_SPACING_CSS_MAP, SPACING_CSS_MAP, INDENT_PX_PER_LEVEL, LIST_MARKER_GUTTER_PX } from "./rich-text-renderer.mjs";
 
 export const DATA_BLOCK_ATTR = "data-rt-block";
 export const DATA_RUN_ATTR = "data-rt-run";
@@ -218,13 +218,26 @@ export function effectiveBlockSpacing(blockEl) {
 // renormalizeListMarkers) with contenteditable="false" so it is an atomic, non-editable island; its
 // text is always either the fixed bullet glyph or a small computed integer, never derived from
 // stored/authored content.
+//
+// GATE RICHTEXT-V3-QA-R2 root cause + fix: this used to rely on `display:flex` on the paragraph
+// block to lay the marker out beside the text. CSS blockifies EVERY direct child of a flex (or
+// grid) container — including every inline run span — so each formatting run became its own
+// independent block-level flex item instead of flowing text, which is exactly why a sentence split
+// across differently-formatted runs could visually fragment/wrap between runs once Bullet/Number
+// was applied (confirmed empirically: run spans measured display:inline before, display:block
+// after). The marker is now taken OUT of flow entirely via position:absolute in a reserved
+// padding-left gutter, so the paragraph's `display` is never touched and every run span remains
+// plain, unmodified inline content at all times — list or not — exactly matching
+// rich-text-renderer.mjs's own identical fix.
 export function createListMarkerElement(doc, markerText) {
   const marker = doc.createElement("span");
   marker.setAttribute(DATA_LIST_MARKER_ATTR, "1");
   marker.setAttribute("contenteditable", "false");
+  marker.style.position = "absolute";
+  marker.style.left = "0";
+  marker.style.top = "0";
+  marker.style.width = `${LIST_MARKER_GUTTER_PX}px`;
   marker.style.userSelect = "none";
-  marker.style.marginRight = "0.5em";
-  marker.style.flex = "0 0 auto";
   marker.textContent = markerText;
   return marker;
 }
@@ -249,7 +262,8 @@ export function renormalizeListMarkers(doc, rootEl) {
       if (list !== "bullet" && list !== "number") {
         prevKey = null; counter = 0;
         if (existingMarker) block.removeChild(existingMarker);
-        block.style.display = "";
+        block.style.position = "";
+        block.style.paddingLeft = "";
         continue;
       }
       const indent = Number(block.getAttribute(DATA_INDENT_ATTR) || "0");
@@ -263,7 +277,11 @@ export function renormalizeListMarkers(doc, rootEl) {
       } else {
         block.insertBefore(createListMarkerElement(doc, markerText), block.firstChild);
       }
-      block.style.display = "flex";
+      // See createListMarkerElement's doc comment: the marker is positioned (never flexed) within
+      // this reserved gutter, so every run span's `display` is never touched — this `position`/
+      // `paddingLeft` pair on the BLOCK is the only paragraph-level style this feature ever sets.
+      block.style.position = "relative";
+      block.style.paddingLeft = `${LIST_MARKER_GUTTER_PX}px`;
     }
   }
   // Manual childNodes walk rather than querySelectorAll — this runs against both the real DOM AND
@@ -437,9 +455,19 @@ function inertTextRun(text) {
 
 // Merges adjacent unformatted runs so the hostile-DOM fallback path does not inflate run counts
 // (e.g. several consecutive stray text nodes) beyond what a human author would ever produce.
+//
+// GATE RICHTEXT-V3-QA-R2: this is the actual root cause of the owner's "Underline a middle
+// phrase -> Bullet" reproduction losing its underline entirely — found while investigating that
+// case. This `isPlain` check used to omit underline/strike, so a genuinely-formatted
+// underline-only or strike-only run (bordered by plain text, exactly the owner's "select a few
+// words inside a sentence" workflow) was wrongly classified as "plain" and silently merged into
+// its plain neighbor, losing the formatting — on EVERY read (used by readRunsFromBlock for every
+// recognized run, not only the hostile-DOM fallback), independent of any list action. Reproduced
+// on the unmodified QA-R1 baseline (c0546f3), confirming this predates and is unrelated to Issue B
+// itself; fixed here alongside Issue B because the owner's own reproduction workflow surfaced it.
 function pushRunMerged(runs, run) {
   const prev = runs[runs.length - 1];
-  const isPlain = (r) => !r.bold && !r.italic && !r.font && r.size === undefined && !r.color;
+  const isPlain = (r) => !r.bold && !r.italic && !r.underline && !r.strike && !r.font && r.size === undefined && !r.color;
   if (prev && isPlain(prev) && isPlain(run)) {
     prev.text += run.text;
   } else {

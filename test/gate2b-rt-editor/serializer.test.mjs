@@ -778,3 +778,61 @@ test("55: every alignment/list/indent/lineSpacing/spacing token round-trips thro
   assert.equal(result.ok, true);
   assert.deepEqual(result.value, value);
 });
+
+// ===================================================================================
+// 56+: GATE RICHTEXT-V3-QA-R2 — pushRunMerged's "isPlain" bare-merge check must account for
+// underline/strike (found while investigating the owner's Issue B reproduction: an underline-only
+// or strike-only run bordered by plain text was silently merged away, losing its formatting, on
+// EVERY read — not only via the hostile-DOM fallback, but readRunsFromBlock's normal per-span
+// path too, independent of any list action).
+// ===================================================================================
+
+test("56: an underline-only run bordered by plain text keeps its underline — does not get merged away as if it were plain", () => {
+  const doc = new FakeDocument();
+  const value = { version: 1, blocks: [{ type: "paragraph", runs: [
+    { text: "a " }, { text: "b", underline: true }, { text: " c" }
+  ] }] };
+  const root = mount(doc, richTextToDom(doc, value));
+  const result = serializeToRichText(root);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value, value);
+});
+
+test("57: a strike-only run bordered by plain text keeps its strike — does not get merged away as if it were plain", () => {
+  const doc = new FakeDocument();
+  const value = { version: 1, blocks: [{ type: "paragraph", runs: [
+    { text: "a " }, { text: "b", strike: true }, { text: " c" }
+  ] }] };
+  const root = mount(doc, richTextToDom(doc, value));
+  const result = serializeToRichText(root);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value, value);
+});
+
+test("58: bold then underline on two different phrases, separated by plain text, both survive independently", () => {
+  const doc = new FakeDocument();
+  const value = { version: 1, blocks: [{ type: "paragraph", runs: [
+    { text: "a " }, { text: "b", bold: true }, { text: " c " }, { text: "d", underline: true }, { text: " e" }
+  ] }] };
+  const root = mount(doc, richTextToDom(doc, value));
+  const result = serializeToRichText(root);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value, value);
+});
+
+test("59: two adjacent runs that are BOTH genuinely plain still merge (the fix must not stop legitimate plain-run merging)", () => {
+  const doc = new FakeDocument();
+  const el = doc.createElement("div");
+  const region = doc.createElement("div");
+  region.setAttribute(DATA_TEXT_REGION_ATTR, "1");
+  const block = doc.createElement("div");
+  block.setAttribute(DATA_BLOCK_ATTR, "paragraph");
+  block.appendChild(createRunSpan(doc, { text: "a " }));
+  block.appendChild(createRunSpan(doc, { text: "b" })); // two separately-created but equally plain spans
+  region.appendChild(block);
+  el.appendChild(region);
+  const result = serializeToRichText(el);
+  assert.equal(result.ok, true);
+  assert.equal(result.value.blocks[0].runs.length, 1, "two adjacent plain runs must still merge into one");
+  assert.equal(result.value.blocks[0].runs[0].text, "a b");
+});

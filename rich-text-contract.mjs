@@ -12,14 +12,18 @@
 //   {
 //     version: 1,
 //     blocks: [
-//       { type: "paragraph", align?, runs: [ { text: "...", bold, italic, font, size, color } ] }
+//       { type: "paragraph", align?, list?, indent?, lineSpacing?, spacing?,
+//         runs: [ { text: "...", bold, italic, underline, strike, font, size, color } ] }
 //     ]
 //   }
 //
-// V1 supports ONLY: paragraph blocks, text runs, bold, italic, a font token, a size token, a color
-// token, and a paragraph-level alignment token (`align`, optional — "left" is the implicit default
-// and is never itself stored). No links, no HTML, no images, no tables, no lists, no arbitrary
-// CSS/attributes.
+// V1 supports: paragraph blocks, text runs (bold, italic, underline, strike, a font token, a size
+// token, a color token), and paragraph-level formatting (an alignment token, list membership
+// ["bullet"|"number"], a bounded indent level, a line-spacing token, a paragraph-spacing token —
+// every one optional, with its own implicit default never itself stored, so no existing document
+// needs migration). No links, no arbitrary HTML/CSS, no real nested <ul>/<ol> markup — list
+// membership is a flat per-paragraph semantic flag, not a tree structure. No images/tables at this
+// level (those are separate V2-only block types — see isValidV2Block).
 
 export const RICH_TEXT_VERSION = 1;
 export const RICH_TEXT_VERSION_V2 = 2;
@@ -75,6 +79,25 @@ export const COLOR_TOKENS = Object.freeze(["default", "red", "blue", "green", "o
 // field on an existing (pre-this-feature) paragraph means left, so no production document needs
 // migration.
 export const ALIGN_TOKENS = Object.freeze(["left", "center", "right", "justify"]);
+// GATE RICHTEXT-V3: every field below follows the exact same "optional, structured semantic
+// token, absent means the pre-existing default rendering" convention as ALIGN_TOKENS above — none
+// of them ever carry arbitrary HTML, CSS, or numeric pixel values. No existing document needs
+// migration; every new field is additive and ignorable by old reasoning about old documents.
+export const LIST_TOKENS = Object.freeze(["bullet", "number"]);
+// A bounded semantic indent LEVEL (not arbitrary CSS padding), applying to any paragraph (list
+// item or not) — mirrors how Word lets a plain paragraph be indented independent of list
+// membership. 0 is the implicit default (no indent) and is never itself persisted; levels 1..4 are
+// the only persisted values. Chosen maximum: 4 nested levels is ample for realistic teaching
+// content (a task description with at most a few levels of sub-points) without inviting runaway
+// nesting on a touch/classroom device where deeply nested structure becomes hard to read or edit.
+export const MAX_INDENT_LEVEL = 4;
+// Teacher-friendly line-spacing presets. String tokens (not floats) specifically so "1.15" is
+// never subject to binary floating-point comparison surprises (1.15 is not exactly representable
+// as an IEEE754 double) — comparison here is always exact string equality against a fixed list.
+export const LINE_SPACING_TOKENS = Object.freeze(["1", "1.15", "1.5", "2"]);
+// Paragraph-spacing presets (space after a paragraph). "normal" is the implicit default (matches
+// today's existing hardcoded spacing exactly) and is never itself persisted.
+export const SPACING_TOKENS = Object.freeze(["compact", "normal", "wide"]);
 export const MAX_TABLE_ROWS = 10;
 export const MAX_TABLE_COLUMNS = 8;
 export const MAX_TABLE_CELL_LENGTH = 1000;
@@ -83,14 +106,17 @@ export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const IMAGE_MIME_TYPES = Object.freeze(["image/jpeg", "image/png", "image/webp"]);
 
 const TOP_LEVEL_KEYS = new Set(["version", "blocks"]);
-const BLOCK_KEYS = new Set(["type", "runs", "align"]);
+const BLOCK_KEYS = new Set(["type", "runs", "align", "list", "indent", "lineSpacing", "spacing"]);
 const IMAGE_BLOCK_KEYS = new Set(["type", "storagePath", "alt", "mimeType", "size"]);
 const TABLE_BLOCK_KEYS = new Set(["type", "rows"]);
-const RUN_KEYS = new Set(["text", "bold", "italic", "font", "size", "color"]);
+const RUN_KEYS = new Set(["text", "bold", "italic", "underline", "strike", "font", "size", "color"]);
 const FONT_TOKEN_SET = new Set(FONT_TOKENS);
 const SIZE_TOKEN_SET = new Set(SIZE_TOKENS);
 const COLOR_TOKEN_SET = new Set(COLOR_TOKENS);
 const ALIGN_TOKEN_SET = new Set(ALIGN_TOKENS);
+const LIST_TOKEN_SET = new Set(LIST_TOKENS);
+const LINE_SPACING_TOKEN_SET = new Set(LINE_SPACING_TOKENS);
+const SPACING_TOKEN_SET = new Set(SPACING_TOKENS);
 
 function isPlainObject(v) {
   return v !== null && typeof v === "object" && !Array.isArray(v);
@@ -133,6 +159,8 @@ function isValidRun(run) {
   if (codePointLength(run.text) > MAX_RUN_TEXT_LENGTH) return false;
   if ("bold" in run && typeof run.bold !== "boolean") return false;
   if ("italic" in run && typeof run.italic !== "boolean") return false;
+  if ("underline" in run && typeof run.underline !== "boolean") return false;
+  if ("strike" in run && typeof run.strike !== "boolean") return false;
   if ("font" in run && !FONT_TOKEN_SET.has(run.font)) return false;
   if ("size" in run && !SIZE_TOKEN_SET.has(run.size)) return false;
   if ("color" in run && !COLOR_TOKEN_SET.has(run.color)) return false;
@@ -146,6 +174,10 @@ function isValidBlock(block) {
   if (!Array.isArray(block.runs)) return false;
   if (block.runs.length > MAX_RUNS_PER_BLOCK) return false;
   if ("align" in block && !ALIGN_TOKEN_SET.has(block.align)) return false;
+  if ("list" in block && !LIST_TOKEN_SET.has(block.list)) return false;
+  if ("indent" in block && !(Number.isInteger(block.indent) && block.indent >= 1 && block.indent <= MAX_INDENT_LEVEL)) return false;
+  if ("lineSpacing" in block && !LINE_SPACING_TOKEN_SET.has(block.lineSpacing)) return false;
+  if ("spacing" in block && !SPACING_TOKEN_SET.has(block.spacing)) return false;
   return block.runs.every(isValidRun);
 }
 
@@ -290,12 +322,15 @@ function normalizeBlock(block) {
   if (block.type !== "paragraph") throw new TypeError("normalizeRichTextV1: unsupported block type");
   if (!Array.isArray(block.runs)) throw new TypeError("normalizeRichTextV1: block.runs must be an array");
   const out = { type: "paragraph", runs: block.runs.map(normalizeRun) };
-  // "left" (and any other non-string/absent value) stays unrepresented — matching bold/italic/
-  // font/size/color's own "absent means default" canonical form. Does NOT enforce the ALIGN_TOKENS
-  // allowlist itself (same split as the rest of this function — isValidBlock's job, called
-  // separately): an invalid string here is passed through unchanged for validateRichTextV1 to
-  // reject fail-closed downstream, exactly like `color`/`font` above.
+  // Every field below stays unrepresented at its default — matching bold/italic/font/size/color's
+  // own "absent means default" canonical form. None of this enforces its own allowlist (same split
+  // as the rest of this function — isValidBlock's job, called separately): an invalid value here is
+  // passed through unchanged for validateRichTextV1 to reject fail-closed downstream.
   if (typeof block.align === "string" && block.align !== "left") out.align = block.align;
+  if (typeof block.list === "string" && block.list) out.list = block.list;
+  if (typeof block.indent === "number" && block.indent !== 0) out.indent = block.indent;
+  if (typeof block.lineSpacing === "string" && block.lineSpacing !== "1") out.lineSpacing = block.lineSpacing;
+  if (typeof block.spacing === "string" && block.spacing !== "normal") out.spacing = block.spacing;
   return out;
 }
 
@@ -305,6 +340,8 @@ function normalizeRun(run) {
   const out = { text: run.text };
   if (run.bold === true) out.bold = true;
   if (run.italic === true) out.italic = true;
+  if (run.underline === true) out.underline = true;
+  if (run.strike === true) out.strike = true;
   if (typeof run.font === "string" && run.font !== "default") out.font = run.font;
   if (typeof run.size === "number" && run.size !== DEFAULT_SIZE) out.size = run.size;
   if (typeof run.color === "string" && run.color !== "default") out.color = run.color;

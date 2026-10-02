@@ -57,6 +57,14 @@ export const ALIGN_CSS_MAP = Object.freeze({
   right: "right",
   justify: "justify"
 });
+// GATE RICHTEXT-V3: same fixed-map-only policy for the new paragraph-level formatting tokens.
+export const LINE_SPACING_CSS_MAP = Object.freeze({ "1": null, "1.15": "1.15", "1.5": "1.5", "2": "2" });
+// "normal" matches this module's own pre-existing hardcoded paragraph margin exactly (see the
+// `p.style.margin` default below) — choosing it is a genuine no-op, not a lookup coincidence.
+export const SPACING_CSS_MAP = Object.freeze({ compact: "0.15em", normal: "0.5em", wide: "1.25em" });
+// Fixed px-per-level multiplier applied to the bounded indent LEVEL (an integer 0..MAX_INDENT_LEVEL
+// from the contract) — never arbitrary CSS or a stored pixel value.
+export const INDENT_PX_PER_LEVEL = 24;
 
 function resolveDoc(explicitDoc) {
   if (explicitDoc) return explicitDoc;
@@ -84,6 +92,10 @@ function renderRun(run, doc) {
   span.textContent = run.text;
   if (run.bold === true) span.style.fontWeight = "700";
   if (run.italic === true) span.style.fontStyle = "italic";
+  const decorations = [];
+  if (run.underline === true) decorations.push("underline");
+  if (run.strike === true) decorations.push("line-through");
+  if (decorations.length > 0) span.style.textDecoration = decorations.join(" ");
   if (run.font && Object.prototype.hasOwnProperty.call(FONT_CSS_MAP, run.font) && FONT_CSS_MAP[run.font]) {
     span.style.fontFamily = FONT_CSS_MAP[run.font];
   }
@@ -117,7 +129,18 @@ export function renderRichText(container, richValue, legacyPlainText, doc, optio
     return;
   }
 
+  // Numbered-list counters are never stored (see rich-text-contract.mjs's `list` field doc) — they
+  // are always computed here, one counter per (list type, indent level) key, continuing only across
+  // an unbroken run of consecutive same-(type,level) list paragraphs and resetting to 1 the instant
+  // that run is interrupted by anything else (a different type/level, a non-list paragraph, or an
+  // Image/Table block). This is simply how native <ol> numbering behaves, reimplemented at render
+  // time instead of being baked into stored data, so inserting/deleting/reordering paragraphs can
+  // never leave a stale stored number behind.
+  let prevListKey = null;
+  let listCounter = 0;
+
   for (const block of richValue.blocks) {
+    if (block.type !== "paragraph" || !block.list) { prevListKey = null; listCounter = 0; }
     if (block.type === "image") {
       const figure = d.createElement("figure");
       figure.className = "rt-image";
@@ -153,12 +176,37 @@ export function renderRichText(container, richValue, legacyPlainText, doc, optio
     }
     const p = d.createElement("p");
     p.style.whiteSpace = "pre-wrap";
-    p.style.margin = "0 0 0.5em 0";
+    const indent = Number.isInteger(block.indent) ? block.indent : 0;
+    const spacingToken = typeof block.spacing === "string" && Object.prototype.hasOwnProperty.call(SPACING_CSS_MAP, block.spacing) ? block.spacing : "normal";
+    p.style.margin = `0 0 ${SPACING_CSS_MAP[spacingToken]} 0`;
     if (block.align && Object.prototype.hasOwnProperty.call(ALIGN_CSS_MAP, block.align) && ALIGN_CSS_MAP[block.align]) {
       p.style.textAlign = ALIGN_CSS_MAP[block.align];
     }
-    for (const run of block.runs) {
-      p.appendChild(renderRun(run, d));
+    if (block.lineSpacing && Object.prototype.hasOwnProperty.call(LINE_SPACING_CSS_MAP, block.lineSpacing) && LINE_SPACING_CSS_MAP[block.lineSpacing]) {
+      p.style.lineHeight = LINE_SPACING_CSS_MAP[block.lineSpacing];
+    }
+    if (indent > 0) p.style.marginLeft = `${indent * INDENT_PX_PER_LEVEL}px`;
+    if (block.list && Object.prototype.hasOwnProperty.call({ bullet: 1, number: 1 }, block.list)) {
+      const listKey = `${block.list}|${indent}`;
+      listCounter = listKey === prevListKey ? listCounter + 1 : 1;
+      prevListKey = listKey;
+      p.style.display = "flex";
+      const marker = d.createElement("span");
+      marker.className = "rt-list-marker";
+      marker.style.flex = "0 0 auto";
+      marker.style.marginRight = "0.5em";
+      marker.style.userSelect = "none";
+      // Marker text is always one of a fixed bullet glyph or a computed small integer — never
+      // derived from stored content, so textContent here carries nothing user-authored.
+      marker.textContent = block.list === "bullet" ? "•" : `${listCounter}.`;
+      p.appendChild(marker);
+      const textWrap = d.createElement("span");
+      for (const run of block.runs) textWrap.appendChild(renderRun(run, d));
+      p.appendChild(textWrap);
+    } else {
+      for (const run of block.runs) {
+        p.appendChild(renderRun(run, d));
+      }
     }
     container.appendChild(p);
   }

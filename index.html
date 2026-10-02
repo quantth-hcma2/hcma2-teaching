@@ -92,6 +92,8 @@ textarea{min-height:88px; resize:vertical;}
 .rt-editor-host [data-rt-toolbar] button[aria-pressed="true"]{background:var(--brand); color:#fff; border-color:var(--brand);}
 .rt-editor-host [data-rt-toolbar] button[aria-pressed="mixed"]{background:#dbeafe;}
 .rt-editor-host [data-rt-toolbar] select{width:auto; min-height:30px; padding:2px 6px;}
+.rt-editor-host [data-rt-toolbar] [data-rt-toolbar-group]{display:inline-flex; gap:6px; align-items:center; padding-right:8px; margin-right:2px; border-right:1px solid var(--border);}
+.rt-editor-host [data-rt-toolbar] [data-rt-toolbar-group]:last-child{border-right:none; padding-right:0; margin-right:0;}
 .rt-editor-host [data-rt-editable]{min-height:88px; padding:11px 12px; outline:none;}
 /* Consecutive paragraphs now share one continuous contenteditable text region (GATE 2B-RT
    continuous-text candidate) — the region itself, not the non-editable [data-rt-editable]

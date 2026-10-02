@@ -43,19 +43,30 @@
 // else, so a hostile/oversized result still fails closed rather than being silently accepted.
 
 import { validateRichText, normalizeRichText, DEFAULT_SIZE, MAX_RUN_TEXT_LENGTH } from "./rich-text-contract.mjs";
-import { FONT_CSS_MAP, SIZE_CSS_MAP, COLOR_CSS_MAP, ALIGN_CSS_MAP } from "./rich-text-renderer.mjs";
+import { FONT_CSS_MAP, SIZE_CSS_MAP, COLOR_CSS_MAP, ALIGN_CSS_MAP, LINE_SPACING_CSS_MAP, SPACING_CSS_MAP, INDENT_PX_PER_LEVEL } from "./rich-text-renderer.mjs";
 
 export const DATA_BLOCK_ATTR = "data-rt-block";
 export const DATA_RUN_ATTR = "data-rt-run";
 export const DATA_BOLD_ATTR = "data-rt-bold";
 export const DATA_ITALIC_ATTR = "data-rt-italic";
+export const DATA_UNDERLINE_ATTR = "data-rt-underline";
+export const DATA_STRIKE_ATTR = "data-rt-strike";
 export const DATA_FONT_ATTR = "data-rt-font";
 export const DATA_SIZE_ATTR = "data-rt-size";
 export const DATA_COLOR_ATTR = "data-rt-color";
-// Paragraph-level (block, not run) alignment. "left" is never represented by this attribute at
-// all — its absence IS "left", matching every other formatting field's "absent means default"
-// convention (see createBlockElement/setBlockAlign below).
+// Paragraph-level (block, not run) formatting. The default value of each is never represented by
+// its attribute at all — absence IS the default, matching every run-level formatting field's own
+// "absent means default" convention (see createBlockElement/the setBlockXxx helpers below).
 export const DATA_ALIGN_ATTR = "data-rt-align";
+export const DATA_LIST_ATTR = "data-rt-list";
+export const DATA_INDENT_ATTR = "data-rt-indent";
+export const DATA_LINE_SPACING_ATTR = "data-rt-line-spacing";
+export const DATA_SPACING_ATTR = "data-rt-spacing";
+// A list-item's bullet/number marker is a NON-EDITABLE, purely presentational DOM node (never
+// stored, never read as run content — see isListMarkerElement/readRunsFromBlock below) inserted as
+// the first child of a list paragraph. contenteditable="false" makes native contenteditable treat
+// it as an atomic island the caret skips over, so a user can never type into or merge text with it.
+export const DATA_LIST_MARKER_ATTR = "data-rt-list-marker";
 export const DATA_IMAGE_PATH_ATTR = "data-rt-image-path";
 export const DATA_IMAGE_MIME_ATTR = "data-rt-image-mime";
 export const DATA_IMAGE_SIZE_ATTR = "data-rt-image-size";
@@ -83,6 +94,10 @@ export function createRunSpan(doc, run) {
     span.setAttribute(DATA_ITALIC_ATTR, "1");
     span.style.fontStyle = "italic";
   }
+  const decorations = [];
+  if (run.underline === true) { span.setAttribute(DATA_UNDERLINE_ATTR, "1"); decorations.push("underline"); }
+  if (run.strike === true) { span.setAttribute(DATA_STRIKE_ATTR, "1"); decorations.push("line-through"); }
+  if (decorations.length > 0) span.style.textDecoration = decorations.join(" ");
   if (typeof run.font === "string" && run.font !== "default") {
     span.setAttribute(DATA_FONT_ATTR, run.font);
     if (FONT_CSS_MAP[run.font]) span.style.fontFamily = FONT_CSS_MAP[run.font];
@@ -98,10 +113,14 @@ export function createRunSpan(doc, run) {
   return span;
 }
 
-function createBlockElement(doc, align) {
+function createBlockElement(doc, meta = {}) {
   const el = doc.createElement("div");
   el.setAttribute(DATA_BLOCK_ATTR, "paragraph");
-  if (align) setBlockAlign(el, align);
+  if (meta.align) setBlockAlign(el, meta.align);
+  if (meta.list) setBlockList(el, meta.list);
+  if (meta.indent) setBlockIndent(el, meta.indent);
+  if (meta.lineSpacing) setBlockLineSpacing(el, meta.lineSpacing);
+  if (meta.spacing) setBlockSpacing(el, meta.spacing);
   return el;
 }
 
@@ -122,13 +141,142 @@ export function setBlockAlign(blockEl, align) {
   }
 }
 
-// The block's CURRENT EFFECTIVE alignment for editor-side reflection (toolbar state, Enter
-// inheritance) — "left" when the attribute is absent, matching the default. Unlike
-// readRecognizedBlock's export-time read (below), this is never written into a persisted block
-// object, so defaulting to "left" here is purely a display/UX convenience, not a contract concern.
+// GATE RICHTEXT-V3: the remaining paragraph-level setters below follow the exact same pattern as
+// setBlockAlign — set/clear a semantic attribute plus the matching fixed-map-derived CSS, never a
+// raw stored value written directly into a style property.
+
+export function setBlockList(blockEl, list) {
+  if (list === "bullet" || list === "number") blockEl.setAttribute(DATA_LIST_ATTR, list);
+  else blockEl.removeAttribute(DATA_LIST_ATTR);
+}
+
+export function setBlockIndent(blockEl, indent) {
+  const n = Number.isInteger(indent) ? indent : 0;
+  if (n > 0) {
+    blockEl.setAttribute(DATA_INDENT_ATTR, String(n));
+    blockEl.style.marginLeft = `${n * INDENT_PX_PER_LEVEL}px`;
+  } else {
+    blockEl.removeAttribute(DATA_INDENT_ATTR);
+    blockEl.style.marginLeft = "";
+  }
+}
+
+export function setBlockLineSpacing(blockEl, lineSpacing) {
+  if (lineSpacing && lineSpacing !== "1" && Object.prototype.hasOwnProperty.call(LINE_SPACING_CSS_MAP, lineSpacing)) {
+    blockEl.setAttribute(DATA_LINE_SPACING_ATTR, lineSpacing);
+    blockEl.style.lineHeight = LINE_SPACING_CSS_MAP[lineSpacing] || "";
+  } else {
+    blockEl.removeAttribute(DATA_LINE_SPACING_ATTR);
+    blockEl.style.lineHeight = "";
+  }
+}
+
+export function setBlockSpacing(blockEl, spacing) {
+  if (spacing && spacing !== "normal" && Object.prototype.hasOwnProperty.call(SPACING_CSS_MAP, spacing)) {
+    blockEl.setAttribute(DATA_SPACING_ATTR, spacing);
+  } else {
+    blockEl.removeAttribute(DATA_SPACING_ATTR);
+  }
+}
+
+// The block's CURRENT EFFECTIVE paragraph formatting, for editor-side reflection (toolbar state,
+// Enter inheritance) — the default value when the attribute is absent. Unlike readRecognizedBlock's
+// export-time read (below), these are never written into a persisted block object, so defaulting
+// here is purely a display/UX convenience, not a contract concern.
 export function effectiveBlockAlign(blockEl) {
   const align = blockEl.getAttribute(DATA_ALIGN_ATTR);
   return align === null ? "left" : align;
+}
+export function effectiveBlockList(blockEl) {
+  return blockEl.getAttribute(DATA_LIST_ATTR) || "";
+}
+export function effectiveBlockIndent(blockEl) {
+  return Number(blockEl.getAttribute(DATA_INDENT_ATTR) || "0");
+}
+export function effectiveBlockLineSpacing(blockEl) {
+  return blockEl.getAttribute(DATA_LINE_SPACING_ATTR) || "1";
+}
+export function effectiveBlockSpacing(blockEl) {
+  return blockEl.getAttribute(DATA_SPACING_ATTR) || "normal";
+}
+
+// A list-item marker is created fresh (never mutated-in-place beyond its own textContent — see
+// renormalizeListMarkers) with contenteditable="false" so it is an atomic, non-editable island; its
+// text is always either the fixed bullet glyph or a small computed integer, never derived from
+// stored/authored content.
+export function createListMarkerElement(doc, markerText) {
+  const marker = doc.createElement("span");
+  marker.setAttribute(DATA_LIST_MARKER_ATTR, "1");
+  marker.setAttribute("contenteditable", "false");
+  marker.style.userSelect = "none";
+  marker.style.marginRight = "0.5em";
+  marker.style.flex = "0 0 auto";
+  marker.textContent = markerText;
+  return marker;
+}
+
+export function isListMarkerElement(node) {
+  return !!node && node.nodeType === 1 && node.tagName === "SPAN" && node.getAttribute(DATA_LIST_MARKER_ATTR) === "1";
+}
+
+// Recomputes and (re)inserts the marker element as the first child of every list paragraph under
+// `rootEl`, in document order — the one and only place list-item numbers are ever computed (never
+// stored; see rich-text-contract.mjs's `list` field doc and rich-text-renderer.mjs's identical
+// read-only counter logic). Call after ANY DOM mutation that could change list membership, order,
+// or indent: native typing/paste/merge (via _normalizeAllBlocks), Enter, toolbar list/indent
+// actions, or inserting an Image/Table that splits a list run. Pure DOM surgery, safe to call
+// liberally — a no-op walk when nothing list-related changed.
+export function renormalizeListMarkers(doc, rootEl) {
+  function applyToRegionParagraphs(paragraphs) {
+    let prevKey = null, counter = 0;
+    for (const block of paragraphs) {
+      const list = block.getAttribute(DATA_LIST_ATTR);
+      const existingMarker = Array.from(block.childNodes).find(isListMarkerElement);
+      if (list !== "bullet" && list !== "number") {
+        prevKey = null; counter = 0;
+        if (existingMarker) block.removeChild(existingMarker);
+        block.style.display = "";
+        continue;
+      }
+      const indent = Number(block.getAttribute(DATA_INDENT_ATTR) || "0");
+      const key = `${list}|${indent}`;
+      counter = key === prevKey ? counter + 1 : 1;
+      prevKey = key;
+      const markerText = list === "bullet" ? "•" : `${counter}.`;
+      if (existingMarker) {
+        if (existingMarker.textContent !== markerText) existingMarker.textContent = markerText;
+        if (block.firstChild !== existingMarker) block.insertBefore(existingMarker, block.firstChild);
+      } else {
+        block.insertBefore(createListMarkerElement(doc, markerText), block.firstChild);
+      }
+      block.style.display = "flex";
+    }
+  }
+  // Manual childNodes walk rather than querySelectorAll — this runs against both the real DOM AND
+  // the dependency-free FakeDocument the pure node-test suite uses (which implements childNodes/
+  // appendChild/etc. but not a selector engine), and richTextToDom (below) calls this on document
+  // fragments that may not even be attached yet. Paragraph blocks never nest, so once one is found
+  // there is no need to recurse into it.
+  function collectParagraphs(node, out) {
+    for (const child of node.childNodes || []) {
+      if (child.nodeType !== 1) continue;
+      if (child.getAttribute(DATA_BLOCK_ATTR) === "paragraph") { out.push(child); continue; }
+      collectParagraphs(child, out);
+    }
+  }
+  // Numbering is scoped PER TEXT REGION and resets at every region boundary. A region boundary
+  // exists ONLY because an Image/Table interrupted the paragraph run (see
+  // createTextRegionElement's doc comment) — so this is equivalent to, and implements, "reset
+  // numbering after an Image/Table", matching rich-text-renderer.mjs's own identical read-only
+  // counter policy exactly.
+  for (const child of rootEl.childNodes || []) {
+    if (child.nodeType !== 1) continue;
+    if (child.getAttribute(DATA_TEXT_REGION_ATTR) === "1") {
+      const paragraphs = [];
+      collectParagraphs(child, paragraphs);
+      applyToRegionParagraphs(paragraphs);
+    }
+  }
 }
 
 // Editability now lives on the shared region, not on each individual paragraph — this is what lets
@@ -180,11 +328,15 @@ export function richTextToDom(doc, richValue) {
       frag.appendChild(el); continue;
     }
     if (!openRegion) openRegion = createTextRegionElement(doc);
-    const blockEl = createBlockElement(doc, block.align);
+    const blockEl = createBlockElement(doc, block);
     appendRunsOrPlaceholder(doc, blockEl, block.runs);
     openRegion.appendChild(blockEl);
   }
   flushRegion();
+  // Markers are always computed fresh here rather than being part of the loop above, so every
+  // caller (editor, tests, createEmptyDocumentDom) gets correct list numbering "for free" without
+  // needing to remember a separate call — see renormalizeListMarkers's own doc comment.
+  renormalizeListMarkers(doc, frag);
   return frag;
 }
 
@@ -245,6 +397,8 @@ export function readRunFromMarkedSpan(span) {
   const run = { text: span.textContent ?? "" };
   if (span.getAttribute(DATA_BOLD_ATTR) === "1") run.bold = true;
   if (span.getAttribute(DATA_ITALIC_ATTR) === "1") run.italic = true;
+  if (span.getAttribute(DATA_UNDERLINE_ATTR) === "1") run.underline = true;
+  if (span.getAttribute(DATA_STRIKE_ATTR) === "1") run.strike = true;
   const font = span.getAttribute(DATA_FONT_ATTR);
   if (font !== null && font !== undefined) run.font = font;
   const sizeAttr = span.getAttribute(DATA_SIZE_ATTR);
@@ -283,6 +437,11 @@ function readRunsFromBlock(blockEl) {
   const runs = [];
   const children = blockEl.childNodes || [];
   for (const child of children) {
+    if (isListMarkerElement(child)) {
+      // The non-editable bullet/number marker — never content, never a run; see
+      // createListMarkerElement/renormalizeListMarkers.
+      continue;
+    }
     if (isElement(child) && child.tagName === "BR") {
       // The empty-paragraph placeholder — contributes no run. Any BR that is NOT the sole child
       // (e.g. hostile DOM with a BR in the middle of real runs) contributes nothing either: a
@@ -319,13 +478,21 @@ function readRecognizedBlock(node) {
   const kind = node.getAttribute(DATA_BLOCK_ATTR);
   if (kind === "paragraph") {
     const block = { type: "paragraph", runs: readRunsFromBlock(node) };
-    // Only added when the attribute is actually present — an ordinary (never-aligned) paragraph
-    // round-trips with no `align` key at all, exactly like today's documents. Read as-is,
-    // unvalidated: same documented policy as readRunFromMarkedSpan's `size` attribute above — a
-    // tampered/invalid value is passed through for validateRichTextV1's ALIGN_TOKENS allowlist to
-    // reject fail-closed downstream, not silently repaired here.
+    // Each added only when its attribute is actually present — an ordinary (never-touched)
+    // paragraph round-trips with none of these keys at all, exactly like today's documents. Read
+    // as-is, unvalidated: same documented policy as readRunFromMarkedSpan's `size` attribute above
+    // — a tampered/invalid value is passed through for validateRichTextV1's allowlists to reject
+    // fail-closed downstream, not silently repaired here.
     const align = node.getAttribute(DATA_ALIGN_ATTR);
     if (align !== null) block.align = align;
+    const list = node.getAttribute(DATA_LIST_ATTR);
+    if (list !== null) block.list = list;
+    const indent = node.getAttribute(DATA_INDENT_ATTR);
+    if (indent !== null) block.indent = Number(indent);
+    const lineSpacing = node.getAttribute(DATA_LINE_SPACING_ATTR);
+    if (lineSpacing !== null) block.lineSpacing = lineSpacing;
+    const spacing = node.getAttribute(DATA_SPACING_ATTR);
+    if (spacing !== null) block.spacing = spacing;
     return block;
   }
   if (kind === "image") {
@@ -460,12 +627,14 @@ export function splitRunAtOffset(doc, span, offset) {
 
 // ---------------- Pure formatting-state helpers (toolbar reflection, incl. "mixed"). ----------------
 
-const FORMAT_KEYS = Object.freeze(["bold", "italic", "font", "size", "color"]);
+const FORMAT_KEYS = Object.freeze(["bold", "italic", "underline", "strike", "font", "size", "color"]);
 
 function defaultedRunInfo(run) {
   return {
     bold: run.bold === true,
     italic: run.italic === true,
+    underline: run.underline === true,
+    strike: run.strike === true,
     font: typeof run.font === "string" ? run.font : "default",
     size: typeof run.size === "number" ? run.size : DEFAULT_SIZE,
     color: typeof run.color === "string" ? run.color : "default"
@@ -479,8 +648,8 @@ function defaultedRunInfo(run) {
 export function computeFormatState(runLikeObjects) {
   if (runLikeObjects.length === 0) {
     return {
-      bold: false, italic: false, font: "default", size: DEFAULT_SIZE, color: "default",
-      mixed: { bold: false, italic: false, font: false, size: false, color: false }
+      bold: false, italic: false, underline: false, strike: false, font: "default", size: DEFAULT_SIZE, color: "default",
+      mixed: { bold: false, italic: false, underline: false, strike: false, font: false, size: false, color: false }
     };
   }
   const infos = runLikeObjects.map(defaultedRunInfo);
@@ -496,17 +665,25 @@ export function computeFormatState(runLikeObjects) {
   return result;
 }
 
-// Block-level analog of computeFormatState above, for paragraph alignment: given the effective
-// alignment ("left"/"center"/"right"/"justify") of every paragraph touched by the current
-// selection, returns the uniform value, or null + mixed:true when they disagree, for toolbar
-// reflection (Word-like: applying one alignment to a mixed selection makes all of them that value).
-// An empty array (nothing selected / no content) reports "left", matching computeFormatState's own
-// all-default behavior.
+// Block-level analog of computeFormatState above, generic over any single paragraph-level
+// property (alignment, list, indent, line spacing, paragraph spacing): given the effective value
+// of that property for every paragraph touched by the current selection, returns the uniform
+// value, or null + mixed:true when they disagree, for toolbar reflection (Word-like: applying one
+// value to a mixed selection makes all of them that value — never lying to the user about a
+// value that isn't actually uniform). An empty array (nothing selected / no content) reports
+// `defaultValue`, matching computeFormatState's own all-default behavior.
+export function computeUniformState(values, defaultValue) {
+  if (values.length === 0) return { value: defaultValue, mixed: false };
+  const first = values[0];
+  const uniform = values.every((v) => v === first);
+  return { value: uniform ? first : null, mixed: !uniform };
+}
+
+// Kept as its own named export (pre-existing call sites/tests use this name) — a thin wrapper
+// around computeUniformState with the `align`-specific default and result-key naming.
 export function computeAlignState(alignValues) {
-  if (alignValues.length === 0) return { align: "left", mixed: false };
-  const first = alignValues[0];
-  const uniform = alignValues.every((a) => a === first);
-  return { align: uniform ? first : null, mixed: !uniform };
+  const { value, mixed } = computeUniformState(alignValues, "left");
+  return { align: value, mixed };
 }
 
 // ---------------- Pure paste-text normalization (no DOM at all). ----------------

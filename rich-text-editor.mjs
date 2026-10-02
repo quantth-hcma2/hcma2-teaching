@@ -2,12 +2,20 @@
 //
 // Architecture: contenteditable root + a fully controlled DOM model (rich-text-editor-serializer.mjs
 // owns the canonical block/run DOM shape) + a strict serializer as the trust boundary. This module
-// deliberately avoids `document.execCommand` (deprecated, browser-inconsistent, and gives no control
-// over the exact DOM shape the contract needs) and avoids any large editor framework — every
-// requirement in the GATE 2B-RT-EDITOR spec (deterministic multi-run/multi-paragraph formatting,
-// IME-safe composition, plain-text-only paste, no silent truncation) is achievable with direct
-// Selection/Range + DOM APIs at classroom scale, and no concrete blocker requiring a framework was
-// found while implementing this.
+// deliberately avoids `document.execCommand` for every actual EDITING operation (deprecated,
+// browser-inconsistent, and gives no control over the exact DOM shape the contract needs) and
+// avoids any large editor framework — every requirement in the GATE 2B-RT-EDITOR spec
+// (deterministic multi-run/multi-paragraph formatting, IME-safe composition, plain-text-only
+// paste, no silent truncation) is achievable with direct Selection/Range + DOM APIs at classroom
+// scale, and no concrete blocker requiring a framework was found while implementing this.
+// GATE RICHTEXT-V3 ONE NARROW EXCEPTION: the Undo/Redo TOOLBAR BUTTONS call
+// document.execCommand("undo"/"redo") — there is no other DOM API that invokes the browser's own
+// native contenteditable undo/redo history from a button click (dispatching a synthetic Ctrl+Z
+// KeyboardEvent does not trigger a browser's native undo; there is no unprefixed, shipped
+// UndoManager API for contenteditable in any current browser). This is "technically unavoidable"
+// for that one button-click use case specifically, per the task's own explicit allowance — it is
+// NOT used for any content mutation anywhere else in this module. Real Ctrl+Z/Ctrl+Y keystrokes
+// are never intercepted and continue to invoke the SAME native history directly, unchanged.
 //
 // The editable DOM is NOT trusted storage: nothing here ever reads `.innerHTML`, ever trusts a
 // stored attribute value without re-validating it through rich-text-contract.mjs, or ever assumes
@@ -18,12 +26,14 @@
 //
 // NOT wired into index.html or any Firestore field in this gate — standalone, isolated module only.
 
-import { validateRichText, richTextToPlainText, DEFAULT_SIZE, MAX_TABLE_ROWS, MAX_TABLE_COLUMNS } from "./rich-text-contract.mjs";
+import { validateRichText, richTextToPlainText, DEFAULT_SIZE, MAX_TABLE_ROWS, MAX_TABLE_COLUMNS, MAX_INDENT_LEVEL } from "./rich-text-contract.mjs";
 import {
   DATA_BLOCK_ATTR,
   DATA_RUN_ATTR,
   DATA_TEXT_REGION_ATTR,
   DATA_ALIGN_ATTR,
+  DATA_LIST_ATTR,
+  DATA_INDENT_ATTR,
   createRunSpan,
   richTextToDom,
   legacyPlainTextToDom,
@@ -36,12 +46,23 @@ import {
   computeFormatState,
   setBlockAlign,
   effectiveBlockAlign,
+  setBlockList,
+  effectiveBlockList,
+  setBlockIndent,
+  effectiveBlockIndent,
+  setBlockLineSpacing,
+  effectiveBlockLineSpacing,
+  setBlockSpacing,
+  effectiveBlockSpacing,
+  isListMarkerElement,
+  renormalizeListMarkers,
   computeAlignState,
+  computeUniformState,
   normalizePastedPlainText,
   pastedTextToParagraphLines
 } from "./rich-text-editor-serializer.mjs";
 
-const DEFAULT_RUN_FORMAT = Object.freeze({ bold: false, italic: false, font: "default", size: DEFAULT_SIZE, color: "default" });
+const DEFAULT_RUN_FORMAT = Object.freeze({ bold: false, italic: false, underline: false, strike: false, font: "default", size: DEFAULT_SIZE, color: "default" });
 
 function isBlockEl(node) {
   return !!node && node.nodeType === 1 && node.tagName === "DIV" &&
@@ -78,6 +99,13 @@ export class RichTextEditor {
 
   // ---------------- DOM construction ----------------
 
+  // GATE RICHTEXT-V3: toolbar controls are built in logical GROUPS (Undo/Redo; Font/Size;
+  // B/I/U/Strike/Color; alignment; Bullet/Number; Outdent/Indent; Line/Paragraph spacing; Clear
+  // formatting; Image/Table), each wrapped in a [data-rt-toolbar-group] <span> purely so CSS can
+  // draw a thin separator between groups — no layout engine change, still the same flat
+  // button/select toolbar this editor has always had. Every new control keeps a plain Vietnamese
+  // text label (matching the existing "Chèn ảnh"/"Chèn bảng 3×3" convention — this toolbar has
+  // never used an icon font) with the fuller Vietnamese phrase as aria-label/title.
   _buildDom() {
     const doc = this.doc;
     this.rootEl = doc.createElement("div");
@@ -88,55 +116,59 @@ export class RichTextEditor {
     this.toolbarEl.setAttribute("role", "toolbar");
     this.toolbarEl.setAttribute("aria-label", "Text formatting");
 
-    this.boldBtn = doc.createElement("button");
-    this.boldBtn.type = "button";
-    this.boldBtn.setAttribute("data-rt-action", "bold");
-    this.boldBtn.setAttribute("aria-label", "Bold");
+    const group = () => { const g = doc.createElement("span"); g.setAttribute("data-rt-toolbar-group", "1"); return g; };
+    const button = (action, label, title) => {
+      const btn = doc.createElement("button");
+      btn.type = "button";
+      btn.setAttribute("data-rt-action", action);
+      btn.setAttribute("aria-label", title);
+      btn.title = title;
+      btn.textContent = label;
+      return btn;
+    };
+    const select = (action, title, options) => {
+      const sel = doc.createElement("select");
+      sel.setAttribute("data-rt-action", action);
+      sel.setAttribute("aria-label", title);
+      sel.title = title;
+      for (const [value, label] of options) {
+        const opt = doc.createElement("option");
+        opt.value = value;
+        opt.textContent = label;
+        sel.appendChild(opt);
+      }
+      return sel;
+    };
+
+    // Undo / Redo
+    const undoRedoGroup = group();
+    this.undoBtn = button("undo", "↶ Hoàn tác", "Hoàn tác (Ctrl+Z)");
+    this.redoBtn = button("redo", "↷ Làm lại", "Làm lại (Ctrl+Y)");
+    undoRedoGroup.append(this.undoBtn, this.redoBtn);
+
+    // Font / Size
+    const fontGroup = group();
+    this.fontSelect = select("font", "Font", [["default", "Default"], ["arial", "Arial"], ["times", "Times New Roman"], ["roboto", "Roboto"]]);
+    this.sizeSelect = select("size", "Font size", [14, 16, 18, 20, 24].map((s) => [String(s), String(s)]));
+    fontGroup.append(this.fontSelect, this.sizeSelect);
+
+    // Bold / Italic / Underline / Strikethrough / Color
+    const runFormatGroup = group();
+    this.boldBtn = button("bold", "B", "Đậm (Ctrl+B)");
     this.boldBtn.setAttribute("aria-pressed", "false");
-    this.boldBtn.textContent = "B";
-
-    this.italicBtn = doc.createElement("button");
-    this.italicBtn.type = "button";
-    this.italicBtn.setAttribute("data-rt-action", "italic");
-    this.italicBtn.setAttribute("aria-label", "Italic");
+    this.italicBtn = button("italic", "I", "Nghiêng (Ctrl+I)");
     this.italicBtn.setAttribute("aria-pressed", "false");
-    this.italicBtn.textContent = "I";
+    this.underlineBtn = button("underline", "U", "Gạch chân (Ctrl+U)");
+    this.underlineBtn.setAttribute("aria-pressed", "false");
+    this.underlineBtn.style.textDecoration = "underline";
+    this.strikeBtn = button("strike", "S", "Gạch ngang");
+    this.strikeBtn.setAttribute("aria-pressed", "false");
+    this.strikeBtn.style.textDecoration = "line-through";
+    this.colorSelect = select("color", "Text color", [["default", "Default"], ["red", "Red"], ["blue", "Blue"], ["green", "Green"], ["orange", "Orange"], ["purple", "Purple"]]);
+    runFormatGroup.append(this.boldBtn, this.italicBtn, this.underlineBtn, this.strikeBtn, this.colorSelect);
 
-    this.fontSelect = doc.createElement("select");
-    this.fontSelect.setAttribute("data-rt-action", "font");
-    this.fontSelect.setAttribute("aria-label", "Font");
-    for (const [value, label] of [["default", "Default"], ["arial", "Arial"], ["times", "Times New Roman"], ["roboto", "Roboto"]]) {
-      const opt = doc.createElement("option");
-      opt.value = value;
-      opt.textContent = label;
-      this.fontSelect.appendChild(opt);
-    }
-
-    this.sizeSelect = doc.createElement("select");
-    this.sizeSelect.setAttribute("data-rt-action", "size");
-    this.sizeSelect.setAttribute("aria-label", "Font size");
-    for (const size of [14, 16, 18, 20, 24]) {
-      const opt = doc.createElement("option");
-      opt.value = String(size);
-      opt.textContent = String(size);
-      this.sizeSelect.appendChild(opt);
-    }
-
-    this.colorSelect = doc.createElement("select");
-    this.colorSelect.setAttribute("data-rt-action", "color");
-    this.colorSelect.setAttribute("aria-label", "Text color");
-    for (const [value, label] of [["default", "Default"], ["red", "Red"], ["blue", "Blue"], ["green", "Green"], ["orange", "Orange"], ["purple", "Purple"]]) {
-      const opt = doc.createElement("option");
-      opt.value = value;
-      opt.textContent = label;
-      this.colorSelect.appendChild(opt);
-    }
-
-    // Paragraph alignment — a block-level control, grouped with the other text-formatting controls
-    // (not the block-insertion buttons below). Plain Vietnamese text labels, matching this
-    // toolbar's existing "Chèn ảnh"/"Chèn bảng 3×3" convention rather than introducing an icon
-    // system the toolbar does not otherwise have; the fuller Vietnamese phrase goes in
-    // aria-label/title for teachers relying on either.
+    // Alignment
+    const alignGroup = group();
     this.alignButtons = [];
     for (const [align, label, title] of [
       ["left", "Trái", "Căn trái"],
@@ -144,30 +176,46 @@ export class RichTextEditor {
       ["right", "Phải", "Căn phải"],
       ["justify", "Đều", "Căn đều hai bên"]
     ]) {
-      const btn = doc.createElement("button");
-      btn.type = "button";
-      btn.setAttribute("data-rt-action", `align-${align}`);
-      btn.setAttribute("aria-label", title);
-      btn.title = title;
+      const btn = button(`align-${align}`, label, title);
       btn.setAttribute("aria-pressed", String(align === "left"));
-      btn.textContent = label;
       this.alignButtons.push([align, btn]);
+      alignGroup.appendChild(btn);
     }
     [this.alignLeftBtn, this.alignCenterBtn, this.alignRightBtn, this.alignJustifyBtn] = this.alignButtons.map(([, btn]) => btn);
 
-    this.imageBtn = doc.createElement("button"); this.imageBtn.type="button"; this.imageBtn.textContent="Chèn ảnh"; this.imageBtn.setAttribute("data-rt-action","image");
-    this.imageInput = doc.createElement("input"); this.imageInput.type="file"; this.imageInput.accept="image/jpeg,image/png,image/webp"; this.imageInput.hidden=true;
-    this.tableBtn = doc.createElement("button"); this.tableBtn.type="button"; this.tableBtn.textContent="Chèn bảng 3×3"; this.tableBtn.setAttribute("data-rt-action","table");
+    // Bullet / Numbered list
+    const listGroup = group();
+    this.bulletBtn = button("list-bullet", "• Gạch đầu dòng", "Danh sách gạch đầu dòng");
+    this.bulletBtn.setAttribute("aria-pressed", "false");
+    this.numberBtn = button("list-number", "1. Đánh số", "Danh sách đánh số");
+    this.numberBtn.setAttribute("aria-pressed", "false");
+    listGroup.append(this.bulletBtn, this.numberBtn);
 
-    this.toolbarEl.appendChild(this.boldBtn);
-    this.toolbarEl.appendChild(this.italicBtn);
-    this.toolbarEl.appendChild(this.fontSelect);
-    this.toolbarEl.appendChild(this.sizeSelect);
-    this.toolbarEl.appendChild(this.colorSelect);
-    for (const [, btn] of this.alignButtons) this.toolbarEl.appendChild(btn);
-    this.toolbarEl.appendChild(this.imageBtn);
-    this.toolbarEl.appendChild(this.tableBtn);
-    this.toolbarEl.appendChild(this.imageInput);
+    // Outdent / Indent
+    const indentGroup = group();
+    this.outdentBtn = button("outdent", "⇤ Giảm thụt lề", "Giảm thụt lề");
+    this.indentBtn = button("indent", "⇥ Tăng thụt lề", "Tăng thụt lề");
+    indentGroup.append(this.outdentBtn, this.indentBtn);
+
+    // Line spacing / Paragraph spacing
+    const spacingGroup = group();
+    this.lineSpacingSelect = select("line-spacing", "Giãn dòng", [["1", "Giãn dòng 1.0"], ["1.15", "Giãn dòng 1.15"], ["1.5", "Giãn dòng 1.5"], ["2", "Giãn dòng 2.0"]]);
+    this.spacingSelect = select("spacing", "Khoảng cách đoạn", [["compact", "Đoạn: Gọn"], ["normal", "Đoạn: Bình thường"], ["wide", "Đoạn: Rộng"]]);
+    spacingGroup.append(this.lineSpacingSelect, this.spacingSelect);
+
+    // Clear formatting
+    const clearGroup = group();
+    this.clearFormatBtn = button("clear-format", "Xóa định dạng", "Xóa định dạng (ký tự) đã chọn");
+    clearGroup.appendChild(this.clearFormatBtn);
+
+    // Image / Table (unchanged)
+    const blockGroup = group();
+    this.imageBtn = button("image", "Chèn ảnh", "Chèn ảnh");
+    this.imageInput = doc.createElement("input"); this.imageInput.type = "file"; this.imageInput.accept = "image/jpeg,image/png,image/webp"; this.imageInput.hidden = true;
+    this.tableBtn = button("table", "Chèn bảng 3×3", "Chèn bảng 3×3");
+    blockGroup.append(this.imageBtn, this.tableBtn, this.imageInput);
+
+    this.toolbarEl.append(undoRedoGroup, fontGroup, runFormatGroup, alignGroup, listGroup, indentGroup, spacingGroup, clearGroup, blockGroup);
 
     this.editableEl = doc.createElement("div");
     this.editableEl.setAttribute("data-rt-editable", "1");
@@ -216,10 +264,13 @@ export class RichTextEditor {
     // Toolbar buttons: mousedown normally moves focus (and collapses the Selection) to the button
     // BEFORE the click handler runs, which would make every Bold/Italic click a no-op against an
     // already-empty selection. preventDefault on mousedown keeps focus (and the Selection) in the
-    // editable region right through the click.
+    // editable region right through the click. (Undo/Redo are deliberately exempt: execCommand
+    // operates on whatever the native history recorded, not on the live Selection, so losing focus
+    // to the button does not matter for them.)
     this._onToolbarButtonMouseDown = (e) => e.preventDefault();
-    this.boldBtn.addEventListener("mousedown", this._onToolbarButtonMouseDown);
-    this.italicBtn.addEventListener("mousedown", this._onToolbarButtonMouseDown);
+    for (const btn of [this.boldBtn, this.italicBtn, this.underlineBtn, this.strikeBtn, this.bulletBtn, this.numberBtn, this.outdentBtn, this.indentBtn, this.clearFormatBtn]) {
+      btn.addEventListener("mousedown", this._onToolbarButtonMouseDown);
+    }
     for (const [, btn] of this.alignButtons) btn.addEventListener("mousedown", this._onToolbarButtonMouseDown);
 
     // <select> controls cannot have their own mousedown prevented (that would block the dropdown
@@ -230,12 +281,14 @@ export class RichTextEditor {
       const sel = this._getSelection();
       this._savedRange = sel && this._selectionIsInsideEditor(sel) && sel.rangeCount > 0 ? sel.getRangeAt(0).cloneRange() : null;
     };
-    this.fontSelect.addEventListener("mousedown", this._onSelectMouseDown);
-    this.sizeSelect.addEventListener("mousedown", this._onSelectMouseDown);
-    this.colorSelect.addEventListener("mousedown", this._onSelectMouseDown);
+    for (const sel of [this.fontSelect, this.sizeSelect, this.colorSelect, this.lineSpacingSelect, this.spacingSelect]) {
+      sel.addEventListener("mousedown", this._onSelectMouseDown);
+    }
 
     this._onBoldClick = () => this._toggleBooleanFormat("bold");
     this._onItalicClick = () => this._toggleBooleanFormat("italic");
+    this._onUnderlineClick = () => this._toggleBooleanFormat("underline");
+    this._onStrikeClick = () => this._toggleBooleanFormat("strike");
     this._onFontChange = () => this._applyExplicitFormat("font", this.fontSelect.value);
     this._onSizeChange = () => this._applyExplicitFormat("size", Number(this.sizeSelect.value));
     this._onColorChange = () => this._applyExplicitFormat("color", this.colorSelect.value);
@@ -244,6 +297,15 @@ export class RichTextEditor {
       btn.addEventListener("click", handler);
       return handler;
     });
+    this._onBulletClick = () => this._applyListFormat("bullet");
+    this._onNumberClick = () => this._applyListFormat("number");
+    this._onOutdentClick = () => this._applyIndent(-1);
+    this._onIndentClick = () => this._applyIndent(1);
+    this._onLineSpacingChange = () => this._applyLineSpacing(this.lineSpacingSelect.value);
+    this._onSpacingChange = () => this._applySpacing(this.spacingSelect.value);
+    this._onClearFormatClick = () => this._clearFormatting();
+    this._onUndoClick = () => this._undo();
+    this._onRedoClick = () => this._redo();
     this._onImageClick = () => { if (this.onImageUpload) this.imageInput.click(); };
     this._onImageChange = async () => { const file=this.imageInput.files?.[0]; this.imageInput.value=""; if(!file||!this.onImageUpload)return; this.imageBtn.disabled=true; try { const block=await this.onImageUpload(file); if(block) this.insertBlock(block); } finally { this.imageBtn.disabled=false; } };
     this._onTableClick = () => this.insertBlock({type:"table",rows:Array.from({length:3},()=>({cells:Array.from({length:3},()=>({runs:[]}))}))});
@@ -262,9 +324,20 @@ export class RichTextEditor {
 
     this.boldBtn.addEventListener("click", this._onBoldClick);
     this.italicBtn.addEventListener("click", this._onItalicClick);
+    this.underlineBtn.addEventListener("click", this._onUnderlineClick);
+    this.strikeBtn.addEventListener("click", this._onStrikeClick);
     this.fontSelect.addEventListener("change", this._onFontChange);
     this.sizeSelect.addEventListener("change", this._onSizeChange);
     this.colorSelect.addEventListener("change", this._onColorChange);
+    this.bulletBtn.addEventListener("click", this._onBulletClick);
+    this.numberBtn.addEventListener("click", this._onNumberClick);
+    this.outdentBtn.addEventListener("click", this._onOutdentClick);
+    this.indentBtn.addEventListener("click", this._onIndentClick);
+    this.lineSpacingSelect.addEventListener("change", this._onLineSpacingChange);
+    this.spacingSelect.addEventListener("change", this._onSpacingChange);
+    this.clearFormatBtn.addEventListener("click", this._onClearFormatClick);
+    this.undoBtn.addEventListener("click", this._onUndoClick);
+    this.redoBtn.addEventListener("click", this._onRedoClick);
     this.imageBtn.addEventListener("click", this._onImageClick);
     this.imageInput.addEventListener("change", this._onImageChange);
     this.tableBtn.addEventListener("click", this._onTableClick);
@@ -298,8 +371,18 @@ export class RichTextEditor {
     if (this.doc.removeEventListener) this.doc.removeEventListener("selectionchange", this._onSelectionChange);
     this.boldBtn.removeEventListener("click", this._onBoldClick);
     this.italicBtn.removeEventListener("click", this._onItalicClick);
-    this.boldBtn.removeEventListener("mousedown", this._onToolbarButtonMouseDown);
-    this.italicBtn.removeEventListener("mousedown", this._onToolbarButtonMouseDown);
+    this.underlineBtn.removeEventListener("click", this._onUnderlineClick);
+    this.strikeBtn.removeEventListener("click", this._onStrikeClick);
+    this.bulletBtn.removeEventListener("click", this._onBulletClick);
+    this.numberBtn.removeEventListener("click", this._onNumberClick);
+    this.outdentBtn.removeEventListener("click", this._onOutdentClick);
+    this.indentBtn.removeEventListener("click", this._onIndentClick);
+    this.clearFormatBtn.removeEventListener("click", this._onClearFormatClick);
+    this.undoBtn.removeEventListener("click", this._onUndoClick);
+    this.redoBtn.removeEventListener("click", this._onRedoClick);
+    for (const btn of [this.boldBtn, this.italicBtn, this.underlineBtn, this.strikeBtn, this.bulletBtn, this.numberBtn, this.outdentBtn, this.indentBtn, this.clearFormatBtn]) {
+      btn.removeEventListener("mousedown", this._onToolbarButtonMouseDown);
+    }
     this.alignButtons.forEach(([, btn], i) => {
       btn.removeEventListener("mousedown", this._onToolbarButtonMouseDown);
       btn.removeEventListener("click", this._onAlignClicks[i]);
@@ -307,13 +390,15 @@ export class RichTextEditor {
     this.fontSelect.removeEventListener("change", this._onFontChange);
     this.sizeSelect.removeEventListener("change", this._onSizeChange);
     this.colorSelect.removeEventListener("change", this._onColorChange);
+    this.lineSpacingSelect.removeEventListener("change", this._onLineSpacingChange);
+    this.spacingSelect.removeEventListener("change", this._onSpacingChange);
     this.imageBtn.removeEventListener("click", this._onImageClick);
     this.imageInput.removeEventListener("change", this._onImageChange);
     this.tableBtn.removeEventListener("click", this._onTableClick);
     this.editableEl.removeEventListener("click", this._onEditorClick);
-    this.fontSelect.removeEventListener("mousedown", this._onSelectMouseDown);
-    this.sizeSelect.removeEventListener("mousedown", this._onSelectMouseDown);
-    this.colorSelect.removeEventListener("mousedown", this._onSelectMouseDown);
+    for (const sel of [this.fontSelect, this.sizeSelect, this.colorSelect, this.lineSpacingSelect, this.spacingSelect]) {
+      sel.removeEventListener("mousedown", this._onSelectMouseDown);
+    }
     if (this.rootEl.parentNode) this.rootEl.parentNode.removeChild(this.rootEl);
   }
 
@@ -373,7 +458,7 @@ export class RichTextEditor {
     const candidate={version:2,blocks:[block]};
     if(!validateRichText(candidate)) return {ok:false,reason:"invalid_value"};
     this.editableEl.appendChild(richTextToDom(this.doc,candidate)); this._hydrateImages();
-    this._ensureParagraph(); this.onChange(); return {ok:true};
+    this._ensureParagraph(); this._renormalizeListMarkers(); this.onChange(); return {ok:true};
   }
 
   _hydrateImages(){
@@ -606,11 +691,136 @@ export class RichTextEditor {
     this.onChange();
   }
 
+  // ---------------- Bullet / numbered lists, indent, line/paragraph spacing ----------------
+  // All block-level, reusing _paragraphsTouchedByRange exactly like alignment above — none of
+  // these ever touch run spans.
+
+  // Toggle semantics (like Bold/Italic, unlike alignment's always-set): clicking Bullet when every
+  // touched paragraph is already a bullet list turns list formatting OFF for all of them; any other
+  // state (including mixed, or Numbered) turns them all into this exact list type — Word's own
+  // "click to apply this list type" behavior, never lying about a mixed starting state.
+  _applyListFormat(listType) {
+    const sel = this._restoreActiveSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const blocks = this._paragraphsTouchedByRange(range);
+    if (blocks.length === 0) return;
+    const allAlreadyThisType = blocks.every((b) => effectiveBlockList(b) === listType);
+    for (const block of blocks) setBlockList(block, allAlreadyThisType ? null : listType);
+    this._renormalizeListMarkers();
+    this._refreshToolbarFromSelection();
+    this.onChange();
+  }
+
+  _applyIndent(delta) {
+    const sel = this._restoreActiveSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const blocks = this._paragraphsTouchedByRange(range);
+    if (blocks.length === 0) return;
+    for (const block of blocks) {
+      const next = Math.max(0, Math.min(MAX_INDENT_LEVEL, effectiveBlockIndent(block) + delta));
+      setBlockIndent(block, next);
+    }
+    this._renormalizeListMarkers();
+    this._refreshToolbarFromSelection();
+    this.onChange();
+  }
+
+  _applyLineSpacing(value) {
+    const sel = this._restoreActiveSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const blocks = this._paragraphsTouchedByRange(range);
+    if (blocks.length === 0) return;
+    for (const block of blocks) setBlockLineSpacing(block, value);
+    this._refreshToolbarFromSelection();
+    this.onChange();
+  }
+
+  _applySpacing(value) {
+    const sel = this._restoreActiveSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const blocks = this._paragraphsTouchedByRange(range);
+    if (blocks.length === 0) return;
+    for (const block of blocks) setBlockSpacing(block, value);
+    this._refreshToolbarFromSelection();
+    this.onChange();
+  }
+
+  _renormalizeListMarkers() {
+    renormalizeListMarkers(this.doc, this.editableEl);
+  }
+
+  _blockIsEmpty(block) {
+    return !Array.from(block.childNodes).some(isRunSpan);
+  }
+
+  // ---------------- Clear formatting (run-level reset only — see module header for scope) ----------------
+  // Deliberately resets ONLY run-level formatting (bold/italic/underline/strike/font/size/color),
+  // reusing the exact same span-replacement machinery bold/italic/etc. already use. Paragraph
+  // text, blank lines, Image/Table blocks, list membership, indent, alignment, and spacing are
+  // never touched here — clearing formatting on a bulleted, centered paragraph leaves it a
+  // bulleted, centered paragraph, just with plain (unformatted) text, matching most real editors'
+  // "Clear Formatting" scope and this task's own explicit conservatism requirement.
+  _clearFormatting() {
+    const sel = this._restoreActiveSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const clearedPatch = { bold: false, italic: false, underline: false, strike: false, font: "default", size: DEFAULT_SIZE, color: "default" };
+    if (range.collapsed) {
+      this._pendingFormat = { ...clearedPatch };
+      this._refreshToolbarFromSelection();
+      return;
+    }
+    const spans = this._getExactRunSpansForRange(range);
+    if (spans.length === 0) return;
+    this._replaceSpansWithFormat(spans, clearedPatch, range);
+  }
+
+  // ---------------- Undo / Redo (native history — see module header's documented exception) ----------------
+
+  _undo() {
+    if (!this.doc.execCommand) return;
+    this.editableEl.focus();
+    this.doc.execCommand("undo");
+    this._afterHistoryNavigation();
+  }
+
+  _redo() {
+    if (!this.doc.execCommand) return;
+    this.editableEl.focus();
+    this.doc.execCommand("redo");
+    this._afterHistoryNavigation();
+  }
+
+  // The native history can restore a bare text node (same shape native typing produces) or change
+  // which paragraphs are list items — re-run the same normalization/marker/caret machinery
+  // _handleInput already relies on, so the DOM stays in the canonical shape this module requires.
+  _afterHistoryNavigation() {
+    const restore = this._captureCaretForNormalize();
+    this._normalizeAllBlocks();
+    this._restoreCaretAfterNormalize(restore);
+    this._refreshToolbarFromSelection();
+    this.onChange();
+  }
+
+  _updateUndoRedoButtons() {
+    if (!this.doc.queryCommandEnabled) return;
+    // "Where reasonably detectable" (queryCommandEnabled is a legacy API some environments
+    // restrict or omit) — best-effort only; never throws, falls back to leaving buttons enabled.
+    try { this.undoBtn.disabled = !this.doc.queryCommandEnabled("undo"); } catch { /* leave as-is */ }
+    try { this.redoBtn.disabled = !this.doc.queryCommandEnabled("redo"); } catch { /* leave as-is */ }
+  }
+
   _runInfoFromSpan(span) {
     const run = readRunFromMarkedSpan(span);
     return {
       bold: run.bold === true,
       italic: run.italic === true,
+      underline: run.underline === true,
+      strike: run.strike === true,
       font: typeof run.font === "string" ? run.font : "default",
       size: typeof run.size === "number" ? run.size : DEFAULT_SIZE,
       color: typeof run.color === "string" ? run.color : "default"
@@ -626,6 +836,8 @@ export class RichTextEditor {
       const cleaned = { text: merged.text };
       if (merged.bold) cleaned.bold = true;
       if (merged.italic) cleaned.italic = true;
+      if (merged.underline) cleaned.underline = true;
+      if (merged.strike) cleaned.strike = true;
       if (merged.font !== "default") cleaned.font = merged.font;
       if (merged.size !== DEFAULT_SIZE) cleaned.size = merged.size;
       if (merged.color !== "default") cleaned.color = merged.color;
@@ -664,7 +876,7 @@ export class RichTextEditor {
       if (isRunSpan(child) && isRunSpan(next)) {
         const a = this._runInfoFromSpan(child);
         const b = this._runInfoFromSpan(next);
-        const sameFormat = a.bold === b.bold && a.italic === b.italic && a.font === b.font && a.size === b.size && a.color === b.color;
+        const sameFormat = a.bold === b.bold && a.italic === b.italic && a.underline === b.underline && a.strike === b.strike && a.font === b.font && a.size === b.size && a.color === b.color;
         if (sameFormat) {
           child.textContent = (child.textContent || "") + (next.textContent || "");
           block.removeChild(next);
@@ -698,6 +910,8 @@ export class RichTextEditor {
     const state = computeFormatState(infos);
     this.boldBtn.setAttribute("aria-pressed", state.mixed.bold ? "mixed" : String(state.bold));
     this.italicBtn.setAttribute("aria-pressed", state.mixed.italic ? "mixed" : String(state.italic));
+    this.underlineBtn.setAttribute("aria-pressed", state.mixed.underline ? "mixed" : String(state.underline));
+    this.strikeBtn.setAttribute("aria-pressed", state.mixed.strike ? "mixed" : String(state.strike));
     this.fontSelect.value = state.mixed.font ? "" : state.font;
     this.sizeSelect.value = state.mixed.size ? "" : String(state.size);
     this.colorSelect.value = state.mixed.color ? "" : state.color;
@@ -707,6 +921,21 @@ export class RichTextEditor {
     for (const [align, btn] of this.alignButtons) {
       btn.setAttribute("aria-pressed", alignState.mixed ? "mixed" : String(alignState.align === align));
     }
+
+    const listValues = alignBlocks.map((b) => effectiveBlockList(b));
+    const listState = computeUniformState(listValues, "");
+    this.bulletBtn.setAttribute("aria-pressed", listState.mixed ? "mixed" : String(listState.value === "bullet"));
+    this.numberBtn.setAttribute("aria-pressed", listState.mixed ? "mixed" : String(listState.value === "number"));
+
+    const lineSpacingValues = alignBlocks.map((b) => effectiveBlockLineSpacing(b));
+    const lineSpacingState = computeUniformState(lineSpacingValues, "1");
+    this.lineSpacingSelect.value = lineSpacingState.mixed ? "" : lineSpacingState.value;
+
+    const spacingValues = alignBlocks.map((b) => effectiveBlockSpacing(b));
+    const spacingState = computeUniformState(spacingValues, "normal");
+    this.spacingSelect.value = spacingState.mixed ? "" : spacingState.value;
+
+    this._updateUndoRedoButtons();
   }
 
   _handleSelectionChange() {
@@ -763,7 +992,28 @@ export class RichTextEditor {
       const sel=this._getSelection();
       const cell=sel?.rangeCount ? (sel.getRangeAt(0).startContainer.nodeType===1?sel.getRangeAt(0).startContainer:sel.getRangeAt(0).startContainer.parentNode)?.closest?.('[data-rt-cell="1"]') : null;
       if(cell){ this._insertTextAtCaret("\n"); return; }
+      const currentBlock = this._currentBlock();
+      if (currentBlock && currentBlock.getAttribute(DATA_BLOCK_ATTR) === "paragraph" && effectiveBlockList(currentBlock) && this._blockIsEmpty(currentBlock)) {
+        // Word-like: Enter on an empty list item exits the list in place, rather than adding yet
+        // another empty bullet/number — this one paragraph becomes a plain paragraph, no new line.
+        setBlockList(currentBlock, null);
+        setBlockIndent(currentBlock, 0);
+        this._renormalizeListMarkers();
+        this._refreshToolbarFromSelection();
+        this.onChange();
+        return;
+      }
       this._insertParagraphBreakAtCaret();
+      return;
+    }
+    // Standard formatting shortcuts (Ctrl on Windows/Linux, Cmd on macOS). Ctrl/Cmd+Z and +Y/+Shift+Z
+    // are deliberately left un-intercepted here so native undo/redo keeps working exactly as it did
+    // before this feature — see this module's header comment on the toolbar's one execCommand use.
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+      const key = e.key.toLowerCase();
+      if (key === "b") { e.preventDefault(); this._toggleBooleanFormat("bold"); return; }
+      if (key === "i") { e.preventDefault(); this._toggleBooleanFormat("italic"); return; }
+      if (key === "u") { e.preventDefault(); this._toggleBooleanFormat("underline"); return; }
     }
   }
 
@@ -817,22 +1067,31 @@ export class RichTextEditor {
     // paragraph individually — the new block inherits it natively from that same region.
     const newBlock = this.doc.createElement("div");
     newBlock.setAttribute(DATA_BLOCK_ATTR, "paragraph");
-    // Word-like Enter inheritance: the newly-split paragraph starts with the SAME alignment as the
-    // paragraph it split from (e.g. Enter from a Centered title keeps the next line Centered until
-    // the user chooses otherwise). Reads the raw attribute directly (not effectiveBlockAlign) so a
-    // currentBlock with no explicit alignment (the ordinary "left" case) correctly leaves newBlock
-    // with no attribute either, rather than writing out an explicit "left".
-    const inheritedAlign = currentBlock.getAttribute(DATA_ALIGN_ATTR);
-    if (inheritedAlign !== null) setBlockAlign(newBlock, inheritedAlign);
+    // Word-like Enter inheritance: the newly-split paragraph starts with the SAME alignment/list/
+    // indent as the paragraph it split from (e.g. Enter from a Centered title keeps the next line
+    // Centered; Enter on a list item creates the next item, same type and indent, until the user
+    // chooses otherwise). Reads attributes directly (not the effectiveBlockXxx helpers) so a
+    // currentBlock with no explicit value correctly leaves newBlock with no attribute either,
+    // rather than writing out an explicit default. List marker insertion itself happens afterward
+    // via _renormalizeListMarkers, not here.
+    for (const attr of [DATA_ALIGN_ATTR, DATA_LIST_ATTR, DATA_INDENT_ATTR]) {
+      const value = currentBlock.getAttribute(attr);
+      if (value !== null) newBlock.setAttribute(attr, value);
+    }
+    if (currentBlock.style.textAlign) newBlock.style.textAlign = currentBlock.style.textAlign;
+    if (currentBlock.style.marginLeft) newBlock.style.marginLeft = currentBlock.style.marginLeft;
 
-    // Move every sibling AFTER the split point into the new block.
+    // Move every sibling AFTER the split point into the new block. The list marker (if any) is the
+    // block's non-editable first child and must never itself be moved — only real content moves;
+    // the new block gets its own fresh marker from _renormalizeListMarkers below.
     let moveStart;
     if (anchorSpan) {
       moveStart = anchorSpan.nextSibling;
     } else {
       // Caret was at a position with no run to its left (start of block, or empty block) — the
-      // whole block's content (if any) moves to the new block, leaving the original empty.
-      moveStart = currentBlock.firstChild;
+      // whole block's content (if any, excluding its marker) moves to the new block, leaving the
+      // original (plus its marker, if it has one) empty.
+      moveStart = Array.from(currentBlock.childNodes).find((c) => !isListMarkerElement(c)) || null;
     }
     while (moveStart) {
       const next = moveStart.nextSibling;
@@ -844,6 +1103,7 @@ export class RichTextEditor {
     this._ensureBlockHasContent(newBlock);
 
     currentBlock.parentNode.insertBefore(newBlock, currentBlock.nextSibling);
+    this._renormalizeListMarkers();
 
     // Place the caret at the very start of the new block.
     const newRange = this.doc.createRange();
@@ -952,10 +1212,19 @@ export class RichTextEditor {
         region.appendChild(createEmptyParagraphElement(this.doc));
       }
     }
+    // Covers every path that reaches here: native typing/merge (_handleInput), paste, and
+    // compositionend — any of which can change which paragraphs are list items, their order, or
+    // introduce/remove a region boundary.
+    this._renormalizeListMarkers();
   }
 
   _normalizeBlock(block) {
     for (const child of Array.from(block.childNodes)) {
+      if (isListMarkerElement(child)) {
+        // The non-editable bullet/number marker — never treated as bare/hostile content; its
+        // number is recomputed separately by _renormalizeListMarkers, not here.
+        continue;
+      }
       if (child.nodeType === 3) {
         const text = child.textContent || "";
         if (text.length === 0) { block.removeChild(child); continue; }
@@ -982,6 +1251,8 @@ export class RichTextEditor {
     const run = { text };
     if (formatInfo.bold) run.bold = true;
     if (formatInfo.italic) run.italic = true;
+    if (formatInfo.underline) run.underline = true;
+    if (formatInfo.strike) run.strike = true;
     if (formatInfo.font !== "default") run.font = formatInfo.font;
     if (formatInfo.size !== DEFAULT_SIZE) run.size = formatInfo.size;
     if (formatInfo.color !== "default") run.color = formatInfo.color;
@@ -1040,6 +1311,9 @@ export class RichTextEditor {
     let sum = 0;
     for (const child of block.childNodes) {
       if (child === owner) return sum + offset;
+      // The list marker's own text ("•"/"1.") is presentational, never part of the block's actual
+      // character stream — excluded here exactly like it is from readRunsFromBlock/serialization.
+      if (isListMarkerElement(child)) continue;
       sum += (child.textContent || "").length;
     }
     return sum + offset;

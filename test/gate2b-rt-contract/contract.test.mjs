@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import {
   RICH_TEXT_VERSION, MAX_BLOCKS, MAX_RUNS_PER_BLOCK, MAX_RUN_TEXT_LENGTH, MAX_TOTAL_TEXT_LENGTH,
   MAX_SERIALIZED_BYTE_LENGTH, FONT_TOKENS, SIZE_TOKENS, COLOR_TOKENS, ALIGN_TOKENS, DEFAULT_SIZE,
+  LIST_TOKENS, MAX_INDENT_LEVEL, LINE_SPACING_TOKENS, SPACING_TOKENS,
   validateRichTextV1, normalizeRichTextV1, richTextToPlainText,
   codePointLength, truncateToCodePoints
 } from "../../rich-text-contract.mjs";
@@ -434,4 +435,78 @@ test("G: round-trip through normalize -> validate is stable for every alignment 
     assert.equal(validateRichTextV1(normalized), true);
     assert.equal(normalized.blocks[0].align, align === "left" ? undefined : align);
   }
+});
+
+// =====================================================================================
+// H. UNDERLINE / STRIKETHROUGH (run-level) + LIST / INDENT / LINE SPACING / PARAGRAPH SPACING
+// (paragraph-level) — GATE RICHTEXT-V3
+// =====================================================================================
+
+test("H: underline and strikethrough are valid boolean run fields, same convention as bold/italic", () => {
+  assert.equal(validateRichTextV1(doc(paragraph(run("x", { underline: true })))), true);
+  assert.equal(validateRichTextV1(doc(paragraph(run("x", { strike: true })))), true);
+  assert.equal(validateRichTextV1(doc(paragraph(run("x", { underline: true, strike: true })))), true);
+  assert.equal(validateRichTextV1(doc(paragraph(run("x", { underline: "yes" })))), false, "non-boolean must be rejected");
+  assert.equal(validateRichTextV1(doc(paragraph(run("x", { strike: 1 })))), false, "non-boolean must be rejected");
+});
+
+test("H: normalization omits underline/strike when false/absent, keeps them only when true", () => {
+  assert.deepEqual(normalizeRichTextV1(doc(paragraph(run("x", { underline: false, strike: false })))),
+    { version: RICH_TEXT_VERSION, blocks: [{ type: "paragraph", runs: [{ text: "x" }] }] });
+  assert.deepEqual(normalizeRichTextV1(doc(paragraph(run("x", { underline: true, strike: true })))),
+    { version: RICH_TEXT_VERSION, blocks: [{ type: "paragraph", runs: [{ text: "x", underline: true, strike: true }] }] });
+});
+
+test("H: each list token is valid; an unlisted token is rejected", () => {
+  for (const list of LIST_TOKENS) assert.equal(validateRichTextV1(doc({ type: "paragraph", list, runs: [] })), true);
+  assert.equal(validateRichTextV1(doc({ type: "paragraph", list: "roman-numeral", runs: [] })), false);
+  assert.equal(validateRichTextV1(doc({ type: "paragraph", list: "", runs: [] })), false, "empty string is not a valid list token");
+});
+
+test("H: indent accepts integers 1..MAX_INDENT_LEVEL only; 0, negative, non-integer, and over-max are all rejected", () => {
+  for (let i = 1; i <= MAX_INDENT_LEVEL; i++) assert.equal(validateRichTextV1(doc({ type: "paragraph", indent: i, runs: [] })), true, `indent=${i} must be valid`);
+  assert.equal(validateRichTextV1(doc({ type: "paragraph", indent: 0, runs: [] })), false, "0 must never be explicitly stored — absence IS 0");
+  assert.equal(validateRichTextV1(doc({ type: "paragraph", indent: -1, runs: [] })), false);
+  assert.equal(validateRichTextV1(doc({ type: "paragraph", indent: 1.5, runs: [] })), false);
+  assert.equal(validateRichTextV1(doc({ type: "paragraph", indent: MAX_INDENT_LEVEL + 1, runs: [] })), false);
+});
+
+test("H: a document with no paragraph still bounded by a realistic indent ceiling (documented as MAX_INDENT_LEVEL)", () => {
+  assert.equal(MAX_INDENT_LEVEL, 4, "sanity check the chosen, documented maximum nesting level has not silently drifted");
+});
+
+test("H: each line-spacing token is valid; an unlisted token is rejected", () => {
+  for (const lineSpacing of LINE_SPACING_TOKENS) assert.equal(validateRichTextV1(doc({ type: "paragraph", lineSpacing, runs: [] })), true);
+  assert.equal(validateRichTextV1(doc({ type: "paragraph", lineSpacing: "1.25", runs: [] })), false);
+  assert.equal(validateRichTextV1(doc({ type: "paragraph", lineSpacing: 1.15, runs: [] })), false, "must be the string token, not a float");
+});
+
+test("H: each paragraph-spacing token is valid; an unlisted token is rejected", () => {
+  for (const spacing of SPACING_TOKENS) assert.equal(validateRichTextV1(doc({ type: "paragraph", spacing, runs: [] })), true);
+  assert.equal(validateRichTextV1(doc({ type: "paragraph", spacing: "huge", runs: [] })), false);
+});
+
+test("H: an existing paragraph with none of the new fields validates exactly as before (backward compatible)", () => {
+  assert.equal(validateRichTextV1(doc(paragraph(run("Nội dung cũ", { bold: true })))), true);
+});
+
+test("H: normalization omits list/indent/lineSpacing/spacing at their defaults, keeps them otherwise, never enforcing the allowlist itself", () => {
+  assert.deepEqual(normalizeRichTextV1(doc({ type: "paragraph", indent: 0, lineSpacing: "1", spacing: "normal", runs: [run("x")] })),
+    { version: RICH_TEXT_VERSION, blocks: [{ type: "paragraph", runs: [{ text: "x" }] }] });
+  const full = normalizeRichTextV1(doc({ type: "paragraph", list: "number", indent: 2, lineSpacing: "1.5", spacing: "wide", runs: [run("x")] }));
+  assert.deepEqual(full.blocks[0], { type: "paragraph", list: "number", indent: 2, lineSpacing: "1.5", spacing: "wide", runs: [{ text: "x" }] });
+  // Pass-through of invalid values — isValidBlock's job (tested above) to reject downstream.
+  const invalid = normalizeRichTextV1(doc({ type: "paragraph", list: "roman", runs: [] }));
+  assert.equal(invalid.blocks[0].list, "roman");
+  assert.equal(validateRichTextV1(invalid), false);
+});
+
+test("H: every new field can coexist with every pre-existing field (align, bold/italic/font/size/color) on the same block", () => {
+  const d = doc({
+    type: "paragraph", align: "center", list: "bullet", indent: 1, lineSpacing: "1.5", spacing: "wide",
+    runs: [run("Đoạn văn đầy đủ định dạng", { bold: true, italic: true, underline: true, strike: true, font: "times", size: 20, color: "blue" })]
+  });
+  assert.equal(validateRichTextV1(d), true);
+  const normalized = normalizeRichTextV1(d);
+  assert.deepEqual(normalized, d);
 });

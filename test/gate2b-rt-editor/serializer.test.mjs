@@ -11,6 +11,9 @@ import {
   DATA_RUN_ATTR,
   DATA_TEXT_REGION_ATTR,
   DATA_ALIGN_ATTR,
+  DATA_LIST_ATTR,
+  DATA_INDENT_ATTR,
+  DATA_LIST_MARKER_ATTR,
   createRunSpan,
   richTextToDom,
   legacyPlainTextToDom,
@@ -20,13 +23,24 @@ import {
   splitRunAtOffset,
   setBlockAlign,
   effectiveBlockAlign,
+  setBlockList,
+  effectiveBlockList,
+  setBlockIndent,
+  effectiveBlockIndent,
+  setBlockLineSpacing,
+  effectiveBlockLineSpacing,
+  setBlockSpacing,
+  effectiveBlockSpacing,
+  isListMarkerElement,
+  renormalizeListMarkers,
   computeAlignState,
+  computeUniformState,
   computeFormatState,
   normalizePastedPlainText,
   pastedTextToParagraphLines,
   PASTE_TAB_REPLACEMENT
 } from "../../rich-text-editor-serializer.mjs";
-import { validateRichTextV1, MAX_BLOCKS, MAX_RUNS_PER_BLOCK, MAX_RUN_TEXT_LENGTH, MAX_TOTAL_TEXT_LENGTH, ALIGN_TOKENS } from "../../rich-text-contract.mjs";
+import { validateRichTextV1, MAX_BLOCKS, MAX_RUNS_PER_BLOCK, MAX_RUN_TEXT_LENGTH, MAX_TOTAL_TEXT_LENGTH, ALIGN_TOKENS, LIST_TOKENS, MAX_INDENT_LEVEL } from "../../rich-text-contract.mjs";
 
 function mount(doc, frag) {
   const root = doc.createElement("div");
@@ -438,8 +452,8 @@ test("25: splitRunAtOffset preserves bold/italic/font/size/color identically on 
 test("26: computeFormatState on an empty list reports the all-default, non-mixed state", () => {
   const state = computeFormatState([]);
   assert.deepEqual(state, {
-    bold: false, italic: false, font: "default", size: 16, color: "default",
-    mixed: { bold: false, italic: false, font: false, size: false, color: false }
+    bold: false, italic: false, underline: false, strike: false, font: "default", size: 16, color: "default",
+    mixed: { bold: false, italic: false, underline: false, strike: false, font: false, size: false, color: false }
   });
 });
 
@@ -622,4 +636,145 @@ test("47: computeAlignState reports a uniform value, or null+mixed:true when par
   assert.deepEqual(computeAlignState(["center"]), { align: "center", mixed: false });
   assert.deepEqual(computeAlignState(["center", "center", "center"]), { align: "center", mixed: false });
   assert.deepEqual(computeAlignState(["left", "center", "right"]), { align: null, mixed: true });
+});
+
+// ===================================================================================
+// 48+: UNDERLINE / STRIKETHROUGH / LIST / INDENT / LINE SPACING / PARAGRAPH SPACING
+// (GATE RICHTEXT-V3) — DOM write/read round-trip and the new pure helpers
+// ===================================================================================
+
+test("48: createRunSpan writes underline/strike attributes and the combined textDecoration style", () => {
+  const doc = new FakeDocument();
+  const both = createRunSpan(doc, { text: "x", underline: true, strike: true });
+  assert.equal(both.getAttribute("data-rt-underline"), "1");
+  assert.equal(both.getAttribute("data-rt-strike"), "1");
+  assert.equal(both.style.textDecoration, "underline line-through");
+  const onlyUnderline = createRunSpan(doc, { text: "x", underline: true });
+  assert.equal(onlyUnderline.style.textDecoration, "underline");
+  const neither = createRunSpan(doc, { text: "x" });
+  assert.equal(neither.getAttribute("data-rt-underline"), null);
+  assert.equal(neither.style.textDecoration, undefined);
+});
+
+test("49: computeUniformState is the generic form computeAlignState wraps — same semantics for any property", () => {
+  assert.deepEqual(computeUniformState([], "normal"), { value: "normal", mixed: false });
+  assert.deepEqual(computeUniformState(["bullet", "bullet"], ""), { value: "bullet", mixed: false });
+  assert.deepEqual(computeUniformState(["bullet", "number"], ""), { value: null, mixed: true });
+});
+
+test("50: setBlockList/effectiveBlockList/setBlockIndent/effectiveBlockIndent/setBlockLineSpacing/setBlockSpacing round-trip correctly and clear on default", () => {
+  const doc = new FakeDocument();
+  const el = doc.createElement("div");
+  assert.equal(effectiveBlockList(el), "");
+  setBlockList(el, "bullet");
+  assert.equal(el.getAttribute(DATA_LIST_ATTR), "bullet");
+  assert.equal(effectiveBlockList(el), "bullet");
+  setBlockList(el, null);
+  assert.equal(el.getAttribute(DATA_LIST_ATTR), null);
+
+  assert.equal(effectiveBlockIndent(el), 0);
+  setBlockIndent(el, 3);
+  assert.equal(el.getAttribute(DATA_INDENT_ATTR), "3");
+  assert.equal(el.style.marginLeft, "72px");
+  assert.equal(effectiveBlockIndent(el), 3);
+  setBlockIndent(el, 0);
+  assert.equal(el.getAttribute(DATA_INDENT_ATTR), null);
+  assert.equal(el.style.marginLeft, "");
+
+  assert.equal(effectiveBlockLineSpacing(el), "1");
+  setBlockLineSpacing(el, "1.5");
+  assert.equal(effectiveBlockLineSpacing(el), "1.5");
+  setBlockLineSpacing(el, "1");
+  assert.equal(el.getAttribute("data-rt-line-spacing"), null, "the default (1) is never itself persisted");
+
+  assert.equal(effectiveBlockSpacing(el), "normal");
+  setBlockSpacing(el, "compact");
+  assert.equal(effectiveBlockSpacing(el), "compact");
+  setBlockSpacing(el, "normal");
+  assert.equal(el.getAttribute("data-rt-spacing"), null, "the default (normal) is never itself persisted");
+});
+
+test("51: richTextToDom writes list/indent/lineSpacing/spacing attributes only when non-default", () => {
+  const doc = new FakeDocument();
+  const value = { version: 1, blocks: [
+    { type: "paragraph", runs: [{ text: "plain" }] },
+    { type: "paragraph", list: "number", indent: 2, lineSpacing: "2", spacing: "compact", runs: [{ text: "full" }] }
+  ] };
+  const root = mount(doc, richTextToDom(doc, value));
+  const [plain, full] = root.firstChild.childNodes;
+  assert.equal(plain.getAttribute(DATA_LIST_ATTR), null);
+  assert.equal(plain.getAttribute(DATA_INDENT_ATTR), null);
+  assert.equal(full.getAttribute(DATA_LIST_ATTR), "number");
+  assert.equal(full.getAttribute(DATA_INDENT_ATTR), "2");
+  assert.equal(full.getAttribute("data-rt-line-spacing"), "2");
+  assert.equal(full.getAttribute("data-rt-spacing"), "compact");
+});
+
+test("52: a list paragraph gets a non-editable marker as its first child, correctly numbered, and it round-trips out of the export as plain runs (never leaking into content)", () => {
+  const doc = new FakeDocument();
+  const value = { version: 1, blocks: [
+    { type: "paragraph", list: "number", runs: [{ text: "one" }] },
+    { type: "paragraph", list: "number", runs: [{ text: "two" }] }
+  ] };
+  const root = mount(doc, richTextToDom(doc, value));
+  const [p1, p2] = root.firstChild.childNodes;
+  assert.ok(isListMarkerElement(p1.firstChild));
+  assert.equal(p1.firstChild.textContent, "1.");
+  assert.equal(p1.firstChild.getAttribute("contenteditable"), "false");
+  assert.equal(p2.firstChild.textContent, "2.");
+  const result = serializeToRichText(root);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value, value);
+});
+
+test("53: renormalizeListMarkers resets numbering across a text-region boundary (equivalent to an Image/Table interrupting the run)", () => {
+  const doc = new FakeDocument();
+  const root = doc.createElement("div");
+  const region1 = doc.createElement("div");
+  region1.setAttribute(DATA_TEXT_REGION_ATTR, "1");
+  const region2 = doc.createElement("div");
+  region2.setAttribute(DATA_TEXT_REGION_ATTR, "1");
+  function numberedParagraph(text) {
+    const el = doc.createElement("div");
+    el.setAttribute(DATA_BLOCK_ATTR, "paragraph");
+    setBlockList(el, "number");
+    const span = createRunSpan(doc, { text });
+    el.appendChild(span);
+    return el;
+  }
+  region1.appendChild(numberedParagraph("a"));
+  region1.appendChild(numberedParagraph("b"));
+  region2.appendChild(numberedParagraph("c"));
+  root.appendChild(region1);
+  root.appendChild(region2);
+  renormalizeListMarkers(doc, root);
+  assert.equal(region1.childNodes[0].firstChild.textContent, "1.");
+  assert.equal(region1.childNodes[1].firstChild.textContent, "2.");
+  assert.equal(region2.childNodes[0].firstChild.textContent, "1.", "numbering must restart in the new region");
+});
+
+test("54: an invalid list/indent/lineSpacing/spacing attribute value fails closed on export, same fail-safe policy as every other formatting field", () => {
+  const doc = new FakeDocument();
+  const value = { version: 1, blocks: [{ type: "paragraph", runs: [{ text: "x" }] }] };
+  for (const [attr, badValue] of [[DATA_LIST_ATTR, "roman"], [DATA_INDENT_ATTR, "not-a-number"], ["data-rt-line-spacing", "99"], ["data-rt-spacing", "huge"]]) {
+    const root = mount(doc, richTextToDom(doc, value));
+    root.firstChild.firstChild.setAttribute(attr, badValue);
+    const result = serializeToRichText(root);
+    assert.equal(result.ok, false, `an invalid ${attr} value must fail closed`);
+  }
+});
+
+test("55: every alignment/list/indent/lineSpacing/spacing token round-trips through richTextToDom -> serializeToRichText exactly, including every indent level", () => {
+  const doc = new FakeDocument();
+  const blocks = [];
+  for (const list of LIST_TOKENS) {
+    for (let indent = 1; indent <= MAX_INDENT_LEVEL; indent++) {
+      blocks.push({ type: "paragraph", list, indent, runs: [{ text: `${list}-${indent}` }] });
+    }
+  }
+  const value = { version: 1, blocks };
+  const root = mount(doc, richTextToDom(doc, value));
+  const result = serializeToRichText(root);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value, value);
 });

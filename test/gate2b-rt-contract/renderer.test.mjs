@@ -4,7 +4,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { renderRichText, FONT_CSS_MAP, SIZE_CSS_MAP, COLOR_CSS_MAP, ALIGN_CSS_MAP } from "../../rich-text-renderer.mjs";
+import { renderRichText, FONT_CSS_MAP, SIZE_CSS_MAP, COLOR_CSS_MAP, ALIGN_CSS_MAP, LINE_SPACING_CSS_MAP, SPACING_CSS_MAP, INDENT_PX_PER_LEVEL } from "../../rich-text-renderer.mjs";
 import { RICH_TEXT_VERSION, MAX_BLOCKS } from "../../rich-text-contract.mjs";
 import { FakeDocument } from "./fake-dom.mjs";
 
@@ -167,6 +167,57 @@ test("D: a paragraph with no align field (or explicit \"left\") renders with no 
   renderRichText(container, doc(paragraph(run("mặc định")), { type: "paragraph", align: "left", runs: [run("trái")] }), "", d);
   assert.equal(container.children[0].style.textAlign, undefined);
   assert.equal(container.children[1].style.textAlign, undefined);
+});
+
+// =====================================================================================
+// D+: UNDERLINE / STRIKETHROUGH / LIST / INDENT / LINE SPACING / PARAGRAPH SPACING rendering
+// (GATE RICHTEXT-V3)
+// =====================================================================================
+
+test("D: underline and strikethrough render as the correct textDecoration, together or alone", () => {
+  const { d, container } = newContainer();
+  renderRichText(container, doc(paragraph(run("a", { underline: true })), paragraph(run("b", { strike: true })), paragraph(run("c", { underline: true, strike: true }))), "", d);
+  assert.equal(container.children[0].children[0].style.textDecoration, "underline");
+  assert.equal(container.children[1].children[0].style.textDecoration, "line-through");
+  assert.equal(container.children[2].children[0].style.textDecoration, "underline line-through");
+});
+
+test("D: a numbered list renders sequential markers that reset after a non-list paragraph", () => {
+  const { d, container } = newContainer();
+  renderRichText(container, doc(
+    { type: "paragraph", list: "number", runs: [run("one")] },
+    { type: "paragraph", list: "number", runs: [run("two")] },
+    paragraph(run("interrupts")),
+    { type: "paragraph", list: "number", runs: [run("restarts")] }
+  ), "", d);
+  const markers = Array.from(container.children).map((p) => p.children[0]?.className === "rt-list-marker" ? p.children[0].textContent : null);
+  assert.deepEqual(markers, ["1.", "2.", null, "1."]);
+});
+
+test("D: a bullet list renders the fixed bullet glyph for every item, regardless of position", () => {
+  const { d, container } = newContainer();
+  renderRichText(container, doc({ type: "paragraph", list: "bullet", runs: [run("a")] }, { type: "paragraph", list: "bullet", runs: [run("b")] }), "", d);
+  assert.equal(container.children[0].children[0].textContent, "•");
+  assert.equal(container.children[1].children[0].textContent, "•");
+});
+
+test("D: indent maps to a fixed px-per-level margin, never arbitrary CSS", () => {
+  const { d, container } = newContainer();
+  renderRichText(container, doc({ type: "paragraph", indent: 2, runs: [run("x")] }), "", d);
+  assert.equal(container.children[0].style.marginLeft, `${2 * INDENT_PX_PER_LEVEL}px`);
+});
+
+test("D: line spacing and paragraph spacing map through their fixed CSS lookups only", () => {
+  const { d, container } = newContainer();
+  renderRichText(container, doc({ type: "paragraph", lineSpacing: "1.5", spacing: "wide", runs: [run("x")] }), "", d);
+  assert.equal(container.children[0].style.lineHeight, LINE_SPACING_CSS_MAP["1.5"]);
+  assert.equal(container.children[0].style.margin, `0 0 ${SPACING_CSS_MAP.wide} 0`);
+});
+
+test("D: default/absent spacing renders the same margin as before this feature existed", () => {
+  const { d, container } = newContainer();
+  renderRichText(container, doc(paragraph(run("x"))), "", d);
+  assert.equal(container.children[0].style.margin, "0 0 0.5em 0");
 });
 
 // =====================================================================================

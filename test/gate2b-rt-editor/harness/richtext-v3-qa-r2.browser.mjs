@@ -158,7 +158,15 @@ try {
     assert.ok(indentedX > baseX, `indent level 1 (x=${indentedX}) must start to the right of the base document inset (x=${baseX})`);
   });
 
-  await check("A5. Image/Table never inherit paragraph indentation, but share the same base document inset", async () => {
+  await check("A5. Image/Table never inherit paragraph indentation, and sit exactly one region-gutter left of paragraph text", async () => {
+    // Updated for GATE RICHTEXT-V3-QA-R3: paragraphs now sit one extra small, deliberate inner
+    // gutter to the right of Image/Table, because that gutter lives on [data-rt-text-region]
+    // (which only ever wraps paragraphs) while Image/Table are siblings of regions, never
+    // descendants — see richtext-v3-qa-r3.browser.mjs for the dedicated R3 geometry coverage.
+    // Before R3 the region had zero padding of its own, so image and paragraph shared the exact
+    // same base inset; that equality was never the actual invariant worth protecting here — the
+    // real invariant (checked below) is that Image/Table never pick up any paragraph-only indent
+    // or region gutter themselves.
     await reset();
     await page.evaluate(() => window.__editor.setRichText({ version: 2, blocks: [
       { type: "paragraph", runs: [{ text: "Base" }] },
@@ -167,11 +175,18 @@ try {
     const info = await page.evaluate(() => {
       const img = document.querySelector('#mount [data-rt-block="image"]');
       const para = document.querySelector('#mount [data-rt-block="paragraph"]');
-      return { imgLeft: img.getBoundingClientRect().left, imgMarginLeft: getComputedStyle(img).marginLeft, imgHasIndentAttr: img.hasAttribute("data-rt-indent"), paraLeft: para.getBoundingClientRect().left };
+      const region = document.querySelector('#mount [data-rt-text-region]');
+      return {
+        imgLeft: img.getBoundingClientRect().left,
+        imgMarginLeft: getComputedStyle(img).marginLeft,
+        imgHasIndentAttr: img.hasAttribute("data-rt-indent"),
+        paraLeft: para.getBoundingClientRect().left,
+        regionGutter: parseFloat(getComputedStyle(region).paddingLeft),
+      };
     });
     assert.equal(info.imgHasIndentAttr, false, "an image block must never carry a data-rt-indent attribute");
     assert.equal(info.imgMarginLeft, "0px", "an image block must never inherit a paragraph's indent margin-left");
-    assert.equal(info.imgLeft, info.paraLeft, "image and paragraph must still share the SAME base document inset");
+    assert.equal(info.paraLeft - info.imgLeft, info.regionGutter, "the ONLY gap between image and paragraph content origin must be the region's own inner gutter — never an inherited indent");
   });
 
   await check("A6. Common Task and Per-group Task editors apply the identical CSS writing inset", async () => {

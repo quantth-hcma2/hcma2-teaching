@@ -447,6 +447,9 @@ tr:hover td{background:#fafbfc;}
 .group-panel-focus-trigger:focus-visible{outline:3px solid #2563eb;outline-offset:2px}
 .group-live-stage .group-media img{max-width:100%;height:auto;aspect-ratio:1;object-fit:cover}
 .group-panel h4{margin:0 0 4px;font-size:16px}
+.group-panel-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px}
+.group-panel-head h4{margin:0}
+.group-pdf-btn{flex:none;white-space:nowrap}
 .group-topic{font-size:13px;color:var(--primary);font-weight:700;margin-bottom:8px}
 .group-note{background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;padding:9px 10px;margin:7px 0;white-space:pre-wrap;word-break:break-word}
 .group-media{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
@@ -607,6 +610,8 @@ import { resolveCandidateEnvironment, candidateGroupJoinUrl } from "./app-enviro
 // see session-info-compare.mjs for the production-bug root cause and full contract.
 import { valuesEqualDeep, findConflictKey } from "./session-info-compare.mjs";
 import { uploadThenCreateGroupSubmission, reportGroupSubmissionImageLoadError } from "./group-submission-upload.mjs";
+// GROUP PDF V1: per-group PDF export. This import is small; the PDF library and fonts load lazily on first export.
+import { exportGroupPdf } from "./group-pdf-runtime.mjs?v=20261002-pdf-v1";
 // GATE 5F.C: Knowledge Co-creation dashboard launch/close control for the Classroom Second Brain
 // (V2) projection. Talks only to the accepted, frozen Gate 5C HTTP contract — never touches
 // Firestore Rules/indexes, the Public Second Brain V1 service, or any Classroom backend file.
@@ -701,6 +706,20 @@ async function downloadGroupSubmission(path,name,usePublic){
   const url=await groupSubmissionBlobUrl(path,usePublic);
   const a=document.createElement("a");a.href=url;a.download=name||"tep";document.body.appendChild(a);a.click();a.remove();
   setTimeout(()=>URL.revokeObjectURL(url),30000);
+}
+// GROUP PDF V1: image bytes for the PDF reuse the two existing authenticated readers (scope/path checks + Storage
+// getBytes). No download URL or token is ever created; the blob URL is process-local and revoked immediately.
+async function groupPdfFetchImageBytes(request){
+  let url;
+  if(request.kind==="rich") url=await richImageUrl(request.path,false,request.context);
+  else if(request.kind==="photo") url=await groupSubmissionBlobUrl(request.path,false,MAX_IMAGE_BYTES);
+  else throw new Error("Loại ảnh không hợp lệ.");
+  try{ return await (await fetch(url)).arrayBuffer(); }
+  finally{ URL.revokeObjectURL(url); }
+}
+async function groupPdfLoadMembers(activityId){
+  const snap=await getDocs(collection(db,GROUP_COLLECTION,activityId,"members"));
+  return snap.docs.map(d=>({uid:d.id,...d.data()}));
 }
 async function createGroupAssetSubmission({activity,group,file,kind}){
   const participantId=publicAuth.currentUser.uid;
@@ -2297,6 +2316,7 @@ async function groupLive(c,id,isAdminView){
   $("#gSessionInfo").onclick=()=>openSessionInfoEditor("groupActivities",id);
   $("#gClose").onclick=()=>updateDoc(doc(db,GROUP_COLLECTION,id),{status:"closed",updatedAt:serverTimestamp()}).catch(e=>toast(mapError(e),"err"));
   let current=a, notes=[],photos=[],files=[],topics={};
+  let pdfBusyGroup=null;
   const groupViewState={allFullscreen:false,focusedGroup:null,focusOrigin:null};
   const groupFocusInteractiveSelector='a,button,input,select,textarea,label,img,[role="button"],[contenteditable="true"]';
   function applyGroupViewState(){
@@ -2351,6 +2371,40 @@ async function groupLive(c,id,isAdminView){
   }
   $("#gSaveTopics").onclick=()=>openSessionInfoEditor("groupActivities",id);
   $("#gManageMembers").onclick=()=>openGroupMembersManager(current);
+  // GROUP PDF V1: exports exactly ONE group from the data this live view already holds (plus, only when
+  // collectStudentNames is on, one owner/admin-only members read). Read-only: no Firestore/Storage writes.
+  // The PDF library and fonts are fetched lazily by the runtime module, only when this action runs.
+  function setGroupPdfButtons(activeGroup,label){
+    $$("[data-group-pdf]").forEach(button=>{
+      button.disabled=pdfBusyGroup!==null;
+      button.textContent=pdfBusyGroup!==null&&Number(button.dataset.groupPdf)===activeGroup?label:"TẢI PDF";
+    });
+  }
+  async function startGroupPdfExport(group){
+    if(pdfBusyGroup!==null||current.status==="deleted") return;
+    pdfBusyGroup=group; setGroupPdfButtons(group,"Đang tạo PDF…");
+    let namesUnavailable=false;
+    try{
+      const members=[];
+      if(current.collectStudentNames===true){
+        try{ members.push(...await groupPdfLoadMembers(id)); }catch(e){ namesUnavailable=true; }
+      }
+      const result=await exportGroupPdf({activity:{...current,id},group,topic:topics[String(group)]||null,notes:notes.slice(),photos:photos.slice(),files:files.slice(),members},{
+        fetchImageBytes:groupPdfFetchImageBytes,
+        onProgress:p=>setGroupPdfButtons(group,p.stage==="images"&&p.total>0?`Đang tạo PDF… (ảnh ${p.done}/${p.total})`:"Đang tạo PDF…")
+      });
+      toast(`Đã tạo PDF Nhóm ${group}.`,"ok");
+      const warnings=[];
+      if(result.stats.imageFailures>0) warnings.push(`${result.stats.imageFailures} ảnh không tải được (PDF có khung thông báo thay thế)`);
+      if(result.stats.replacements>0) warnings.push(`${result.stats.replacements} ký tự không có trong phông PDF (ví dụ biểu tượng cảm xúc) đã được thay bằng ký hiệu thay thế`);
+      if(namesUnavailable) warnings.push("không đọc được tên học viên nên PDF không hiển thị tên");
+      if(warnings.length) toast(`Lưu ý: ${warnings.join("; ")}.`,"warn");
+    }catch(e){
+      toast(`Không tạo được PDF: ${e&&e.code?mapError(e):(e&&e.message)||"lỗi không xác định"}`,"err");
+    }finally{
+      pdfBusyGroup=null; setGroupPdfButtons(group,"TẢI PDF");
+    }
+  }
   function renderPanels(){
     revokeGroupSubmissionUrls(panelAssetUrls);
     let total=0;
@@ -2359,7 +2413,7 @@ async function groupLive(c,id,isAdminView){
       const ps=photos.filter(x=>Number(x.group)===i);
       const fs=files.filter(x=>Number(x.group)===i);
       total+=ns.length+ps.length+fs.length;
-      return `<div class="group-panel" data-group-panel="${i}"><h4><button type="button" class="group-panel-focus-trigger" data-group-focus="${i}" aria-label="Phóng lớn Nhóm ${i}">Nhóm ${i}</button></h4>
+      return `<div class="group-panel" data-group-panel="${i}"><div class="group-panel-head"><h4><button type="button" class="group-panel-focus-trigger" data-group-focus="${i}" aria-label="Phóng lớn Nhóm ${i}">Nhóm ${i}</button></h4><button type="button" class="btn btn-sm btn-outline group-pdf-btn" data-group-pdf="${i}" aria-label="Tải PDF Nhóm ${i}"${pdfBusyGroup!==null?" disabled":""}>${pdfBusyGroup===i?"Đang tạo PDF…":"TẢI PDF"}</button></div>
         ${(topics[String(i)]?.topic||richTextToPlainText(topics[String(i)]?.topicRich))?`<div class="group-topic">📌 <span data-panel-topic-mount="${i}"></span></div>`:""}
         <div>${ns.length?ns.map(n=>`<div class="group-note">${esc(n.text||"")}</div>`).join(""):`<div class="mut small">Đang chờ ý kiến…</div>`}</div>
         ${ps.length?`<div class="group-media">${ps.map(p=>`<img data-gphoto="${p.id}" data-gphoto-path="${esc(p.storagePath||"")}" alt="Ảnh nhóm ${i}">`).join("")}</div>`:""}
@@ -2373,6 +2427,7 @@ async function groupLive(c,id,isAdminView){
     $$("[data-gphoto-path]").forEach(async img=>{const storagePath=img.dataset.gphotoPath;try{const url=await groupSubmissionBlobUrl(storagePath,false,MAX_IMAGE_BYTES);if(!img.isConnected){URL.revokeObjectURL(url);return;}panelAssetUrls.add(url);img.src=url;img.onclick=e=>{e.stopPropagation();openImageViewerSimple(url);};}catch(e){reportGroupSubmissionImageLoadError({image:img,error:e,role:"teacher",storagePath});}});
     $$("[data-gfile-path]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();downloadGroupSubmission(btn.dataset.gfilePath,btn.dataset.gfileName,false).catch(err=>toast(mapError(err),"err"));});
     $$("[data-group-focus]").forEach(button=>button.onclick=e=>{e.stopPropagation();focusGroup(Number(button.dataset.groupFocus));});
+    $$("[data-group-pdf]").forEach(button=>button.onclick=e=>{e.stopPropagation();void startGroupPdfExport(Number(button.dataset.groupPdf));});
     $$("[data-group-panel]").forEach(panel=>panel.onclick=e=>{if(e.target.closest(groupFocusInteractiveSelector))return;focusGroup(Number(panel.dataset.groupPanel));});
     applyGroupViewState();
   }

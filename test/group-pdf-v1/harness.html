@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="vi">
+<head><meta charset="utf-8"><title>Group PDF V1 — test harness (not production)</title></head>
+<body>
+<p>Group PDF V1 browser test harness — synthetic data only, no Firebase.</p>
+<script type="module">
+  import { exportGroupPdf, prepareImageForPdf } from "../../group-pdf-runtime.mjs";
+  import { sampleExportInput, longExportInput } from "./fixtures.mjs";
+  import { makeImageBytes, withExifOrientation, inspectDataUrl, sampleImageBytes } from "./synthetic-images.mjs";
+  window.__pdf = {
+    sampleExportInput, longExportInput, prepareImageForPdf, makeImageBytes, withExifOrientation, inspectDataUrl,
+    resources: () => performance.getEntriesByType("resource").map((e) => e.name.replace(location.origin, "")),
+    async run(input, { failAll = false } = {}) {
+      const progress = [];
+      const result = await exportGroupPdf(input, {
+        fetchImageBytes: failAll ? async () => { throw new Error("offline"); } : sampleImageBytes,
+        timeZone: "UTC", now: new Date(Date.UTC(2026, 9, 2, 1, 15, 7)), onProgress: (p) => progress.push(p.stage)
+      });
+      return { ...result, progress: [...new Set(progress)] };
+    }
+  };
+</script>
+</body>
+</html>

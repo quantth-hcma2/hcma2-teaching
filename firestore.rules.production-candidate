@@ -1914,6 +1914,151 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // ===== LIBRARY V2 P2-S1 (ORGANIZATION FOUNDATION) - BEGIN =====
+    // ADDITIVE ONLY: three new collections and their helper functions. No existing match block, helper or
+    // behavior is changed; everything not matched below stays denied by the default-deny block.
+    // Authority: LIBRARY_V2_FROZEN_CONTRACTS_v1.1.md (sections 1, 4, 5, 11) and LIBRARY_V2_P2_DESIGN_R1.md.
+    //  - organizationId is a SECURITY BOUNDARY: every rule keys on the document's organization and on the
+    //    caller's membership in THAT organization (no cross-organization access).
+    //  - Platform account state (users: active teacher / active admin) is evaluated in the SAME evaluation
+    //    as membership (isActiveOrgMember); it is never copied into organizationMembers, so a globally
+    //    suspended account is denied even when its membership still says 'active'.
+    //  - An archived organization accepts no institutional writes; Platform Admin and Organization Admin
+    //    keep read (governance) access; ordinary members keep only the organization record and their own
+    //    membership.
+    //  - A user can hold many memberships (deterministic id {organizationId}_{uid}).
+    //  - Document-access budget: list rules read only documents shared by every result (organization, the
+    //    caller's own membership); bulk paths never read a per-target document. Capability writes read one
+    //    target membership per write (batch them in small chunks).
+    //  - Organization Admin never gains platform-wide `users` access, cannot add members, cannot create,
+    //    change or remove an org_admin membership, and cannot grant capabilities to an org_admin or itself.
+    function orgPath(orgId) { return /databases/$(database)/documents/organizations/$(orgId); }
+    function memberPath(orgId, memberUid) { return /databases/$(database)/documents/organizationMembers/$(orgId + '_' + memberUid); }
+    function capPath(orgId, memberUid) { return /databases/$(database)/documents/userCapabilities/$(orgId + '_' + memberUid); }
+    // Call-count discipline (measured in the emulator: every distinct get() or exists() on a path counts toward the limit
+    // separately): helpers use ONE get() per document. A missing document makes get() fail, which is an evaluation error and
+    // therefore a denial - the intended result for a missing organization, membership or capability document.
+    function orgActive(orgId) { return get(orgPath(orgId)).data.status == 'active'; }
+    function myMembership(orgId) { return get(memberPath(orgId, request.auth.uid)).data; }
+    function isActiveOrgMember(orgId) { return isActiveTeacher() && myMembership(orgId).status == 'active'; }
+    function isOrgAdmin(orgId) { return isActiveOrgMember(orgId) && myMembership(orgId).orgRole == 'org_admin'; }
+    function orgGoverns(orgId) { return isAdmin() || isOrgAdmin(orgId); }
+    function mayWriteOrg(orgId) { return isAdmin() || (isOrgAdmin(orgId) && orgActive(orgId)); }
+    function hasOrgCap(orgId, cap) {
+      return isAdmin() || (isActiveOrgMember(orgId) && orgActive(orgId) && (
+        myMembership(orgId).orgRole == 'org_admin' ||
+        (cap in get(capPath(orgId, request.auth.uid)).data.caps &&
+         !(cap in get(capPath(orgId, request.auth.uid)).data.denied))));
+    }
+    function canContribute(orgId) {
+      return isActiveOrgMember(orgId) && orgActive(orgId) &&
+        !(exists(capPath(orgId, request.auth.uid)) && 'library.contribute' in get(capPath(orgId, request.auth.uid)).data.denied);
+    }
+    function validOrgName(n) { return n is string && n.size() >= 3 && n.size() <= 120; }
+
+    match /organizations/{orgId} {
+      allow get: if isAdmin() || isActiveOrgMember(orgId);
+      allow list: if isAdmin();
+      allow create: if isAdmin() &&
+        request.resource.data.keys().hasAll(['schemaVersion', 'name', 'code', 'status', 'createdAt', 'createdBy', 'updatedAt']) &&
+        request.resource.data.keys().hasOnly(['schemaVersion', 'name', 'code', 'status', 'createdAt', 'createdBy', 'updatedAt']) &&
+        request.resource.data.schemaVersion == 1 &&
+        request.resource.data.status == 'active' &&
+        validOrgName(request.resource.data.name) &&
+        request.resource.data.code is string &&
+        request.resource.data.code.matches('^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$') &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.updatedAt == request.time;
+      allow update: if isAdmin() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'status', 'updatedAt', 'archivedAt', 'archivedBy']) &&
+        validOrgName(request.resource.data.name) &&
+        request.resource.data.status in ['active', 'archived'] &&
+        request.resource.data.updatedAt == request.time &&
+        (request.resource.data.status == 'archived'
+          ? (request.resource.data.archivedAt == request.time && request.resource.data.archivedBy == request.auth.uid)
+          : ((!('archivedAt' in request.resource.data) || request.resource.data.archivedAt == null) &&
+             (!('archivedBy' in request.resource.data) || request.resource.data.archivedBy == null)));
+      allow delete: if false;
+    }
+
+    match /organizationMembers/{memberId} {
+      function memberShapeOk(d) {
+        return d.keys().hasAll(['schemaVersion', 'organizationId', 'uid', 'orgRole', 'status', 'addedBy', 'createdAt', 'updatedAt']) &&
+          d.keys().hasOnly(['schemaVersion', 'organizationId', 'uid', 'orgRole', 'status', 'displayName', 'email', 'addedBy', 'createdAt', 'updatedAt', 'statusChangedAt', 'statusChangedBy']) &&
+          d.schemaVersion == 1 &&
+          d.organizationId is string && d.uid is string &&
+          memberId == d.organizationId + '_' + d.uid &&
+          d.orgRole in ['org_admin', 'member'] &&
+          d.status in ['active', 'suspended', 'removed'] &&
+          (!('displayName' in d) || (d.displayName is string && d.displayName.size() <= 120)) &&
+          (!('email' in d) || (d.email is string && d.email.size() <= 200));
+      }
+      function memberImmutableOk(b, a) {
+        return a.organizationId == b.organizationId && a.uid == b.uid && a.addedBy == b.addedBy &&
+          a.createdAt == b.createdAt && a.schemaVersion == b.schemaVersion;
+      }
+      function statusMetaOk(b, a) {
+        return a.status == b.status ||
+          ('statusChangedAt' in a && 'statusChangedBy' in a && a.statusChangedAt == request.time && a.statusChangedBy == request.auth.uid);
+      }
+      allow get, list: if isAdmin() ||
+        (isActiveTeacher() && resource.data.uid == request.auth.uid) ||
+        isOrgAdmin(resource.data.organizationId);
+      // Only the Platform Admin creates memberships in P2 (decision D1). The Organization-Admin-add branch is
+      // intentionally NOT present: adding members would need platform-wide `users` discovery.
+      allow create: if isAdmin() &&
+        memberShapeOk(request.resource.data) &&
+        request.resource.data.status == 'active' &&
+        request.resource.data.addedBy == request.auth.uid &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        orgActive(request.resource.data.organizationId);
+      allow update: if memberShapeOk(request.resource.data) &&
+        memberImmutableOk(resource.data, request.resource.data) &&
+        request.resource.data.updatedAt == request.time &&
+        statusMetaOk(resource.data, request.resource.data) &&
+        (isAdmin() ||
+         (isOrgAdmin(resource.data.organizationId) && orgActive(resource.data.organizationId) &&
+          resource.data.orgRole == 'member' && request.resource.data.orgRole == 'member' &&
+          resource.data.status != 'removed' &&
+          resource.data.uid != request.auth.uid &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'statusChangedAt', 'statusChangedBy'])));
+      allow delete: if false;
+    }
+
+    match /userCapabilities/{capId} {
+      function capShapeOk(d) {
+        return d.keys().hasAll(['schemaVersion', 'organizationId', 'uid', 'caps', 'denied', 'updatedBy', 'createdAt', 'updatedAt']) &&
+          d.keys().hasOnly(['schemaVersion', 'organizationId', 'uid', 'caps', 'denied', 'updatedBy', 'createdAt', 'updatedAt']) &&
+          d.schemaVersion == 1 &&
+          d.organizationId is string && d.uid is string &&
+          capId == d.organizationId + '_' + d.uid &&
+          d.caps is list && d.caps.size() <= 4 && d.caps.toSet().size() == d.caps.size() &&
+          d.caps.hasOnly(['library.review', 'library.publish', 'library.manage', 'curriculum.manage']) &&
+          d.denied is list && d.denied.size() <= 1 && d.denied.hasOnly(['library.contribute']) &&
+          d.updatedBy == request.auth.uid &&
+          d.updatedAt == request.time;
+      }
+      function targetIsOrdinaryMember(orgId, targetUid) {
+        return get(memberPath(orgId, targetUid)).data.orgRole == 'member';
+      }
+      allow get, list: if (isActiveTeacher() && resource.data.uid == request.auth.uid) ||
+        orgGoverns(resource.data.organizationId);
+      allow create: if capShapeOk(request.resource.data) &&
+        request.resource.data.createdAt == request.time &&
+        mayWriteOrg(request.resource.data.organizationId) &&
+        targetIsOrdinaryMember(request.resource.data.organizationId, request.resource.data.uid);
+      allow update: if capShapeOk(request.resource.data) &&
+        request.resource.data.organizationId == resource.data.organizationId &&
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        mayWriteOrg(resource.data.organizationId) &&
+        targetIsOrdinaryMember(resource.data.organizationId, resource.data.uid);
+      allow delete: if false;
+    }
+    // ===== LIBRARY V2 P2-S1 (ORGANIZATION FOUNDATION) - END =====
+
     // ---------------- Mặc định: chặn tất cả ----------------
     match /{document=**} {
       allow read, write: if false;

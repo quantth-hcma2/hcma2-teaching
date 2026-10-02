@@ -8,14 +8,20 @@
 // (deterministic multi-run/multi-paragraph formatting, IME-safe composition, plain-text-only
 // paste, no silent truncation) is achievable with direct Selection/Range + DOM APIs at classroom
 // scale, and no concrete blocker requiring a framework was found while implementing this.
-// GATE RICHTEXT-V3 ONE NARROW EXCEPTION: the Undo/Redo TOOLBAR BUTTONS call
-// document.execCommand("undo"/"redo") — there is no other DOM API that invokes the browser's own
-// native contenteditable undo/redo history from a button click (dispatching a synthetic Ctrl+Z
-// KeyboardEvent does not trigger a browser's native undo; there is no unprefixed, shipped
-// UndoManager API for contenteditable in any current browser). This is "technically unavoidable"
-// for that one button-click use case specifically, per the task's own explicit allowance — it is
-// NOT used for any content mutation anywhere else in this module. Real Ctrl+Z/Ctrl+Y keystrokes
-// are never intercepted and continue to invoke the SAME native history directly, unchanged.
+// GATE RICHTEXT-V3-QA-R1 UNDO/REDO MODEL: the V3-R1 candidate's Undo/Redo buttons called
+// document.execCommand("undo"/"redo") (native browser history) while leaving real Ctrl+Z/Ctrl+Y
+// keystrokes to invoke that SAME native history directly, unintercepted. Owner manual QA found
+// this unreliable in real use: native contenteditable history is opaque and inconsistent across
+// browsers about which of this module's own DOM-level mutations (toolbar formatting, list/indent/
+// alignment/spacing changes, which are direct DOM writes, not native typed input) it actually
+// records, so pressing Undo often had no useful effect. This module now owns its OWN bounded,
+// per-instance history instead — ONE coherent model, never two contradictory ones: Ctrl+Z/Ctrl+Y
+// are now intercepted in _handleKeyDown (preventDefault) and call the exact same _undo()/_redo()
+// the toolbar buttons call; document.execCommand is no longer called anywhere in this module.
+// History stores RichText DOCUMENT SNAPSHOTS (via serializeToRichText), not raw DOM/HTML — see
+// _commitHistorySnapshot/_restoreHistorySnapshot below for the full design (debounced coalescing
+// of typing bursts, immediate per-click snapshots for discrete toolbar actions, a bounded ring
+// via _historyMax, duplicate-state suppression, and redo-branch truncation on a new edit).
 //
 // The editable DOM is NOT trusted storage: nothing here ever reads `.innerHTML`, ever trusts a
 // stored attribute value without re-validating it through rich-text-contract.mjs, or ever assumes
@@ -75,6 +81,23 @@ function isBr(node) {
   return !!node && node.nodeType === 1 && node.tagName === "BR";
 }
 
+// Structural deep-equal over plain JSON-safe values (RichText documents are exactly this: nested
+// plain objects/arrays/strings/numbers/booleans) — used by the history stack to detect and skip a
+// "meaningless duplicate" snapshot (e.g. a selection-only change that produced no actual content
+// difference), rather than relying on JSON.stringify key-order assumptions.
+function richTextDeepEqual(a, b) {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) {
+    if (a.length !== b.length) return false;
+    return a.every((v, i) => richTextDeepEqual(v, b[i]));
+  }
+  const keysA = Object.keys(a), keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  return keysA.every((k) => Object.prototype.hasOwnProperty.call(b, k) && richTextDeepEqual(a[k], b[k]));
+}
+
 export class RichTextEditor {
   constructor(options) {
     const opts = options || {};
@@ -91,6 +114,15 @@ export class RichTextEditor {
     this._pendingFormat = { ...DEFAULT_RUN_FORMAT };
     this._isComposing = false;
     this._destroyed = false;
+
+    // Bounded, per-instance Undo/Redo history (RichText document snapshots) — see this module's
+    // header comment and the _undo/_redo/_commitHistorySnapshot methods below for the full design.
+    this._history = [];
+    this._historyIndex = -1;
+    this._historyDebounceTimer = null;
+    this._historyDebounceMs = 500;
+    this._historyMax = 100;
+    this._isRestoringHistory = false;
 
     this._buildDom();
     this._wireEvents();
@@ -247,6 +279,7 @@ export class RichTextEditor {
       const restore = this._captureCaretForNormalize();
       this._normalizeAllBlocks();
       this._restoreCaretAfterNormalize(restore);
+      this._queueHistorySnapshot();
       this._refreshToolbarFromSelection();
       this.onChange();
     };
@@ -311,14 +344,16 @@ export class RichTextEditor {
     this._onTableClick = () => this.insertBlock({type:"table",rows:Array.from({length:3},()=>({cells:Array.from({length:3},()=>({runs:[]}))}))});
     this._onEditorClick = e => {
       const target=e.target;
-      if(target?.hasAttribute?.("data-rt-remove-block")){ target.closest(`[${DATA_BLOCK_ATTR}]`)?.remove(); this._ensureParagraph(); this.onChange(); return; }
+      if(target?.hasAttribute?.("data-rt-remove-block")){ this._flushPendingHistorySnapshot(); target.closest(`[${DATA_BLOCK_ATTR}]`)?.remove(); this._ensureParagraph(); this._commitHistorySnapshot(); this.onChange(); return; }
       const block=target?.closest?.(`[${DATA_BLOCK_ATTR}="table"]`); if(!block)return;
       const rows=Array.from(block.querySelectorAll("tr")); const width=rows[0]?.querySelectorAll('[data-rt-cell="1"]').length||0;
+      this._flushPendingHistorySnapshot();
       if(target.hasAttribute("data-rt-table-row") && rows.length<MAX_TABLE_ROWS){ const tr=this.doc.createElement("tr"); for(let i=0;i<width;i++)tr.appendChild(this._newCell()); block.querySelector("tbody").appendChild(tr); }
       else if(target.hasAttribute("data-rt-table-column") && width<MAX_TABLE_COLUMNS) rows.forEach(tr=>tr.appendChild(this._newCell()));
       else if(target.hasAttribute("data-rt-table-remove-row") && rows.length>1) rows.at(-1).remove();
       else if(target.hasAttribute("data-rt-table-remove-column") && width>1) rows.forEach(tr=>tr.lastElementChild.remove());
       else return;
+      this._commitHistorySnapshot();
       this.onChange();
     };
 
@@ -362,6 +397,7 @@ export class RichTextEditor {
   destroy() {
     if (this._destroyed) return;
     this._destroyed = true;
+    if (this._historyDebounceTimer) { clearTimeout(this._historyDebounceTimer); this._historyDebounceTimer = null; }
     this.editableEl.removeEventListener("beforeinput", this._onBeforeInput);
     this.editableEl.removeEventListener("keydown", this._onKeyDown);
     this.editableEl.removeEventListener("input", this._onInput);
@@ -428,6 +464,10 @@ export class RichTextEditor {
     this.editableEl.appendChild(richTextToDom(this.doc, value));
     this._hydrateImages();
     this._pendingFormat = { ...DEFAULT_RUN_FORMAT };
+    // Loading a document starts a FRESH history context — Undo should never reach back past the
+    // point a document was (re)loaded. Re-derived from the built DOM (not the input `value`
+    // directly) so the baseline exactly matches what export would produce from this DOM state.
+    this._initHistoryFromCurrentDom();
     this._refreshToolbarFromSelection();
     this.onChange();
     return { ok: true };
@@ -441,9 +481,15 @@ export class RichTextEditor {
       this.editableEl.appendChild(legacyPlainTextToDom(this.doc, text));
     }
     this._pendingFormat = { ...DEFAULT_RUN_FORMAT };
+    this._initHistoryFromCurrentDom();
     this._refreshToolbarFromSelection();
     this.onChange();
     return { ok: true };
+  }
+
+  _initHistoryFromCurrentDom() {
+    const result = serializeToRichText(this.editableEl);
+    this._initHistory(result.ok ? result.value : emptyRichTextDocument());
   }
 
   _clearEditable() {
@@ -457,8 +503,9 @@ export class RichTextEditor {
   insertBlock(block) {
     const candidate={version:2,blocks:[block]};
     if(!validateRichText(candidate)) return {ok:false,reason:"invalid_value"};
+    this._flushPendingHistorySnapshot();
     this.editableEl.appendChild(richTextToDom(this.doc,candidate)); this._hydrateImages();
-    this._ensureParagraph(); this._renormalizeListMarkers(); this.onChange(); return {ok:true};
+    this._ensureParagraph(); this._renormalizeListMarkers(); this._commitHistorySnapshot(); this.onChange(); return {ok:true};
   }
 
   _hydrateImages(){
@@ -637,6 +684,7 @@ export class RichTextEditor {
     const infos = spans.map((s) => this._runInfoFromSpan(s));
     const allOn = infos.every((info) => info[prop] === true);
     const target = !allOn;
+    this._flushPendingHistorySnapshot();
     this._replaceSpansWithFormat(spans, { [prop]: target }, range);
   }
 
@@ -651,6 +699,7 @@ export class RichTextEditor {
     }
     const spans = this._getExactRunSpansForRange(range);
     if (spans.length === 0) return;
+    this._flushPendingHistorySnapshot();
     this._replaceSpansWithFormat(spans, { [prop]: value }, range);
   }
 
@@ -686,7 +735,9 @@ export class RichTextEditor {
     const range = sel.getRangeAt(0);
     const blocks = this._paragraphsTouchedByRange(range);
     if (blocks.length === 0) return;
+    this._flushPendingHistorySnapshot();
     for (const block of blocks) setBlockAlign(block, align);
+    this._commitHistorySnapshot();
     this._refreshToolbarFromSelection();
     this.onChange();
   }
@@ -705,9 +756,11 @@ export class RichTextEditor {
     const range = sel.getRangeAt(0);
     const blocks = this._paragraphsTouchedByRange(range);
     if (blocks.length === 0) return;
+    this._flushPendingHistorySnapshot();
     const allAlreadyThisType = blocks.every((b) => effectiveBlockList(b) === listType);
     for (const block of blocks) setBlockList(block, allAlreadyThisType ? null : listType);
     this._renormalizeListMarkers();
+    this._commitHistorySnapshot();
     this._refreshToolbarFromSelection();
     this.onChange();
   }
@@ -718,11 +771,13 @@ export class RichTextEditor {
     const range = sel.getRangeAt(0);
     const blocks = this._paragraphsTouchedByRange(range);
     if (blocks.length === 0) return;
+    this._flushPendingHistorySnapshot();
     for (const block of blocks) {
       const next = Math.max(0, Math.min(MAX_INDENT_LEVEL, effectiveBlockIndent(block) + delta));
       setBlockIndent(block, next);
     }
     this._renormalizeListMarkers();
+    this._commitHistorySnapshot();
     this._refreshToolbarFromSelection();
     this.onChange();
   }
@@ -733,7 +788,9 @@ export class RichTextEditor {
     const range = sel.getRangeAt(0);
     const blocks = this._paragraphsTouchedByRange(range);
     if (blocks.length === 0) return;
+    this._flushPendingHistorySnapshot();
     for (const block of blocks) setBlockLineSpacing(block, value);
+    this._commitHistorySnapshot();
     this._refreshToolbarFromSelection();
     this.onChange();
   }
@@ -744,7 +801,9 @@ export class RichTextEditor {
     const range = sel.getRangeAt(0);
     const blocks = this._paragraphsTouchedByRange(range);
     if (blocks.length === 0) return;
+    this._flushPendingHistorySnapshot();
     for (const block of blocks) setBlockSpacing(block, value);
+    this._commitHistorySnapshot();
     this._refreshToolbarFromSelection();
     this.onChange();
   }
@@ -776,42 +835,122 @@ export class RichTextEditor {
     }
     const spans = this._getExactRunSpansForRange(range);
     if (spans.length === 0) return;
+    this._flushPendingHistorySnapshot();
     this._replaceSpansWithFormat(spans, clearedPatch, range);
   }
 
-  // ---------------- Undo / Redo (native history — see module header's documented exception) ----------------
+  // ---------------- Undo / Redo (bounded per-instance RichText-document history) ----------------
+  // See this module's header comment for why this replaced document.execCommand. Four pieces:
+  //   _initHistory      — called whenever a NEW document is loaded (constructor/setRichText/
+  //                        setPlainText): resets the stack to exactly one entry, the loaded state.
+  //   _queueHistorySnapshot   — DEBOUNCED commit, for continuous typing-like input (native typing/
+  //                        merge, paste... see call sites) so a whole burst becomes ONE undo step.
+  //   _commitHistorySnapshot  — IMMEDIATE commit, for discrete one-click actions (every toolbar
+  //                        formatting action, Enter, image/table insertion) so each is its own step.
+  //   _flushPendingHistorySnapshot — turns a still-pending debounced burst into a real entry right
+  //                        now, called at the START of every discrete action and at the start of
+  //                        _undo/_redo, so a just-finished typing burst is never silently lost or
+  //                        merged into the next, unrelated action.
+
+  _initHistory(snapshot) {
+    if (this._historyDebounceTimer) { clearTimeout(this._historyDebounceTimer); this._historyDebounceTimer = null; }
+    this._history = [snapshot];
+    this._historyIndex = 0;
+    this._updateUndoRedoButtons();
+  }
+
+  _commitHistorySnapshot() {
+    if (this._isRestoringHistory) return;
+    const result = serializeToRichText(this.editableEl);
+    if (!result.ok) return; // a transient/over-limit DOM state must never corrupt history
+    const snapshot = result.value;
+    const current = this._history[this._historyIndex];
+    if (current && richTextDeepEqual(current, snapshot)) return; // meaningless duplicate — skip
+    // A new edit always discards whatever redo branch existed beyond the current point.
+    this._history = this._history.slice(0, this._historyIndex + 1);
+    this._history.push(snapshot);
+    if (this._history.length > this._historyMax) this._history.shift(); // bounded ring, oldest first
+    this._historyIndex = this._history.length - 1;
+    this._updateUndoRedoButtons();
+  }
+
+  _flushPendingHistorySnapshot() {
+    if (!this._historyDebounceTimer) return;
+    clearTimeout(this._historyDebounceTimer);
+    this._historyDebounceTimer = null;
+    this._commitHistorySnapshot();
+  }
+
+  _queueHistorySnapshot() {
+    if (this._isRestoringHistory) return;
+    if (this._historyDebounceTimer) clearTimeout(this._historyDebounceTimer);
+    this._historyDebounceTimer = setTimeout(() => {
+      this._historyDebounceTimer = null;
+      this._commitHistorySnapshot();
+    }, this._historyDebounceMs);
+  }
 
   _undo() {
-    if (!this.doc.execCommand) return;
-    this.editableEl.focus();
-    this.doc.execCommand("undo");
-    this._afterHistoryNavigation();
+    if (this._isComposing) return;
+    this._flushPendingHistorySnapshot();
+    if (this._historyIndex <= 0) return;
+    this._historyIndex--;
+    this._restoreHistorySnapshot(this._history[this._historyIndex]);
   }
 
   _redo() {
-    if (!this.doc.execCommand) return;
-    this.editableEl.focus();
-    this.doc.execCommand("redo");
-    this._afterHistoryNavigation();
+    if (this._isComposing) return;
+    // Flushing here too: if the user typed something after an Undo but the debounce hasn't
+    // committed yet, that edit must win over (and correctly discard) any stale redo branch —
+    // exactly the same "a new edit clears redo" rule _commitHistorySnapshot already enforces.
+    this._flushPendingHistorySnapshot();
+    if (this._historyIndex >= this._history.length - 1) return;
+    this._historyIndex++;
+    this._restoreHistorySnapshot(this._history[this._historyIndex]);
   }
 
-  // The native history can restore a bare text node (same shape native typing produces) or change
-  // which paragraphs are list items — re-run the same normalization/marker/caret machinery
-  // _handleInput already relies on, so the DOM stays in the canonical shape this module requires.
-  _afterHistoryNavigation() {
-    const restore = this._captureCaretForNormalize();
-    this._normalizeAllBlocks();
-    this._restoreCaretAfterNormalize(restore);
-    this._refreshToolbarFromSelection();
-    this.onChange();
+  // Rebuilds the editable DOM from scratch from an already-valid snapshot (richTextToDom always
+  // produces fully normalized DOM — correct run spans, list markers, region grouping — so no
+  // _normalizeAllBlocks pass is needed afterward, unlike native typing). _isRestoringHistory
+  // suppresses the onChange() below from re-entering the history stack. Caret placement is
+  // intentionally simple and always-valid (end of the restored document) rather than attempting to
+  // reproduce the exact pre-edit caret position — see the final report's documented limitation.
+  _restoreHistorySnapshot(snapshot) {
+    this._isRestoringHistory = true;
+    try {
+      this._clearEditable();
+      this.editableEl.appendChild(richTextToDom(this.doc, snapshot));
+      this._hydrateImages();
+      this._pendingFormat = { ...DEFAULT_RUN_FORMAT };
+      this._placeCaretAtDocumentEnd();
+      this._refreshToolbarFromSelection();
+      this.onChange();
+    } finally {
+      this._isRestoringHistory = false;
+    }
+  }
+
+  _placeCaretAtDocumentEnd() {
+    const sel = this._getSelection();
+    if (!sel) return;
+    const blocks = Array.from(this.editableEl.querySelectorAll(`[${DATA_BLOCK_ATTR}="paragraph"]`));
+    const lastBlock = blocks.length > 0 ? blocks[blocks.length - 1] : this._firstBlock();
+    if (!lastBlock) return;
+    const runs = Array.from(lastBlock.childNodes).filter(isRunSpan);
+    const lastRun = runs[runs.length - 1];
+    const range = this.doc.createRange();
+    if (lastRun) {
+      range.setStart(lastRun.firstChild || lastRun, (lastRun.textContent || "").length);
+    } else {
+      range.setStart(lastBlock, lastBlock.childNodes.length);
+    }
+    range.collapse(true);
+    try { sel.removeAllRanges(); sel.addRange(range); } catch { /* best-effort caret placement */ }
   }
 
   _updateUndoRedoButtons() {
-    if (!this.doc.queryCommandEnabled) return;
-    // "Where reasonably detectable" (queryCommandEnabled is a legacy API some environments
-    // restrict or omit) — best-effort only; never throws, falls back to leaving buttons enabled.
-    try { this.undoBtn.disabled = !this.doc.queryCommandEnabled("undo"); } catch { /* leave as-is */ }
-    try { this.redoBtn.disabled = !this.doc.queryCommandEnabled("redo"); } catch { /* leave as-is */ }
+    this.undoBtn.disabled = this._historyIndex <= 0;
+    this.redoBtn.disabled = this._historyIndex >= this._history.length - 1;
   }
 
   _runInfoFromSpan(span) {
@@ -860,6 +999,7 @@ export class RichTextEditor {
     void originalRange; void startText; void endText;
 
     this._mergeAdjacentRunsEverywhere();
+    this._commitHistorySnapshot();
     this._refreshToolbarFromSelection();
     this.onChange();
   }
@@ -987,6 +1127,15 @@ export class RichTextEditor {
   // ---------------- Enter / paragraph splitting ----------------
 
   _handleKeyDown(e) {
+    if (e.key === "Backspace" || e.key === "Delete") {
+      // A switch from inserting to deleting is a natural undo-group boundary (matching most real
+      // editors): flush any pending typed-text checkpoint now, BEFORE the native deletion runs, so
+      // a deletion/merge never gets silently absorbed into the undo step for unrelated prior
+      // typing. The deletion itself is not intercepted (no preventDefault) — it proceeds natively,
+      // and _handleInput queues its own result afterward as a new (and, for a run of several
+      // Backspace presses, still correctly coalesced) debounced entry.
+      this._flushPendingHistorySnapshot();
+    }
     if (e.key === "Enter") {
       e.preventDefault();
       const sel=this._getSelection();
@@ -996,9 +1145,11 @@ export class RichTextEditor {
       if (currentBlock && currentBlock.getAttribute(DATA_BLOCK_ATTR) === "paragraph" && effectiveBlockList(currentBlock) && this._blockIsEmpty(currentBlock)) {
         // Word-like: Enter on an empty list item exits the list in place, rather than adding yet
         // another empty bullet/number — this one paragraph becomes a plain paragraph, no new line.
+        this._flushPendingHistorySnapshot();
         setBlockList(currentBlock, null);
         setBlockIndent(currentBlock, 0);
         this._renormalizeListMarkers();
+        this._commitHistorySnapshot();
         this._refreshToolbarFromSelection();
         this.onChange();
         return;
@@ -1006,14 +1157,16 @@ export class RichTextEditor {
       this._insertParagraphBreakAtCaret();
       return;
     }
-    // Standard formatting shortcuts (Ctrl on Windows/Linux, Cmd on macOS). Ctrl/Cmd+Z and +Y/+Shift+Z
-    // are deliberately left un-intercepted here so native undo/redo keeps working exactly as it did
-    // before this feature — see this module's header comment on the toolbar's one execCommand use.
+    // Standard formatting shortcuts (Ctrl on Windows/Linux, Cmd on macOS), including Undo/Redo —
+    // see this module's header comment: Ctrl/Cmd+Z/+Y now drive this module's OWN history (the
+    // exact same _undo()/_redo() the toolbar buttons call), not the browser's native history.
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
       const key = e.key.toLowerCase();
       if (key === "b") { e.preventDefault(); this._toggleBooleanFormat("bold"); return; }
       if (key === "i") { e.preventDefault(); this._toggleBooleanFormat("italic"); return; }
       if (key === "u") { e.preventDefault(); this._toggleBooleanFormat("underline"); return; }
+      if (key === "z") { e.preventDefault(); this._undo(); return; }
+      if (key === "y") { e.preventDefault(); this._redo(); return; }
     }
   }
 
@@ -1117,6 +1270,9 @@ export class RichTextEditor {
     sel.removeAllRanges();
     sel.addRange(newRange);
 
+    // Debounced, same bucket as native typing: Enter is a normal part of a typing flow, and a
+    // fast "Enter, keep typing" burst should coalesce into one undo step like everything else.
+    this._queueHistorySnapshot();
     this._handleSelectionChange();
     this.onChange();
   }
@@ -1150,6 +1306,7 @@ export class RichTextEditor {
     const restore = this._captureCaretForNormalize();
     this._normalizeAllBlocks();
     this._restoreCaretAfterNormalize(restore);
+    this._queueHistorySnapshot();
     this._handleSelectionChange();
     this.onChange();
   }
@@ -1267,6 +1424,10 @@ export class RichTextEditor {
     const raw = clipboardData ? clipboardData.getData("text/plain") : "";
     if (!raw) return;
 
+    // Commits any pending typing burst from BEFORE this paste as its own separate undo step, so
+    // undoing the paste never also silently swallows unrelated prior typing.
+    this._flushPendingHistorySnapshot();
+
     const snapshot = Array.from(this.editableEl.childNodes).map((n) => n.cloneNode(true));
 
     const sel = this._getSelection();
@@ -1297,6 +1458,11 @@ export class RichTextEditor {
       this.onLimitExceeded({ operation: "paste", reason: dryRun.reason });
       return;
     }
+    // Discard the noisy intermediate debounce timer(s) the multi-line insertion loop above may
+    // have queued via _insertParagraphBreakAtCaret (each line split calls _queueHistorySnapshot) —
+    // a paste should land as exactly ONE atomic, undoable step, not one per pasted line.
+    if (this._historyDebounceTimer) { clearTimeout(this._historyDebounceTimer); this._historyDebounceTimer = null; }
+    this._commitHistorySnapshot();
     this._handleSelectionChange();
     this.onChange();
   }

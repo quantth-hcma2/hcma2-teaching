@@ -217,8 +217,9 @@ try {
     assert.equal(r.value.blocks[0].indent, 1, "indent must survive Clear Formatting");
   });
 
-  // 14&15. Undo/Redo toolbar buttons (native history).
-  await check("14&15. Undo/Redo toolbar buttons use native history and round-trip", async () => {
+  // 14&15. Undo/Redo toolbar buttons (this module's own bounded history, see
+  // richtext-v3-qa-r1.browser.mjs for the dedicated, exhaustive history suite).
+  await check("14&15. Undo/Redo toolbar buttons work and round-trip", async () => {
     await reset();
     await page.locator('#mount [data-rt-block="paragraph"]').first().click();
     await page.keyboard.type("UndoRedoMe");
@@ -246,9 +247,13 @@ try {
     assert.ok(r.value.blocks[0].runs.every((run) => run.bold && run.italic && run.underline));
   });
 
-  // 16b. Ctrl+Z / Ctrl+Y (native undo/redo) must not regress — still handled entirely natively,
-  // never intercepted by the new Ctrl+B/I/U keydown branch.
-  await check("16b. native Ctrl+Z / Ctrl+Y keyboard shortcuts are not intercepted and keep working", async () => {
+  // 16b. Ctrl+Z / Ctrl+Y keyboard shortcuts must not regress. GATE RICHTEXT-V3-QA-R1 superseded
+  // this module's original native-execCommand Undo/Redo with its own bounded per-instance history
+  // (see rich-text-editor.mjs's header comment) — Ctrl+Z/Ctrl+Y are now intercepted and drive that
+  // SAME history the toolbar buttons use, one coherent model. This check still only verifies the
+  // observable behavior (typed text shrinks on Ctrl+Z, is restored on Ctrl+Y); see
+  // richtext-v3-qa-r1.browser.mjs for the dedicated, exhaustive history regression suite.
+  await check("16b. Ctrl+Z / Ctrl+Y keyboard shortcuts drive this module's own history and keep working", async () => {
     await reset();
     await page.locator('#mount [data-rt-block="paragraph"]').first().click();
     await page.keyboard.type("Native");

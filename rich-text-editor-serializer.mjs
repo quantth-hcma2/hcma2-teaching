@@ -120,7 +120,10 @@ function createBlockElement(doc, meta = {}) {
   if (meta.list) setBlockList(el, meta.list);
   if (meta.indent) setBlockIndent(el, meta.indent);
   if (meta.lineSpacing) setBlockLineSpacing(el, meta.lineSpacing);
-  if (meta.spacing) setBlockSpacing(el, meta.spacing);
+  // Unlike the four calls above (each a no-op for its own default), spacing must always run — see
+  // setBlockSpacing's own comment: margin-bottom's browser-native default (0) does not equal this
+  // contract's semantic "normal" default (0.5em), so every paragraph needs it explicitly applied.
+  setBlockSpacing(el, meta.spacing);
   return el;
 }
 
@@ -171,12 +174,23 @@ export function setBlockLineSpacing(blockEl, lineSpacing) {
   }
 }
 
+// GATE RICHTEXT-V3-QA-R1 root cause: unlike every sibling setter above (align/indent/lineSpacing),
+// this one used to only set/clear the data-rt-spacing ATTRIBUTE and never touched a CSS style at
+// all — so the editor's live paragraph-spacing control had literally no visual effect, while
+// export/serialize/round-trip (which only reads the attribute) looked completely correct, which is
+// exactly why this passed every prior automated check. The other three fields' "do nothing when
+// default" shortcut was safe only because the BROWSER's own native default for text-align/margin-
+// left/line-height already equals this contract's semantic default (left/0/"1") — but a plain
+// paragraph <div>'s native margin-bottom is 0, not the intended "normal" default of 0.5em, so
+// margin-bottom must always be explicitly applied (falling back to "normal" when absent/invalid),
+// matching rich-text-renderer.mjs's own unconditional `p.style.margin` — while the semantic
+// data-rt-spacing ATTRIBUTE still follows the usual "omit at the default" convention, so an
+// existing document with no `spacing` field still round-trips with no `spacing` key.
 export function setBlockSpacing(blockEl, spacing) {
-  if (spacing && spacing !== "normal" && Object.prototype.hasOwnProperty.call(SPACING_CSS_MAP, spacing)) {
-    blockEl.setAttribute(DATA_SPACING_ATTR, spacing);
-  } else {
-    blockEl.removeAttribute(DATA_SPACING_ATTR);
-  }
+  const token = spacing && Object.prototype.hasOwnProperty.call(SPACING_CSS_MAP, spacing) ? spacing : "normal";
+  if (token === "normal") blockEl.removeAttribute(DATA_SPACING_ATTR);
+  else blockEl.setAttribute(DATA_SPACING_ATTR, token);
+  blockEl.style.marginBottom = SPACING_CSS_MAP[token];
 }
 
 // The block's CURRENT EFFECTIVE paragraph formatting, for editor-side reflection (toolbar state,

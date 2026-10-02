@@ -60,14 +60,23 @@ button, input, select, textarea{font-family:inherit; font-size:inherit;}
 /* Cards / layout */
 .card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:20px;}
 .card + .card{margin-top:14px;}
-.library-hub-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:18px;align-items:stretch;}
-.library-hub-card{width:100%;min-height:240px;padding:24px;text-align:left;border:1px solid var(--border);border-radius:16px;background:linear-gradient(145deg,#fff,#f3f9fa);box-shadow:var(--shadow);color:var(--text);display:flex;flex-direction:column;align-items:flex-start;cursor:pointer;transition:transform .15s,box-shadow .15s,border-color .15s;}
+.library-hub-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:18px;align-items:start;}
+.library-hub-card{width:100%;line-height:1.5;padding:24px;text-align:left;border:1px solid var(--border);border-radius:16px;background:linear-gradient(145deg,#fff,#f3f9fa);box-shadow:var(--shadow);color:var(--text);display:flex;flex-direction:column;align-items:flex-start;cursor:pointer;transition:transform .15s,box-shadow .15s,border-color .15s;}
 .library-hub-card:not([disabled]):hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(15,23,42,.10);border-color:var(--accent);}
 .library-hub-card[disabled]{cursor:default;opacity:.82;}
 .library-hub-card .library-card-icon{font-size:34px;margin-bottom:14px;}
 .library-hub-card .library-card-title{font-size:20px;font-weight:800;line-height:1.25;margin-bottom:10px;}
-.library-hub-card .library-card-copy{color:var(--text-mute);margin-bottom:24px;}
-.library-hub-card .library-card-action{margin-top:auto;color:var(--brand);font-weight:800;letter-spacing:.2px;}
+.library-hub-card .library-card-copy{color:var(--text-mute);margin-bottom:14px;}
+.library-hub-card .library-card-action{margin-top:2px;color:var(--brand);font-weight:800;letter-spacing:.2px;}
+.library-hub-card.is-upcoming{cursor:default;background:#f8fafc;border-style:dashed;box-shadow:none;}
+.library-hub-card.is-upcoming .library-card-icon{opacity:.6;}
+.library-hub-card .library-card-badge{display:inline-block;margin:-2px 0 12px;padding:3px 10px;border-radius:999px;background:#fef3c7;color:#92400e;font-size:12px;font-weight:800;letter-spacing:.3px;}
+.library-hub-card .library-card-list{margin:0;padding-left:20px;color:var(--text-mute);}
+.library-hub-card .library-card-note{margin-top:auto;color:var(--text-mute);font-size:14px;}
+.library-scope{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
+.library-scope-pill{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:6px 14px;border-radius:999px;border:1.5px solid var(--border);background:#fff;color:var(--text);font:inherit;font-size:13px;font-weight:800;letter-spacing:.2px;}
+.library-scope-pill.is-current{border-color:var(--brand);color:var(--brand);background:#ecfeff;}
+.library-scope-pill.is-soon{color:var(--text-mute);background:#f8fafc;cursor:not-allowed;}
 .grid{display:grid; gap:14px;}
 .grid-2{grid-template-columns:repeat(2,1fr);}
 .grid-3{grid-template-columns:repeat(3,1fr);}
@@ -613,6 +622,7 @@ import { valuesEqualDeep, findConflictKey } from "./session-info-compare.mjs";
 import { uploadThenCreateGroupSubmission, reportGroupSubmissionImageLoadError } from "./group-submission-upload.mjs";
 // GROUP PDF V1: per-group PDF export. This import is small; the PDF library and fonts load lazily on first export.
 import { exportGroupPdf } from "./group-pdf-runtime.mjs?v=20261002-pdf-v1";
+import { libraryLocationForTarget, resolveLibraryLocation, renderLibraryHubHtml, renderLibraryChildHtml } from "./library-hub-registry.mjs?v=20261002-library-p1";
 // GATE 5F.C: Knowledge Co-creation dashboard launch/close control for the Classroom Second Brain
 // (V2) projection. Talks only to the accepted, frozen Gate 5C HTTP contract — never touches
 // Firestore Rules/indexes, the Public Second Brain V1 service, or any Classroom backend file.
@@ -2922,21 +2932,28 @@ const TEACHER_MENU = [
 ];
 let teacherRouteGeneration=0;
 function navigateTeacherTopLevel(key){
-  const libraryTarget=arguments[1]||null;
+  let libraryTarget=arguments[1]||null;
   // Compatibility aliases: callers cũ vẫn có thể điều hướng bằng library/questionSets.
-  // Click top-level Library mở Hub; deep caller truyền target để vào thẳng nội dung cũ.
+  // Click top-level Library mở Hub; deep caller truyền target (chuỗi cũ hoặc {child,view}) để vào thẳng
+  // nội dung — mọi đường vào Thư viện đều đi qua library-hub-registry.mjs (một điểm điều hướng chuẩn).
   if(key==="questionSets"){
     key="library";
-    STATE.teacherLibraryScreen="interaction";
-    STATE.teacherLibraryView="questionSets";
-  }else if(key==="library"){
-    STATE.teacherLibraryScreen=libraryTarget?"interaction":"hub";
-    if(libraryTarget) STATE.teacherLibraryView=libraryTarget;
+    libraryTarget="questionSets";
   }
+  if(key==="library"){
+    const location=libraryLocationForTarget(libraryTarget);
+    STATE.teacherLibraryScreen=location.screen;
+    if(location.view) STATE.teacherLibraryView=location.view;
+  }
+  // Điều hướng bằng mã (ví dụ nút tắt ở Tổng quan) không đi qua click ở thanh bên: đồng bộ mục đang chọn.
+  $$("#sidebarNav .navlink").forEach(b=>b.classList.toggle("active",b.dataset.nav===key));
   STATE.teacherNav=key;
   clearListeners();
   if(window.location.hash){ window.location.hash=""; return; }
   teacherRoute();
+}
+function navigateTeacherLibrary(childId,viewId){
+  navigateTeacherTopLevel("library",{child:childId,view:viewId});
 }
 function normalizeTeacherLibraryStateForShell(){
   if(STATE.teacherNav==="questionSets"){
@@ -3013,8 +3030,8 @@ async function teacherOverview(c){
   $("#btnNewSession").onclick = ()=>{ window.location.hash = "#/wizard"; };
   $("#btnQuickGroup").onclick=()=>{STATE.teacherNav="groups";teacherRoute();};
   $("#btnQuickQr").onclick=()=>{STATE.teacherNav="qrlinks";teacherRoute();};
-  $("#btnQuickLib").onclick=()=>navigateTeacherTopLevel("library","questions");
-  $("#btnQuickSets").onclick=()=>navigateTeacherTopLevel("questionSets");
+  $("#btnQuickLib").onclick=()=>navigateTeacherLibrary("interaction","questions");
+  $("#btnQuickSets").onclick=()=>navigateTeacherLibrary("interaction","questionSets");
   try{
     const classesQ = query(collection(db,"classes"), where("ownerId","==",uid));
     // Sessions không có field deletedAt khi chưa từng bị xóa, nên không thể lọc "chưa xóa"
@@ -3118,58 +3135,39 @@ async function deleteClass(id){
 }
 
 /* ---------- Library Hub ---------- */
+// Hub + child library shell, driven by library-hub-registry.mjs. Navigation only: it reads/writes nothing in
+// Firestore itself; the V1 views below (teacherLibrary / teacherQuestionSets) are mounted unchanged.
+function renderTeacherLibraryView(childId,view,host){
+  if(childId==="interaction") return view==="questionSets"?teacherQuestionSets(host):teacherLibrary(host);
+}
 function teacherLibraryHub(c){
-  if(STATE.teacherLibraryScreen!=="interaction"){
-    STATE.teacherLibraryScreen="hub";
-    c.innerHTML=`<div class="section-title"><div><h2>THƯ VIỆN</h2><p class="mut">Kho tài nguyên phục vụ giảng dạy.</p></div></div>
-      <div class="library-hub-grid" aria-label="Các thư viện">
-        <button class="library-hub-card" id="openInteractionLibrary" type="button">
-          <span class="library-card-icon" aria-hidden="true">📚</span>
-          <span class="library-card-title">THƯ VIỆN<br>TẠO TƯƠNG TÁC</span>
-          <span class="library-card-copy">Câu hỏi, bộ câu hỏi và tài nguyên tương tác.</span>
-          <span class="library-card-action">MỞ THƯ VIỆN →</span>
-        </button>
-        <article class="library-hub-card" aria-labelledby="groupLibraryCardTitle">
-          <span class="library-card-icon" aria-hidden="true">👥</span>
-          <span class="library-card-title" id="groupLibraryCardTitle">THƯ VIỆN<br>THẢO LUẬN NHÓM</span>
-          <span class="library-card-copy">Tài nguyên phục vụ hoạt động nhóm.</span>
-          <span class="library-card-action mut">SẮP PHÁT TRIỂN</span>
-        </article>
-      </div>`;
-    $("#openInteractionLibrary").onclick=()=>{
-      STATE.teacherLibraryScreen="interaction";
-      STATE.teacherLibraryView="questions";
+  const location=resolveLibraryLocation(STATE.teacherLibraryScreen,STATE.teacherLibraryView);
+  STATE.teacherLibraryScreen=location.screen;
+  if(location.screen==="hub"){
+    c.innerHTML=renderLibraryHubHtml(esc);
+    $$("[data-library-open]").forEach(b=>b.onclick=()=>{
+      const next=libraryLocationForTarget({child:b.dataset.libraryOpen});
+      STATE.teacherLibraryScreen=next.screen;
+      if(next.view) STATE.teacherLibraryView=next.view;
       teacherLibraryHub(c);
-    };
+    });
     return;
   }
-  const view=STATE.teacherLibraryView==="questionSets"?"questionSets":"questions";
-  STATE.teacherLibraryView=view;
-  c.innerHTML=`<button class="btn btn-ghost" id="backToLibraryHub" type="button">← THƯ VIỆN</button>
-    <section class="card mt-14" aria-labelledby="interactionLibraryTitle">
-      <h3 id="interactionLibraryTitle" style="margin-top:0">THƯ VIỆN TẠO TƯƠNG TÁC</h3>
-      <div class="flex gap-8 mt-8" role="tablist" aria-label="Thư viện tạo tương tác">
-        <button class="btn ${view==="questions"?"":"btn-outline"}" id="libraryQuestionsTab" type="button" role="tab" aria-selected="${view==="questions"}" aria-controls="teacherLibraryView">CÂU HỎI</button>
-        <button class="btn ${view==="questionSets"?"":"btn-outline"}" id="libraryQuestionSetsTab" type="button" role="tab" aria-selected="${view==="questionSets"}" aria-controls="teacherLibraryView">BỘ CÂU HỎI</button>
-      </div>
-      <div id="teacherLibraryView" role="tabpanel" class="mt-20"></div>
-    </section>`;
+  STATE.teacherLibraryView=location.view;
+  c.innerHTML=renderLibraryChildHtml(location,esc);
   const switchView=(nextView)=>{
     if(nextView===STATE.teacherLibraryView) return;
     clearListeners();
     STATE.teacherLibraryView=nextView;
     teacherLibraryHub(c);
   };
-  $("#libraryQuestionsTab").onclick=()=>switchView("questions");
-  $("#libraryQuestionSetsTab").onclick=()=>switchView("questionSets");
+  $$("[data-library-view]").forEach(b=>b.onclick=()=>switchView(b.dataset.libraryView));
   $("#backToLibraryHub").onclick=()=>{
     clearListeners();
     STATE.teacherLibraryScreen="hub";
     teacherLibraryHub(c);
   };
-  const viewHost=$("#teacherLibraryView");
-  if(view==="questionSets") teacherQuestionSets(viewHost);
-  else teacherLibrary(viewHost);
+  renderTeacherLibraryView(location.screen,location.view,$("#teacherLibraryView"));
 }
 
 /* ---------- Thư viện câu hỏi ---------- */

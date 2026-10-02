@@ -12,10 +12,10 @@ const NL = String.fromCharCode(10);
 const MODULES = ["organization-context.mjs", "organization-queries.mjs", "organization-write-contract.mjs", "admin-feature-registry.mjs"];
 const code = (p) => text(p).split(NL).filter((line) => !line.trim().startsWith("//")).join(NL);          // ignore comment lines
 
-test("exactly the four approved production modules were added (no fifth module)", () => {
+test("S2 modules plus the S3 view module are the only organization modules (no others)", () => {
   const rootMjs = readdirSync(new URL("./", root)).filter((f) => f.endsWith(".mjs")).sort();
   const baselineMjs = ["app-environment.mjs", "classroom-projection-launch.mjs", "contract-activation.mjs", "contract-editor.mjs", "contract-runtime.mjs", "contract-writer.mjs", "group-classroom-presentation.mjs", "group-classroom-timer.mjs", "group-clone.mjs", "group-file-link-safety.mjs", "group-membership.mjs", "group-pdf-export.mjs", "group-pdf-font-coverage.mjs", "group-pdf-runtime.mjs", "group-roster.mjs", "group-submission-upload.mjs", "library-hub-registry.mjs", "rich-text-contract.mjs", "rich-text-editor-serializer.mjs", "rich-text-editor.mjs", "rich-text-renderer.mjs", "session-info-compare.mjs", "session-reader-ui.mjs", "session-reader.mjs", "session-view.mjs", "trash-query-contract.mjs"];
-  assert.deepEqual(rootMjs, [...baselineMjs, ...MODULES].sort());
+  assert.deepEqual(rootMjs, [...baselineMjs, ...MODULES, "organization-admin-view.mjs"].sort());
 });
 
 test("modules are pure: only relative imports among themselves, no Firebase/network/storage/DOM access, no dynamic import", () => {
@@ -30,16 +30,16 @@ test("modules are pure: only relative imports among themselves, no Firebase/netw
   assert.deepEqual([...code("organization-queries.mjs").matchAll(/^\s*import\s[^;]*from\s+["']([^"']+)["']/gm)].map((x) => x[1]), ["./organization-write-contract.mjs"]);
 });
 
-test("inert: nothing outside tests imports or references the new modules; index.html is byte-identical to production", () => {
+test("references: only index.html (S3 wiring) and the S3 view module import the S2 modules; the S2 modules themselves never reference index.html or the view", () => {
   const names = MODULES.map((m) => m.replace(".mjs", ""));
+  const allowed = new Set([...MODULES, "index.html", "organization-admin-view.mjs"]);
   const candidates = readdirSync(new URL("./", root)).filter((f) => f.endsWith(".mjs") || f.endsWith(".html") || f.endsWith(".css") || f.endsWith(".js"));
   for (const f of candidates) {
-    if (MODULES.includes(f)) continue;
+    if (allowed.has(f)) continue;
     const src = text(f);
     for (const n of names) assert.ok(!src.includes(n), f + " must not reference " + n);
   }
-  assert.equal(sha("index.html"), "4315bf598e52067983b4865e5f2ccf70c4d097d80a61286322f8fdf1a042c90d");
-  assert.ok(!text("index.html").includes("organization-"), "index.html has no wiring");
+  for (const m of MODULES) assert.ok(!text(m).includes("organization-admin-view") && !text(m).includes("index.html"), m);
 });
 
 test("queries: no `in` / array-contains-any / or(), no query on `users`, only equality filters on organizationId or uid; organizations listing only in the Platform-Admin factory", () => {
@@ -79,7 +79,6 @@ test("nothing existing changed: Rules (deployed artifact), indexes, UI, package,
     "firestore.rules.production-candidate": "7ea5d7a5ebac9df18e995c9a1644b2648e4143fa4fe3046c0de7f8737fcc1ddd",
     "firestore.rules": "a033e20c0d6c7eeb23cc1e76d98e5a4d246bead5becfcc14574c4f98b9fed538",
     "firestore.indexes.json": "a27b5a20c63e1b446f63221a6c1fa93b31ac95a6556c6009e44a45f4ca354d51",
-    "index.html": "4315bf598e52067983b4865e5f2ccf70c4d097d80a61286322f8fdf1a042c90d",
     "library-hub-registry.mjs": "37ef4f919d4604b4233b46cd197e2481b5fdf79c8c7f5229f81eb656a33688a0",
     "package.json": "446bef0b4c5941557b8a5fe4d2c7b20f73665086012e8cdc3f39ca8c7d6c8ba1",
     "package-lock.json": "507fee2f7652fa8ac0b1e73ce34622b49f5ac8959895ad0aa7d69d4c34e6f9ac",

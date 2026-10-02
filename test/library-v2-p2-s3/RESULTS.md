@@ -1,0 +1,16 @@
+# Library V2 - P2-S3 (Platform Admin organization lifecycle UI) - candidate test results
+
+Candidate branch `candidate/library-v2-p2-s3-org-lifecycle-ui`, built directly on the accepted P2-S2 candidate `a9c850a35d165ce22a2ce8f5bde57b4f4890f98c` (S2 is NOT released separately; S3 contains it). Scope: Admin menu/route "Đơn vị", organization list, create, basic detail, rename, archive, restore. No membership/capability/Organization-Admin/context/switcher work, no Library/Curriculum/Import/Storage, no Rules or index change. Not released.
+
+## Suites
+- `unit.test.mjs` 8/8 (pure): status labels, Vietnamese slug suggestion, duplicate-code detection (case-insensitive, active + archived), create validation mirroring the contract, list/detail/confirm markup (escaping, internal ids hidden outside diagnostics, archived banner, disabled rename), thin writer.
+- `source-guard.test.mjs` 5/5 (pure): `index.html` delta vs the S2 baseline is exactly five wiring edits (reversing them restores the S2 `index.html` hash `4315BF59...`); the eleven original Admin menu entries keep their order and TEACHER_MENU/P1 registry are untouched; the view module is UI-only (no Firebase import, no payload construction, no membership/capability logic, collection named only in the thin writer); only the four lifecycle builders are used; no new dynamic `import()`, no new collection in `index.html`; Rules (deployed artifact), indexes, package, vendor and existing modules byte-pinned; no Storage file.
+- `browser.e2e.mjs` 16/16 (real `index.html`, headless Edge, local Auth + Firestore emulators with the deployed Rules, synthetic organizations only): Admin sidebar keeps its items and gains "Đơn vị"; every pre-existing Admin screen still opens; empty state; create (suggested code, Vietnamese field errors, exact contract fields written, audit entry); duplicate code (case-insensitive, active and archived, nothing written); status badges, hidden ids, duplicate-race warning; rename (validation, only name/updatedAt change, audit); archive (confirmation text, cancel changes nothing, archived banner, disabled rename, audit); reload persistence; restore; failing write reported and data unchanged; 375 px layout; teacher has no entry and the Rules deny organization writes/listing for their token; P1 Library navigation unchanged; only `users`, `organizations`, `auditLogs` exist.
+
+Run: `node --test test/library-v2-p2-s3/unit.test.mjs test/library-v2-p2-s3/source-guard.test.mjs`; e2e `node test/library-v2-p2-s3/browser.e2e.mjs` (Java 21 on PATH, `PLAYWRIGHT_PACKAGE`, ports 8080/9099 free; optional `P2S3_SHOTS=<dir>` saves screenshots).
+
+## Updated earlier tests (legitimate maintenance)
+`test/library-v2-p1/source-guard.test.mjs` Rules pin updated to the deployed P2-S1 artifact; `test/library-v2-p2-s1/regression.test.mjs` and `test/library-v2-p2-s2/source-guard.test.mjs` no longer pin `index.html`/inertness (S3 legitimately wires the screen) and now guard the allowed delta instead.
+
+## Regression
+Emulator suites P2-S1 (24) + P2-S2 contract (11) on this tree: 35/35. A/B over the 40 `index.html`-reading/pin suites (S2 tree vs this tree): identical (712 tests, 215 failures on both sides, 0 differing results). Existing Rules suites are unaffected: `firestore.rules.production-candidate` is byte-identical to the deployed artifact (pinned).

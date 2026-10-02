@@ -571,7 +571,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import {
   getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, getDoc, getDocs,
-  query, where, orderBy, limit, startAfter, onSnapshot, serverTimestamp, Timestamp, writeBatch, increment, deleteField,
+  query, where, orderBy, limit, startAfter, documentId, onSnapshot, serverTimestamp, Timestamp, writeBatch, increment, deleteField,
   getCountFromServer, collectionGroup, runTransaction, connectFirestoreEmulator
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 import {
@@ -623,6 +623,10 @@ import { uploadThenCreateGroupSubmission, reportGroupSubmissionImageLoadError } 
 // GROUP PDF V1: per-group PDF export. This import is small; the PDF library and fonts load lazily on first export.
 import { exportGroupPdf } from "./group-pdf-runtime.mjs?v=20261002-pdf-v1";
 import { libraryLocationForTarget, resolveLibraryLocation, renderLibraryHubHtml, renderLibraryChildHtml } from "./library-hub-registry.mjs?v=20261002-library-p1";
+import { createOrganizationQueries, createPlatformAdminOrganizationQueries } from "./organization-queries.mjs?v=20261003-p2s3";
+import { createOrganizationWriteContract } from "./organization-write-contract.mjs?v=20261003-p2s3";
+import { getAdminFeature } from "./admin-feature-registry.mjs?v=20261003-p2s3";
+import { createOrganizationAdminScreen, createOrganizationWriter } from "./organization-admin-view.mjs?v=20261003-p2s3";
 // GATE 5F.C: Knowledge Co-creation dashboard launch/close control for the Classroom Second Brain
 // (V2) projection. Talks only to the accepted, frozen Gate 5C HTTP contract — never touches
 // Firestore Rules/indexes, the Public Second Brain V1 service, or any Classroom backend file.
@@ -1596,6 +1600,7 @@ const ADMIN_MENU = [
   {key:"overview", label:"Tổng quan", icon:"🏠"},
   {key:"knowledge", label:"Đồng kiến tạo tri thức", icon:"🧠"},
   {key:"teachers", label:"Quản lý giảng viên", icon:"👩‍🏫"},
+  {key:getAdminFeature("organizations").routeKey, label:"Đơn vị", icon:"🏢"},
   {key:"classes", label:"Lớp học", icon:"🏫"},
   {key:"sessions", label:"Phiên tương tác", icon:"🗳️"},
   {key:"qrlinks", label:"QR vĩnh viễn", icon:"🔗"},
@@ -1706,6 +1711,7 @@ function adminRoute(key){
   if(key==="overview") return adminOverview(c);
   if(key==="knowledge") return knowledgeModule(c, true);
   if(key==="teachers") return adminTeachers(c);
+  if(key==="organizations") return adminOrganizations(c);
   if(key==="classes") return adminClassesView(c);
   if(key==="sessions") return adminSessionsView(c);
   if(key==="qrlinks") return qrManager(c, true);
@@ -1717,6 +1723,19 @@ function adminRoute(key){
 }
 
 
+// Library V2 P2-S3: Platform Admin organization lifecycle screen (list / create / rename / archive / restore). Reads and writes go
+// through the S2 query and write contracts; no membership, capability or context logic lives here.
+const ORGANIZATION_QUERIES=createOrganizationQueries({collection,doc,query,where,orderBy,limit,startAfter,documentId,getDocs,getDoc});
+const ORGANIZATION_PLATFORM_QUERIES=createPlatformAdminOrganizationQueries({collection,query,orderBy,limit,getDocs});
+const ORGANIZATION_CONTRACT=createOrganizationWriteContract({serverTimestamp});
+function adminOrganizations(c){
+  return createOrganizationAdminScreen({
+    db, actorUid:STATE.user.uid, isPlatformAdmin:STATE.profile?.role==="admin",
+    esc, fmtDate, toast, mapError, openModal, closeModal, logAudit,
+    queries:ORGANIZATION_QUERIES, platformQueries:ORGANIZATION_PLATFORM_QUERIES, contract:ORGANIZATION_CONTRACT,
+    writer:createOrganizationWriter({collection,doc,setDoc,updateDoc})
+  }).mount(c);
+}
 async function adminLibrary(c){
   c.innerHTML=`<div class="section-title"><div><h2>📚 Thư viện câu hỏi toàn hệ thống</h2>
     <p class="mut">Admin xem dữ liệu câu hỏi của tất cả giảng viên để quản trị và làm nguồn dữ liệu cho các chức năng AI ở phiên bản sau. Màn hình này chỉ đọc, không sửa câu hỏi của giảng viên.</p></div></div>

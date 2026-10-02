@@ -43,7 +43,6 @@ test("no index, Storage, UI, dependency or data-model change (byte-pinned)", () 
   const pinned = {
     "firestore.indexes.json": "a27b5a20c63e1b446f63221a6c1fa93b31ac95a6556c6009e44a45f4ca354d51",
     "firestore.rules": "a033e20c0d6c7eeb23cc1e76d98e5a4d246bead5becfcc14574c4f98b9fed538",
-    "index.html": "4315bf598e52067983b4865e5f2ccf70c4d097d80a61286322f8fdf1a042c90d",
     "library-hub-registry.mjs": "37ef4f919d4604b4233b46cd197e2481b5fdf79c8c7f5229f81eb656a33688a0",
     "package.json": "446bef0b4c5941557b8a5fe4d2c7b20f73665086012e8cdc3f39ca8c7d6c8ba1",
     "package-lock.json": "507fee2f7652fa8ac0b1e73ce34622b49f5ac8959895ad0aa7d69d4c34e6f9ac",
@@ -57,7 +56,8 @@ test("no index, Storage, UI, dependency or data-model change (byte-pinned)", () 
   for (const [f, h] of Object.entries(pinned)) assert.equal(shaFile(f), h, f);
   for (const f of ["storage.rules", "firebase.json", "cors.json"]) assert.ok(!existsSync(new URL(f, root)), f + " must not exist at the repository root");
   const html = read("index.html").toString("utf8");
-  for (const n of ["organizations", "organizationMembers", "userCapabilities", "libraryResources", "curriculumFrameworks", "importBatches"]) assert.ok(!html.includes(n), "index.html must not reference " + n);
+  // (P2-S3 legitimately adds the Platform Admin organization screen to index.html; S1 only guards that membership/capability/Library V2 data are not referenced there)
+  for (const n of ["organizationMembers", "userCapabilities", "libraryResources", "curriculumFrameworks", "importBatches"]) assert.ok(!html.includes(n), "index.html must not reference " + n);
 });
 
 // ---------- behavior proof ----------

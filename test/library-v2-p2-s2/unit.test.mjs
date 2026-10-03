@@ -89,19 +89,20 @@ function makeDeps(pages = []) {
 }
 const snap = (id, data = {}) => ({ id, data: () => data });
 
-test("queries: membersOfOrganization uses exactly one organizationId equality, document-id order, bounded page+1, snapshot cursor", async () => {
+test("queries: membersOfOrganization uses exactly one organizationId equality, NEWEST-FIRST order (createdAt desc, document id desc), bounded page+1, snapshot cursor", async () => {
   const docs = Array.from({ length: 51 }, (_, i) => snap("o1_u" + i, { organizationId: "o1" }));
   const { deps, log } = makeDeps([docs]);
   const q = createOrganizationQueries(deps);
   const page = await q.membersOfOrganization({}, "o1");
   const c = log[0].constraints;
   assert.deepEqual(c.filter((x) => x.t === "where"), [{ t: "where", field: "organizationId", op: "==", value: "o1" }]);
-  assert.deepEqual(c.map((x) => x.t), ["where", "orderBy", "limit"]);
+  assert.deepEqual(c.map((x) => x.t), ["where", "orderBy", "orderBy", "limit"]);
+  assert.deepEqual(c.filter((x) => x.t === "orderBy").map((x) => [x.field, x.dir]), [["createdAt", "desc"], ["__name__", "desc"]], "newest first with a deterministic descending document-id tie-break");
   assert.equal(c.find((x) => x.t === "limit").n, ORGANIZATION_PAGE_SIZE_DEFAULT + 1);
   assert.equal(page.items.length, ORGANIZATION_PAGE_SIZE_DEFAULT); assert.equal(page.hasMore, true); assert.equal(page.cursor.id, "o1_u49");
   const { deps: d2, log: l2 } = makeDeps([[snap("o1_u1")]]);
   const p2 = await createOrganizationQueries(d2).membersOfOrganization({}, "o1", { pageSize: 10, cursor: page.cursor });
-  assert.deepEqual(l2[0].constraints.map((x) => x.t), ["where", "orderBy", "startAfter", "limit"]); assert.equal(l2[0].constraints[3].n, 11); assert.equal(p2.hasMore, false);
+  assert.deepEqual(l2[0].constraints.map((x) => x.t), ["where", "orderBy", "orderBy", "startAfter", "limit"]); assert.equal(l2[0].constraints[4].n, 11); assert.equal(p2.hasMore, false);
 });
 
 test("queries: every organization-scoped function accepts exactly one organizationId (arrays/objects/empty/path-like rejected before any read)", async () => {
@@ -223,4 +224,11 @@ test("registry: minimal metadata only (key, audience, routeKey, requiredCapabili
   assert.deepEqual(visibleAdminFeatures({ isPlatformAdmin: true }).map((f) => f.key), ["organizations"]);
   assert.deepEqual(visibleAdminFeatures({ isOrgAdmin: true }).map((f) => f.key), ["organizationAdmin"]);
   assert.deepEqual(visibleAdminFeatures({ isPlatformAdmin: "yes", isOrgAdmin: 1 }).map((f) => f.key), [], "only strict booleans grant visibility");
+});
+
+test("queries: capabilitiesOfOrganization keeps document-id order (only the membership list is newest-first; no index exists for capabilities)", async () => {
+  const { deps, log } = makeDeps([[snap("o1_u1", { organizationId: "o1" })]]);
+  await createOrganizationQueries(deps).capabilitiesOfOrganization({}, "o1");
+  assert.deepEqual(log[0].constraints.map((x) => x.t), ["where", "orderBy", "limit"]);
+  assert.deepEqual(log[0].constraints.filter((x) => x.t === "orderBy").map((x) => [x.field, x.dir]), [["__name__", undefined]]);
 });

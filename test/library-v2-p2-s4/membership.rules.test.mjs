@@ -183,3 +183,34 @@ test("S4 never touches users, capabilities or Organization-Admin roles through t
   await no(updateDoc(doc(as("oaB"), "organizationMembers", "orgB_mB1"), { ...C.buildMembershipStatusChange("suspended", "oaB"), orgRole: "org_admin" }));
   assert.equal((await getDoc(doc(as("pa"), "organizationMembers", "orgB_mB1"))).data().orgRole, "member");
 });
+
+test("NEWEST FIRST: persistent order createdAt DESC + document id DESC; separate adds ordered by time, same-batch adds deterministic; status changes never reorder", async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const addBatch = async (orgId, uids) => { const b = writeBatch(as("pa")); for (const uid of uids) { const m = C.buildNewMembership({ organizationId: orgId, uid }, "pa"); b.set(doc(collection(as("pa"), "organizationMembers"), m.id), m.data); } await ok(b.commit()); };
+  // orgB already holds older seeded/earlier members (createdAt in the past); add three batches with real time between them
+  await addBatch("orgB", ["zz3", "zz1", "zz2"]); await sleep(1100);
+  await addBatch("orgB", ["zz9"]); await sleep(1100);
+  await addBatch("orgB", ["zz5", "zz7"]);
+  const first = await Q.membersOfOrganization(as("pa"), "orgB", { pageSize: 6 });
+  assert.deepEqual(first.items.slice(0, 6).map((m) => m.uid), ["zz7", "zz5", "zz9", "zz3", "zz2", "zz1"], "latest batch first (id desc inside a batch), then earlier batches");
+  // status changes (updatedAt moves, createdAt is immutable) must not move anyone
+  const { updateDoc } = await import("../library-v2-p2-s1/helpers.mjs");
+  await ok(updateDoc(doc(as("pa"), "organizationMembers", "orgB_zz1"), C.buildMembershipStatusChange("suspended", "pa")));
+  await ok(updateDoc(doc(as("pa"), "organizationMembers", "orgB_zz9"), C.buildMembershipStatusChange("removed", "pa")));
+  assert.deepEqual((await Q.membersOfOrganization(as("pa"), "orgB", { pageSize: 6 })).items.map((m) => m.uid), ["zz7", "zz5", "zz9", "zz3", "zz2", "zz1"]);
+  // cursor pagination over the WHOLE organization (400+ members here): traversal with a small page equals traversal with the maximum page, no duplicates, no omissions
+  const traverse = async (size) => { const out = []; let cursor, more = true, pages = 0; while (more) { const p = await Q.membersOfOrganization(as("pa"), "orgB", { pageSize: size, cursor }); out.push(...p.items.map((m) => m.id)); cursor = p.cursor; more = p.hasMore; if (++pages > 500) throw new Error("runaway paging"); } return out; };
+  const everything = await traverse(100);
+  const paged = await traverse(7);
+  assert.ok(everything.length >= 400, "large population: " + everything.length);
+  assert.deepEqual(paged, everything, "paged traversal equals the single ordered list");
+  assert.equal(new Set(paged).size, paged.length);
+  // a member added while the administrator is on page 2 does not disturb 'load more' (new items sort BEFORE the cursor)
+  const p1 = await Q.membersOfOrganization(as("pa"), "orgB", { pageSize: 3 });
+  await sleep(1100); await addBatch("orgB", ["zzNew"]);
+  const p2 = await Q.membersOfOrganization(as("pa"), "orgB", { pageSize: 3, cursor: p1.cursor });
+  assert.deepEqual(p2.items.map((m) => m.id), everything.slice(3, 6), "load-more continues exactly where page 1 ended");
+  assert.equal((await Q.membersOfOrganization(as("pa"), "orgB", { pageSize: 1 })).items[0].uid, "zzNew", "the newest member is the first row of a fresh page 1");
+  // capabilities listing keeps its document-id order (no index was approved for it)
+  assert.ok(Array.isArray((await Q.capabilitiesOfOrganization(as("pa"), "orgB")).items));
+});

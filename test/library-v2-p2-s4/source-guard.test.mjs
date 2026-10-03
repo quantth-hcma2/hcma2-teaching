@@ -77,7 +77,7 @@ test("no new dynamic import(), no new collection in index.html; Rules, indexes, 
     "package.json": "446bef0b4c5941557b8a5fe4d2c7b20f73665086012e8cdc3f39ca8c7d6c8ba1",
     "package-lock.json": "507fee2f7652fa8ac0b1e73ce34622b49f5ac8959895ad0aa7d69d4c34e6f9ac",
     "organization-context.mjs": "406490f2338dd6fd645b0a1329bb1e5d8b00c02cfb0e36b8f075e0fa79f6ed30",
-    "organization-queries.mjs": "f47a2380eecd4f8484bec075fcce7e8771dcceab9cb6ffc661fbbb673b6da520",
+    "organization-queries.mjs": "a0c64c8f4105d9b83dd5672df4b6c9a7e809b75e1b9517820fbca2571e50c0f2",
     "organization-write-contract.mjs": "b26cc200d1e918998a780d81221810e85249ca57f80b080623cfeeb016d58713",
     "admin-feature-registry.mjs": "4e97434f69907931bdabb5eaf46fe4a765b62e122ba1f938a28adaeb04316413",
     "library-hub-registry.mjs": "37ef4f919d4604b4233b46cd197e2481b5fdf79c8c7f5229f81eb656a33688a0",
@@ -113,4 +113,16 @@ test("UX revision: ONE add-teacher button, rendered into the detail header actio
   for (const token of ["getCountFromServer", "getDocs", "query(", "queries.", "await", "fetch("]) assert.ok(!summary.includes(token), "summary is pure over loaded members: " + token);
   assert.ok(src.includes("KHÔI PHỤC THÀNH VIÊN") && !src.includes("ĐƯA TRỞ LẠI") && src.includes("GỠ KHỎI ĐƠN VỊ"));
   assert.ok(!/getCountFromServer|aggregate|collectionGroup/.test(src), "no new aggregation architecture");
+});
+
+test("newest-first: the membership list orders by createdAt DESC then document id DESC in the database query (no client-side sort/prepend); one approved index only", () => {
+  const q = code(text("organization-queries.mjs"));
+  assert.ok(q.includes('order === "newestFirst" ? [orderBy("createdAt", "desc"), orderBy(documentId(), "desc")] : [orderBy(documentId())]'));
+  assert.ok(q.includes('{ ...options, order: "newestFirst" }') && q.split("newestFirst").length === 3, "only membersOfOrganization uses the newest-first order");
+  assert.ok(!/\.sort\(|\.reverse\(|unshift\(/.test(q), "no client-side sorting in the query module");
+  const v = code(view);
+  assert.ok(!/\.sort\(|\.reverse\(|unshift\(/.test(v), "no client-side sorting or prepending in the membership view");
+  assert.ok(v.includes("await loadPage(true)") && v.includes("await reload()"), "after a successful add the list is reloaded from Firestore (page 1)");
+  // the repository index manifest is untouched (the live index was created by a single targeted call, never by deploying this file)
+  assert.equal(sha("firestore.indexes.json"), "a27b5a20c63e1b446f63221a6c1fa93b31ac95a6556c6009e44a45f4ca354d51");
 });

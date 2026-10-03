@@ -30,9 +30,14 @@ const plain = (snapshot) => ({ id: snapshot.id, ...snapshot.data() });
 
 // Ordinary application queries. Contains no function that lists organizations.
 export function createOrganizationQueries({ collection, doc, query, where, orderBy, limit, startAfter, documentId, getDocs, getDoc }) {
-  async function pageByOrganization(db, collectionName, organizationId, { pageSize, cursor } = {}) {
+  // order "documentId" (default): by document id ascending - needs no composite index.
+  // order "newestFirst" (P2-S4, memberships): createdAt DESC then document id DESC - persistent, bounded, cursor-paged. Requires the approved
+  // composite index organizationMembers(organizationId ASC, createdAt DESC, __name__ DESC); the document-id tie-break is the index's implicit
+  // __name__ field, so members sharing one createdAt (one batch commit) have a deterministic order.
+  async function pageByOrganization(db, collectionName, organizationId, { pageSize, cursor, order = "documentId" } = {}) {
     const size = pageSizeOf(pageSize);
-    const constraints = [where("organizationId", "==", singleOrganizationId(organizationId)), orderBy(documentId())];
+    const ordering = order === "newestFirst" ? [orderBy("createdAt", "desc"), orderBy(documentId(), "desc")] : [orderBy(documentId())];
+    const constraints = [where("organizationId", "==", singleOrganizationId(organizationId)), ...ordering];
     if (cursor) constraints.push(startAfter(cursor));
     constraints.push(limit(size + 1));
     const snapshot = await getDocs(query(collection(db, collectionName), ...constraints));
@@ -52,7 +57,8 @@ export function createOrganizationQueries({ collection, doc, query, where, order
     organizationById: async (db, organizationId) => byId(db, "organizations", singleOrganizationId(organizationId)),
     membershipOf: async (db, organizationId, uid) => byId(db, "organizationMembers", membershipDocId(singleOrganizationId(organizationId), singleUid(uid))),
     capabilityOf: async (db, organizationId, uid) => byId(db, "userCapabilities", capabilityDocId(singleOrganizationId(organizationId), singleUid(uid))),
-    membersOfOrganization: async (db, organizationId, options) => pageByOrganization(db, "organizationMembers", organizationId, options),
+    // Newest membership first (immutable createdAt DESC, document id DESC tie-break). Never loads-all-and-sorts; page size and cursor as before.
+    membersOfOrganization: async (db, organizationId, options) => pageByOrganization(db, "organizationMembers", organizationId, { ...options, order: "newestFirst" }),
     capabilitiesOfOrganization: async (db, organizationId, options) => pageByOrganization(db, "userCapabilities", organizationId, options)
   });
 }

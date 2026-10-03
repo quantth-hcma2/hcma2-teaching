@@ -94,7 +94,7 @@ await put("users/tpend", { uid: "tpend", role: "teacher", status: "pending", dis
 const NAMES = ["Nguyễn Văn An", "Trần Thị Bình", "Lê Hoàng Cường", "Phạm Thu Dung", "Đỗ Minh Em", "Vũ Quốc Phong", "Hoàng Lan Giang", "Bùi Thanh Hà"];
 for (let i = 1; i <= 8; i++) { const id = "t0" + i; await put(`users/${id}`, { uid: id, role: "teacher", status: "active", displayName: NAMES[i - 1], email: `gv0${i}@example.test`, approvedBy: null, approvedAt: null, createdAt: D(10 + i) }); }
 const org = (name, code, status = "active") => ({ schemaVersion: 1, name, code, status, createdAt: D(2), createdBy: admin.uid, updatedAt: D(2), ...(status === "archived" ? { archivedAt: D(3), archivedBy: admin.uid } : {}) });
-const mem = (orgId, uid, orgRole = "member", status = "active", extra = {}) => ({ schemaVersion: 1, organizationId: orgId, uid, orgRole, status, displayName: "Snapshot " + uid, email: uid + "@example.test", addedBy: admin.uid, createdAt: D(5), updatedAt: D(5), ...extra });
+const mem = (orgId, uid, orgRole = "member", status = "active", extra = {}) => ({ schemaVersion: 1, organizationId: orgId, uid, orgRole, status, displayName: "Snapshot " + uid, email: uid + "@example.test", addedBy: admin.uid, createdAt: D(2), updatedAt: D(2), ...extra });
 await put("organizations/orgMain", org("Khoa Quản trị", "khoa-quan-tri"));
 await put("organizations/orgPaged", org("Đơn vị nhiều thành viên", "nhieu-thanh-vien"));
 await put("organizations/orgArch", org("Trung tâm cũ", "trung-tam-cu", "archived"));
@@ -110,6 +110,7 @@ const usersView = async () => JSON.stringify((await list("users")).map(({ lastLo
 const usersSnapshot = await usersView();
 const members = async (orgId) => (await list("organizationMembers")).filter((m) => m.organizationId === orgId);
 const memberOf = (orgId, uid) => get(`organizationMembers/${orgId}_${uid}`);
+const rowOrder = () => page.evaluate(() => [...document.querySelectorAll("[data-member-row]")].map((r) => r.dataset.memberRow.replace(/^[^_]+_/, "")));
 const row = (orgId, uid) => page.locator(`[data-member-row="${orgId}_${uid}"]`);
 const rowText = async (orgId, uid) => ((await row(orgId, uid).textContent()) || "").replace(/\s+/g, " ").trim();
 const openOrg = async (id) => { await page.click('[data-nav="classes"]'); await openOrgs(); await page.click(`[data-org-open="${id}"]`); await page.waitForSelector("#orgDetailTitle"); await page.waitForSelector("#orgMembersCard", { timeout: 30000 }); };
@@ -175,6 +176,7 @@ try {
     assert.deepEqual(Object.keys(d).sort(), ["addedBy", "createdAt", "displayName", "email", "orgRole", "organizationId", "schemaVersion", "status", "uid", "updatedAt"]);
     assert.equal(d.orgRole, "member"); assert.equal(d.status, "active"); assert.equal(d.addedBy, admin.uid); assert.equal(d.organizationId, "orgMain"); assert.equal(d.uid, "t01");
     assert.equal(d.displayName, "Nguyễn Văn An"); assert.equal(d.email, "gv01@example.test"); assert.equal(d.schemaVersion, 1);
+    assert.deepEqual(await rowOrder(), ["t01"]);
     const r = await rowText("orgMain", "t01"); assert.ok(r.includes("Nguyễn Văn An") && r.includes("gv01@example.test") && r.includes("Thành viên") && r.includes("Đang hoạt động"));
     const audit = await auditBy("organization.members.add"); assert.equal(audit.length, 1);
     assert.equal(audit[0].actorId, admin.uid); assert.equal(audit[0].entityType, "organization"); assert.equal(audit[0].entityId, "orgMain");
@@ -188,6 +190,8 @@ try {
     assert.equal(await text("#orgPickerCount"), "3");
     await page.click("#orgPickerSubmit");
     await page.waitForFunction(() => document.querySelectorAll("#orgMembersTable tbody tr").length === 4, null, { timeout: 30000 });
+    // newest first: the separately-added later batch is above t01; members of ONE batch share createdAt and are ordered by document id DESC
+    assert.deepEqual(await rowOrder(), ["t04", "t03", "t02", "t01"], "newest membership first; same-batch order deterministic (document id desc)");
     for (const id of ["t02", "t03", "t04"]) { const d = await memberOf("orgMain", id); assert.equal(d.orgRole, "member"); assert.equal(d.status, "active"); assert.equal(d.addedBy, admin.uid); }
     const audit = (await auditBy("organization.members.add")).filter((a) => a.detail.count === 3); assert.equal(audit.length, 1);
     assert.deepEqual(audit[0].detail.uids.sort(), ["t02", "t03", "t04"]);
@@ -217,6 +221,7 @@ try {
     assert.match(await toastText(), /bỏ qua 1/);
     assert.deepEqual(await memberOf("orgMain", "t05"), before, "the existing membership is untouched");
     assert.equal((await memberOf("orgMain", "t08")).status, "active");
+    assert.equal((await rowOrder())[0], "t08", "the newest addition is the first row");
     assert.equal((await members("orgMain")).filter((m) => m.uid === "t05").length, 1);
     const audit = (await auditBy("organization.members.add")).filter((a) => a.detail.skipped === 1); assert.equal(audit.length, 1); assert.deepEqual(audit[0].detail.uids, ["t08"]);
   });
@@ -288,6 +293,16 @@ try {
     for (const [uid, label] of Object.entries(expected)) assert.ok((await rowText("orgMain", uid)).includes(label), uid + " " + label);
     assert.equal(await page.locator("#orgMembersTable tbody tr").count(), 8);
     assert.match(await text("#orgMembersSummary"), /^8 thành viên · 7 hoạt động · 1 đã gỡ$/, "exact summary when every member is loaded");
+    const NEWEST_FIRST = ["t08", "t04", "t03", "t02", "t01", "t07", "t06", "t05"];   // t08 (latest batch) ... t01 (first batch), then the older seeded t07/t06/t05 (same createdAt, id desc)
+    assert.deepEqual(await rowOrder(), NEWEST_FIRST, "order persists after a full page refresh");
+    // status changes never move a member: createdAt (immutable) drives the order
+    await page.click('[data-nav="classes"]'); await openOrg("orgMain");
+    assert.deepEqual(await rowOrder(), NEWEST_FIRST, "order persists after reopening Organization Detail");
+    // logout / login
+    await page.click("#btnLogoutTop"); await page.waitForSelector("#loginEmail", { timeout: 30000 });
+    await login(page, ADMIN); await openOrg("orgMain");
+    assert.deepEqual(await rowOrder(), NEWEST_FIRST, "order persists after logout/login");
+    await shot(page, "03b-newest-first-after-login");
   });
 
   await step("paged member list: 25 members per page with 'TẢI THÊM'; the remaining members append without duplicates", async () => {
@@ -304,6 +319,24 @@ try {
     assert.equal(await text("#orgMembersSummary"), "30 thành viên · 30 hoạt động", "exact once everything is loaded");
     const ids = await page.evaluate(() => [...document.querySelectorAll("[data-member-row]")].map((r) => r.dataset.memberRow));
     assert.equal(new Set(ids).size, 30);
+  });
+
+  await step("newest first with a large population: a teacher added to the 30-member organization is the FIRST row of page 1; load-more yields every older member exactly once", async () => {
+    await page.click('[data-nav="classes"]'); await openOrg("orgPaged");
+    await openPicker(); await page.check('[data-picker-check="t01"]'); await page.click("#orgPickerSubmit");
+    await page.waitForFunction(() => document.querySelector("[data-member-row]")?.dataset.memberRow === "orgPaged_t01", null, { timeout: 30000 });
+    assert.equal(await page.locator("#orgMembersTable tbody tr").count(), 25);
+    assert.equal((await rowOrder())[0], "t01");
+    await page.reload(); await page.waitForSelector(".navlink", { timeout: 60000 });
+    await openOrgs(); await page.click('[data-org-open="orgPaged"]'); await page.waitForSelector("#orgMembersTable", { timeout: 30000 });
+    assert.equal((await rowOrder())[0], "t01", "still first after refresh");
+    await page.click("#orgMembersMore");
+    await page.waitForFunction(() => document.querySelectorAll("#orgMembersTable tbody tr").length === 31, null, { timeout: 30000 });
+    const ids = await rowOrder();
+    assert.equal(new Set(ids).size, 31, "no duplicates");
+    const expectedOlder = Array.from({ length: 30 }, (_, i) => "pg" + String(29 - i).padStart(2, "0"));    // seeded with one shared createdAt: document id desc
+    assert.deepEqual(ids, ["t01", ...expectedOlder], "no omissions and a deterministic order");
+    assert.equal(await text("#orgMembersSummary"), "31 thành viên · 31 hoạt động");
   });
 
   await step("archived organization: members stay visible, the banner explains, 'Thêm giảng viên' is disabled and no member action is offered; nothing is written", async () => {

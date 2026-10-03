@@ -293,7 +293,7 @@ try {
     for (const a of await list("auditLogs")) assert.equal(a.actorId, admin.uid);
     // Pre-existing rapid-navigation races of OTHER Admin/Teacher screens (identical errors reproduced on the S2 baseline tree without any S3 code
     // by the same click-through): adminOverview / adminLibrary / adminAuditLog / teacherOverview write into the DOM after the user already left, and a chart canvas.
-    const known = (e) => /adminOverview|adminLibrary|adminAuditLog|teacherOverview|Failed to create chart|Cannot set properties of null (setting .innerHTML.)|Cannot read properties of null (reading .innerHTML.)/.test(e);
+    const known = (e) => /adminOverview|adminLibrary|adminAuditLog|teacherOverview|Failed to create chart|Cannot set properties of null \(setting 'innerHTML'\)|Cannot read properties of null \(reading 'innerHTML'\)/.test(e);
     const all = [...adminErrors, ...teacherErrors];
     console.log("known pre-existing race errors: " + all.filter(known).length);
     assert.deepEqual(all.filter((e) => !known(e)), [], "no error from the new screen or anything else");

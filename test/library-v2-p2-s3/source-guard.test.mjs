@@ -12,7 +12,22 @@ const html = text("index.html");
 const view = text("organization-admin-view.mjs");
 const code = (src) => src.split(NL).filter((l) => !l.trim().startsWith("//")).join(NL);
 
-test("index.html delta versus the S2 baseline is EXACTLY the five wiring edits (reverse them and the S2 baseline hash returns)", () => {
+// P2-S4 (membership management) adds its own delta on top of S3; it is reversed first so this guard still proves the S3 delta exactly.
+const S4_EDITS = [
+  [`import { createOrganizationAdminScreen, createOrganizationWriter } from "./organization-admin-view.mjs?v=20261004-p2s4";
+import { createOrganizationMembershipSection, createMembershipWriter, createActiveTeacherPickerQuery } from "./organization-membership-view.mjs?v=20261004-p2s4";`, `import { createOrganizationAdminScreen, createOrganizationWriter } from "./organization-admin-view.mjs?v=20261003-p2s3";`],
+  [`
+const ORGANIZATION_TEACHER_PICKER=createActiveTeacherPickerQuery({collection,query,where,orderBy,limit,startAfter,getDocs});`, ""],
+  [`,
+    // P2-S4: ordinary membership management inside Organization Detail (Platform Admin only; no Organization Admin / capability work).
+    membershipSection:createOrganizationMembershipSection({
+      db, actorUid:STATE.user.uid, isPlatformAdmin:STATE.profile?.role==="admin",
+      esc, fmtDate, toast, mapError, openModal, closeModal, logAudit,
+      queries:ORGANIZATION_QUERIES, picker:ORGANIZATION_TEACHER_PICKER, contract:ORGANIZATION_CONTRACT,
+      writer:createMembershipWriter({collection,doc,writeBatch,updateDoc})
+    })`, ""]
+];
+test("index.html delta versus the S2 baseline is EXACTLY the five wiring edits plus the S4 delta (reverse them and the S2 baseline hash returns)", () => {
   const edits = [
     ["startAfter, documentId, onSnapshot, serverTimestamp,", "startAfter, onSnapshot, serverTimestamp,"],
     [`import { createOrganizationQueries, createPlatformAdminOrganizationQueries } from "./organization-queries.mjs?v=20261003-p2s3";
@@ -40,6 +55,13 @@ function adminOrganizations(c){
 `, ""]
   ];
   let restored = html;
+  for (const [added, original] of S4_EDITS) {
+    let hit = restored.split(added).length - 1, a = added, o = original;
+    if (hit !== 1) { a = added.split(NL).join(CRLF); o = original.split(NL).join(CRLF); hit = restored.split(a).length - 1; }
+    assert.equal(hit, 1, "S4 wiring edit present exactly once: " + added.slice(0, 60));
+    restored = restored.replace(a, () => o);
+  }
+  assert.equal(createHash("sha256").update(restored, "utf8").digest("hex"), "62077a34d9ec70061c874e58bebcf31a091626720f53166e30d260274948e2e4", "S3 index.html restored");
   for (const [added, original] of edits) {
     // the file mixes LF and CRLF lines: try the text as written, then with CRLF line endings
     let hit = restored.split(added).length - 1;
@@ -110,5 +132,5 @@ test("no new dynamic import(), no new collection in index.html, no membership/ca
   for (const [file, hash] of Object.entries(pinned)) if (hash) assert.equal(sha(file), hash, file);
   for (const f of ["storage.rules", "firebase.json", "cors.json"]) assert.ok(!existsSync(new URL(f, root)), f + " must not exist at the repository root");
   const mjs = readdirSync(new URL("./", root)).filter((f) => f.startsWith("organization-") || f.startsWith("admin-")).sort();
-  assert.deepEqual(mjs, ["admin-feature-registry.mjs", "organization-admin-view.mjs", "organization-context.mjs", "organization-queries.mjs", "organization-write-contract.mjs"]);
+  assert.deepEqual(mjs, ["admin-feature-registry.mjs", "organization-admin-view.mjs", "organization-context.mjs", "organization-membership-view.mjs", "organization-queries.mjs", "organization-write-contract.mjs"]);
 });

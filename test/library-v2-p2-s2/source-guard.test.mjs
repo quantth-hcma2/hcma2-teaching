@@ -12,10 +12,10 @@ const NL = String.fromCharCode(10);
 const MODULES = ["organization-context.mjs", "organization-queries.mjs", "organization-write-contract.mjs", "admin-feature-registry.mjs"];
 const code = (p) => text(p).split(NL).filter((line) => !line.trim().startsWith("//")).join(NL);          // ignore comment lines
 
-test("S2 modules plus the S3 view module are the only organization modules (no others)", () => {
+test("S2 modules plus the S3 view and S4 membership view modules are the only organization modules (no others)", () => {
   const rootMjs = readdirSync(new URL("./", root)).filter((f) => f.endsWith(".mjs")).sort();
   const baselineMjs = ["app-environment.mjs", "classroom-projection-launch.mjs", "contract-activation.mjs", "contract-editor.mjs", "contract-runtime.mjs", "contract-writer.mjs", "group-classroom-presentation.mjs", "group-classroom-timer.mjs", "group-clone.mjs", "group-file-link-safety.mjs", "group-membership.mjs", "group-pdf-export.mjs", "group-pdf-font-coverage.mjs", "group-pdf-runtime.mjs", "group-roster.mjs", "group-submission-upload.mjs", "library-hub-registry.mjs", "rich-text-contract.mjs", "rich-text-editor-serializer.mjs", "rich-text-editor.mjs", "rich-text-renderer.mjs", "session-info-compare.mjs", "session-reader-ui.mjs", "session-reader.mjs", "session-view.mjs", "trash-query-contract.mjs"];
-  assert.deepEqual(rootMjs, [...baselineMjs, ...MODULES, "organization-admin-view.mjs"].sort());
+  assert.deepEqual(rootMjs, [...baselineMjs, ...MODULES, "organization-admin-view.mjs", "organization-membership-view.mjs"].sort());
 });
 
 test("modules are pure: only relative imports among themselves, no Firebase/network/storage/DOM access, no dynamic import", () => {
@@ -30,9 +30,9 @@ test("modules are pure: only relative imports among themselves, no Firebase/netw
   assert.deepEqual([...code("organization-queries.mjs").matchAll(/^\s*import\s[^;]*from\s+["']([^"']+)["']/gm)].map((x) => x[1]), ["./organization-write-contract.mjs"]);
 });
 
-test("references: only index.html (S3 wiring) and the S3 view module import the S2 modules; the S2 modules themselves never reference index.html or the view", () => {
+test("references: only index.html (S3/S4 wiring) and the S3/S4 view modules import the S2 modules; the S2 modules themselves never reference index.html or the view", () => {
   const names = MODULES.map((m) => m.replace(".mjs", ""));
-  const allowed = new Set([...MODULES, "index.html", "organization-admin-view.mjs"]);
+  const allowed = new Set([...MODULES, "index.html", "organization-admin-view.mjs", "organization-membership-view.mjs"]);
   const candidates = readdirSync(new URL("./", root)).filter((f) => f.endsWith(".mjs") || f.endsWith(".html") || f.endsWith(".css") || f.endsWith(".js"));
   for (const f of candidates) {
     if (allowed.has(f)) continue;

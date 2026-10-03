@@ -87,7 +87,8 @@ export function renderOrganizationDetailHtml({ organization, esc, fmtDate }) {
       <div class="mt-14">${rename}</div>
       <details class="mt-14"><summary class="small mut">Thông tin chẩn đoán</summary><div class="small mut mt-8">Mã nội bộ: <code>${esc(organization.id)}</code></div></details></div>
     ${lifecycle}
-    <div id="orgActionErr" class="error-text hidden mt-8"></div>`;
+    <div id="orgActionErr" class="error-text hidden mt-8"></div>
+    <div id="orgMembersSection" class="mt-14"></div>`;
 }
 
 export function renderCreateOrganizationFormHtml({ esc }) {
@@ -123,9 +124,10 @@ export function createOrganizationWriter({ collection, doc, setDoc, updateDoc })
 // ---------------------------------------------------------------- screen controller
 // deps: { db, actorUid, isPlatformAdmin, esc, fmtDate, toast, mapError, openModal, closeModal, logAudit,
 //         queries: { organizationById(db,id) }, platformQueries: { listAllOrganizationsAsPlatformAdminOnly(db) },
-//         contract: <createOrganizationWriteContract result>, writer: { newId(db), create(db,id,data), update(db,id,data) } }
+//         contract: <createOrganizationWriteContract result>, writer: { newId(db), create(db,id,data), update(db,id,data) },
+//         membershipSection?: { mount(host, organization) } (P2-S4) }
 export function createOrganizationAdminScreen(deps) {
-  const { db, actorUid, isPlatformAdmin, esc, fmtDate, toast, mapError, openModal, closeModal, logAudit, queries, platformQueries, contract, writer } = deps;
+  const { db, actorUid, isPlatformAdmin, esc, fmtDate, toast, mapError, openModal, closeModal, logAudit, queries, platformQueries, contract, writer, membershipSection } = deps;
   const modalRoot = () => document.getElementById("globalModal");
   const modal$ = (selector) => modalRoot().querySelector(selector);
   const show = (el, message) => { el.textContent = message; el.classList.remove("hidden"); };
@@ -226,6 +228,8 @@ export function createOrganizationAdminScreen(deps) {
       };
       const lifecycleButton = container.querySelector("#orgArchiveBtn") || container.querySelector("#orgRestoreBtn");
       lifecycleButton.onclick = () => confirmLifecycle(organization.status === "archived" ? "restore" : "archive", organization, actionErr);
+      // P2-S4: ordinary membership management is mounted below the lifecycle controls (optional dependency; absent = S3 behavior).
+      if (membershipSection) await membershipSection.mount(container.querySelector("#orgMembersSection"), organization);
     }
 
     function confirmLifecycle(kind, organization, actionErr) {

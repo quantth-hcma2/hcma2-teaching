@@ -14,6 +14,7 @@ const code = (src) => src.split(NL).filter((l) => !l.trim().startsWith("//")).jo
 
 // P2-S4 (membership management) adds its own delta on top of S3; it is reversed first so this guard still proves the S3 delta exactly.
 const S4_EDITS = [
+  [`import { createOrganizationQueries, createPlatformAdminOrganizationQueries } from "./organization-queries.mjs?v=20261004-p2s4";`, `import { createOrganizationQueries, createPlatformAdminOrganizationQueries } from "./organization-queries.mjs?v=20261003-p2s3";`],
   [`import { createOrganizationAdminScreen, createOrganizationWriter } from "./organization-admin-view.mjs?v=20261004-p2s4";
 import { createOrganizationMembershipSection, createMembershipWriter, createActiveTeacherPickerQuery } from "./organization-membership-view.mjs?v=20261004-p2s4";`, `import { createOrganizationAdminScreen, createOrganizationWriter } from "./organization-admin-view.mjs?v=20261003-p2s3";`],
   [`

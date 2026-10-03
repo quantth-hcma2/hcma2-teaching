@@ -9,7 +9,7 @@ import {
 } from "../library-v2-p2-s1/helpers.mjs";
 import { createOrganizationWriteContract } from "../../organization-write-contract.mjs";
 import { createOrganizationQueries } from "../../organization-queries.mjs";
-import { createMembershipWriter, createActiveTeacherPickerQuery, planMembershipAdditions, availableMemberActions, nextStatusForAction } from "../../organization-membership-view.mjs";
+import { createMembershipWriter, createTeacherEmailSearchQuery, planMembershipAdditions, availableMemberActions, nextStatusForAction } from "../../organization-membership-view.mjs";
 
 const rules = candidateRules();
 assert.equal(sha(rules).toUpperCase(), "7EA5D7A5EBAC9DF18E995C9A1644B2648E4143FA4FE3046C0DE7F8737FCC1DDD", "proven against the deployed Rules artifact");
@@ -30,7 +30,7 @@ const as = actors(env);
 const C = createOrganizationWriteContract({ serverTimestamp });
 const Q = createOrganizationQueries({ collection, doc, query, where, orderBy, limit, startAfter, documentId, getDocs, getDoc });
 const W = createMembershipWriter({ collection, doc, writeBatch, updateDoc });
-const P = createActiveTeacherPickerQuery({ collection, query, where, orderBy, limit, startAfter, getDocs });
+const P = createTeacherEmailSearchQuery({ collection, query, where, orderBy, limit, getDocs });
 test.after(async () => env.cleanup());
 const ok = (p, m) => assertSucceeds(p, m), no = (p, m) => assertFails(p, m);
 const orgActive = { id: "orgB", status: "active" };
@@ -162,17 +162,11 @@ test("paged member list: 25 per page over 130+ members, cursor continuity, no du
   await assert.rejects(() => Q.membersOfOrganization(as("pa"), "orgA", { pageSize: 101 }), RangeError);
 });
 
-test("active-teacher picker query is allowed for the Platform Admin only and returns only active teachers, paged by createdAt", async () => {
-  const seen = new Set(); let cursor, hasMore = true, pages = 0;
-  while (hasMore) {
-    const page = await P.pageActiveTeachersForMembershipPicker(as("pa"), { pageSize: 20, cursor });
-    for (const t of page.teachers) { assert.equal(t.role, "teacher"); assert.equal(t.status, "active"); assert.ok(!seen.has(t.id)); seen.add(t.id); }
-    cursor = page.cursor; hasMore = page.hasMore; pages++;
-    assert.ok(pages < 40);
-  }
-  assert.ok(seen.has("cand059") && seen.has("mA1"));
-  for (const excluded of ["candS1", "candS2", "candP", "susp", "pend", "pa", "spa"]) assert.ok(!seen.has(excluded), excluded + " must not be offered");
-  for (const actor of ["mB1", "oaB", "out"]) await no(P.pageActiveTeachersForMembershipPicker(as(actor), { pageSize: 20 }), "picker by " + actor);
+test("the O1 email-prefix search query is allowed for the Platform Admin only and returns bounded results", async () => {
+  const found = await P.searchByEmailPrefix(as("pa"), "cand00");
+  assert.ok(found.users.length >= 1 && found.users.length <= 20 && found.users.every((u) => u.email.startsWith("cand00")));
+  assert.equal(found.more, false);
+  for (const actor of ["mB1", "oaB", "out"]) await no(P.searchByEmailPrefix(as(actor), "cand00"), "email search by " + actor);
 });
 
 test("S4 never touches users, capabilities or Organization-Admin roles through the contract it uses", async () => {

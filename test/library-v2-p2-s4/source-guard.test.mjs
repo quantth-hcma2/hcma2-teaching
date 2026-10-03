@@ -32,26 +32,17 @@ test("scope: ordinary members only - no Organization Admin appointment/revocatio
   for (const word of ["resolveOrganizationContext", "organization-context", "STATE.", "switcher"]) assert.ok(!code(view).includes(word), "no context wiring: " + word);
 });
 
-test("collections: `organizationMembers` is named only in the thin writer, `users` only in the picker query (one place, one query shape)", () => {
+test("collections: `organizationMembers` is named only in the thin writer (the `users` search query is guarded by the O1 source guard)", () => {
   const src = code(view);
-  const writer = src.slice(src.indexOf("export function createMembershipWriter"), src.indexOf("// PICKER QUERY"));
+  const writer = src.slice(src.indexOf("export function createMembershipWriter"), src.indexOf("export function createTeacherEmailSearchQuery"));
   assert.equal((src.match(/"organizationMembers"/g) || []).length, 2, "two uses, both inside the writer");
   assert.equal((writer.match(/"organizationMembers"/g) || []).length, 2);
-  const picker = src.slice(src.indexOf("export function createActiveTeacherPickerQuery"), src.indexOf("// ---------------------------------------------------------------- controller"));
-  assert.equal((src.match(/"users"/g) || []).length, 1);
-  assert.equal((picker.match(/"users"/g) || []).length, 1);
-  assert.equal((src.match(/where\(/g) || []).length, 2, "exactly two where() filters (role, status)");
-  assert.ok(picker.includes('where("role", "==", "teacher"), where("status", "==", "active"), orderBy("createdAt", "desc")'));
-  assert.ok(picker.includes("limit(pageSize + 1)") && picker.includes("pageSize > 100"), "bounded and paged");
   assert.ok(!src.includes("getDocs(collection"), "no unbounded collection read");
-  // the picker query is only reachable through the add dialog
-  assert.equal((view.match(/picker\.pageActiveTeachersForMembershipPicker/g) || []).length, 1);
-  assert.ok(view.indexOf("picker.pageActiveTeachersForMembershipPicker") > view.indexOf("async function openPicker"));
 });
 
 test("audit: existing best-effort logAudit only; one summary entry per add operation and one entry per status change", () => {
   const actions = [...view.matchAll(/logAudit\(([^,]+),/g)].map((m) => m[1].trim());
-  assert.deepEqual(actions, ['"organization.member." + action', '"organization.members.add"']);
+  assert.deepEqual([...actions].sort(), ['"organization.member." + action', '"organization.members.add"'].sort());
   assert.ok(!view.includes("addDoc") && !view.includes("auditLogs"));
 });
 
@@ -109,7 +100,7 @@ test("UX revision: ONE add-teacher button, rendered into the detail header actio
   assert.ok(!card.includes("orgMemberAddBtn"), "not inside the member card markup");
   assert.ok(src.includes('querySelector("#orgPrimaryActions")'));
   assert.equal((adminView.match(/id="orgPrimaryActions"/g) || []).length, 1, "the detail view provides the single action placeholder");
-  const summary = src.slice(src.indexOf("export function summarizeMembers"), src.indexOf("export function renderTeacherPickerHtml"));
+  const summary = src.slice(src.indexOf("export function summarizeMembers"), src.indexOf("export function normalizeEmailTerm"));
   for (const token of ["getCountFromServer", "getDocs", "query(", "queries.", "await", "fetch("]) assert.ok(!summary.includes(token), "summary is pure over loaded members: " + token);
   assert.ok(src.includes("KHÔI PHỤC THÀNH VIÊN") && !src.includes("ĐƯA TRỞ LẠI") && src.includes("GỠ KHỎI ĐƠN VỊ"));
   assert.ok(!/getCountFromServer|aggregate|collectionGroup/.test(src), "no new aggregation architecture");

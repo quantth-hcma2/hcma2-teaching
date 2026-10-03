@@ -10,12 +10,14 @@ const sha = (p) => createHash("sha256").update(readFileSync(new URL(p, root))).d
 const shaOf = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 const NL = String.fromCharCode(10), CRLF = String.fromCharCode(13, 10);
 import { reverseO2Edits, IMPORT_ADDED, BLOCK_ADDED, APPROVE_O2 } from "./o2-edits.mjs";
+import { reverseO1Edits } from "../o1-search/o1-edits.mjs";
 const html = text("index.html");
 const mod = text("teacher-organization-enrollment.mjs");
 const code = (src) => src.split(NL).filter((l) => !l.trim().startsWith("//")).join(NL);
 
 test("index.html delta versus the released baseline is EXACTLY the three O2 edits (reverse them and the baseline hash returns)", () => {
-  assert.equal(shaOf(reverseO2Edits(html)), "eb043d94d150babd1312e97378dc903a153bba7624ae2d0318e8487cd3cff079");
+  // O1 (Add-Teacher exception search) adds its own delta after O2: reverse it first, then the O2 edits must restore the released S4 index.html
+  assert.equal(shaOf(reverseO2Edits(reverseO1Edits(html))), "eb043d94d150babd1312e97378dc903a153bba7624ae2d0318e8487cd3cff079");
 });
 
 test("V1 approval semantics: the write, toast, callback position and error path are byte-identical; the continuation is additive, after the try/catch, not awaited, never throws", () => {
@@ -102,7 +104,6 @@ test("Rules, indexes, Storage, package, vendor and every released organization m
     "organization-queries.mjs": "a0c64c8f4105d9b83dd5672df4b6c9a7e809b75e1b9517820fbca2571e50c0f2",
     "organization-write-contract.mjs": "b26cc200d1e918998a780d81221810e85249ca57f80b080623cfeeb016d58713",
     "organization-admin-view.mjs": "7f7f535041db3ec2f31411cca8afdbabe985552174620105b5132bff5df4255f",
-    "organization-membership-view.mjs": "4ba9ccb1a7c8b39981b4009d9e32a26bc5841549cdcde84be9c6766caa9b06e4",
     "admin-feature-registry.mjs": "4e97434f69907931bdabb5eaf46fe4a765b62e122ba1f938a28adaeb04316413",
     "library-hub-registry.mjs": "37ef4f919d4604b4233b46cd197e2481b5fdf79c8c7f5229f81eb656a33688a0",
     "trash-query-contract.mjs": "a4639903403d88bb4cc1bb0d197e6c16a0b967242554975f2c47b33121efc7ea",

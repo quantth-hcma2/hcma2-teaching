@@ -114,7 +114,10 @@ const rowOrder = () => page.evaluate(() => [...document.querySelectorAll("[data-
 const row = (orgId, uid) => page.locator(`[data-member-row="${orgId}_${uid}"]`);
 const rowText = async (orgId, uid) => ((await row(orgId, uid).textContent()) || "").replace(/\s+/g, " ").trim();
 const openOrg = async (id) => { await page.click('[data-nav="classes"]'); await openOrgs(); await page.click(`[data-org-open="${id}"]`); await page.waitForSelector("#orgDetailTitle"); await page.waitForSelector("#orgMembersCard", { timeout: 30000 }); };
-const openPicker = async () => { await page.click("#orgMemberAddBtn"); await page.waitForSelector("#orgPickerList"); };
+const emailOf = (id) => `gv${id.slice(1)}@example.test`;
+const openPicker = async () => { await page.click("#orgMemberAddBtn"); await page.waitForSelector("#orgSearchInput"); };
+const searchFor = async (term) => { await page.fill("#orgSearchInput", term); await page.press("#orgSearchInput", "Enter"); await page.waitForFunction(() => { const r = document.querySelector("#orgSearchResults"); return r && !r.querySelector(".spinner") && r.textContent.trim().length > 0 && !r.querySelector("#orgSearchHint"); }, null, { timeout: 30000 }); };
+const addViaSearch = async (id, orgId = "orgMain") => { await openPicker(); await searchFor(emailOf(id)); await page.click(`[data-search-add="${id}"]`); await page.waitForFunction((u) => /Đã thêm/.test(document.querySelector(`[data-search-note="${u}"]`)?.textContent || ""), id, { timeout: 30000 }); await page.click("#orgSearchClose"); await page.waitForSelector(`[data-member-row="${orgId}_${id}"]`, { timeout: 30000 }); };
 const toastText = () => page.evaluate(() => [...document.querySelectorAll("#toast-root .toast")].map((t) => t.textContent).join(" | "));
 const act = async (orgId, uid, action) => { await page.click(`[data-member-id="${orgId}_${uid}"][data-member-action="${action}"]`); await page.waitForSelector("#orgMemberConfirmOk"); };
 const confirmOk = async () => { await page.click("#orgMemberConfirmOk"); await page.waitForFunction(() => !document.querySelector("#orgMemberConfirmOk"), null, { timeout: 30000 }); await page.waitForSelector("#orgMembersCard"); };
@@ -148,30 +151,21 @@ try {
     await shot(page, "01-members-empty");
   });
 
-  await step("add dialog: only ACTIVE teachers are offered (no suspended, pending or admin accounts); submit stays disabled until a selection; search narrows the list", async () => {
+  await step("the add dialog starts EMPTY: no teacher population is listed, fewer than 3 characters finds nothing, nothing is added automatically", async () => {
     await openPicker();
-    const ids = await page.evaluate(() => [...document.querySelectorAll("[data-picker-check]")].map((c) => c.dataset.pickerCheck));
-    assert.ok(["t01", "t02", "t03", "t04", "t05", "t06", "t07", "t08"].every((id) => ids.includes(id)));
-    assert.ok(!ids.includes("tpend") && !ids.includes(tsusp.uid) && !ids.includes(admin.uid), "suspended, pending and admin accounts are never offered");
-    assert.ok(await page.isDisabled("#orgPickerSubmit"));
-    assert.ok((await text("#orgPickerList")).includes("Nguyễn Văn An") && (await text("#orgPickerList")).includes("gv01@example.test"));
-    await page.fill("#orgPickerSearch", "trần thị");
-    await page.waitForFunction(() => document.querySelectorAll("[data-picker-check]").length === 1);
-    assert.equal(await page.locator('[data-picker-check="t02"]').count(), 1);
+    assert.equal(await page.locator("[data-search-row]").count(), 0);
+    assert.ok((await text("#orgSearchHint")).includes("3 ký tự"));
+    await page.fill("#orgSearchInput", "gv"); await page.press("#orgSearchInput", "Enter");
+    await page.waitForFunction(() => /tối thiểu 3/.test(document.querySelector("#orgSearchResults")?.textContent || ""));
+    assert.equal(await page.locator("[data-search-row]").count(), 0);
     await shot(page, "02-picker");
-    await page.fill("#orgPickerSearch", "");
-    await page.click("#orgPickerCancel");
+    await page.click("#orgSearchClose");
     assert.equal(await modalOpen(), 0);
     assert.equal((await members("orgMain")).length, 0, "nothing was added automatically");
   });
 
-  await step("add ONE teacher: written only through the contract (exact fields, ordinary member, display snapshot), listed immediately, audited once", async () => {
-    await openPicker();
-    await page.check('[data-picker-check="t01"]');
-    assert.equal(await text("#orgPickerCount"), "1");
-    await page.click("#orgPickerSubmit");
-    await page.waitForSelector("#orgMembersTable", { timeout: 30000 });
-    assert.equal(await modalOpen(), 0);
+  await step("add ONE teacher through the search tool: written only through the contract (exact fields, ordinary member, display snapshot), listed immediately, audited once with provenance", async () => {
+    await addViaSearch("t01");
     const d = await memberOf("orgMain", "t01");
     assert.deepEqual(Object.keys(d).sort(), ["addedBy", "createdAt", "displayName", "email", "orgRole", "organizationId", "schemaVersion", "status", "uid", "updatedAt"]);
     assert.equal(d.orgRole, "member"); assert.equal(d.status, "active"); assert.equal(d.addedBy, admin.uid); assert.equal(d.organizationId, "orgMain"); assert.equal(d.uid, "t01");
@@ -180,50 +174,47 @@ try {
     const r = await rowText("orgMain", "t01"); assert.ok(r.includes("Nguyễn Văn An") && r.includes("gv01@example.test") && r.includes("Thành viên") && r.includes("Đang hoạt động"));
     const audit = await auditBy("organization.members.add"); assert.equal(audit.length, 1);
     assert.equal(audit[0].actorId, admin.uid); assert.equal(audit[0].entityType, "organization"); assert.equal(audit[0].entityId, "orgMain");
-    assert.deepEqual(audit[0].detail, { count: 1, uids: ["t01"], skipped: 0 });
+    assert.deepEqual(audit[0].detail, { count: 1, uids: ["t01"], skipped: 0, via: "exception-search" });
     assert.deepEqual((await rootCollections()).sort(), ["auditLogs", "organizationMembers", "organizations", "users"], "no capability or other collection created");
   });
 
-  await step("add MULTIPLE teachers in one action; all become ordinary active members; one summary audit entry", async () => {
-    await openPicker();
-    for (const id of ["t02", "t03", "t04"]) await page.check(`[data-picker-check="${id}"]`);
-    assert.equal(await text("#orgPickerCount"), "3");
-    await page.click("#orgPickerSubmit");
-    await page.waitForFunction(() => document.querySelectorAll("#orgMembersTable tbody tr").length === 4, null, { timeout: 30000 });
-    // newest first: the separately-added later batch is above t01; members of ONE batch share createdAt and are ordered by document id DESC
-    assert.deepEqual(await rowOrder(), ["t04", "t03", "t02", "t01"], "newest membership first; same-batch order deterministic (document id desc)");
+  await step("three more teachers one at a time (no bulk add): newest membership first, one audit entry per add", async () => {
+    for (const id of ["t02", "t03", "t04"]) await addViaSearch(id);
+    assert.deepEqual(await rowOrder(), ["t04", "t03", "t02", "t01"], "newest membership first");
     for (const id of ["t02", "t03", "t04"]) { const d = await memberOf("orgMain", id); assert.equal(d.orgRole, "member"); assert.equal(d.status, "active"); assert.equal(d.addedBy, admin.uid); }
-    const audit = (await auditBy("organization.members.add")).filter((a) => a.detail.count === 3); assert.equal(audit.length, 1);
-    assert.deepEqual(audit[0].detail.uids.sort(), ["t02", "t03", "t04"]);
+    const audit = await auditBy("organization.members.add"); assert.equal(audit.length, 4);
+    assert.ok(audit.every((a) => a.detail.count === 1 && a.detail.via === "exception-search"));
     await shot(page, "03-members-list");
   });
 
-  await step("already-associated teachers are clearly marked and cannot be selected (active, suspended, removed and Organization Admin)", async () => {
+  await step("accounts that are already associated are shown by the search as information rows without any add button (active, removed, Organization Admin)", async () => {
     await put("organizationMembers/orgMain_t06", mem("orgMain", "t06", "member", "removed", { displayName: NAMES[5], email: "gv06@example.test" }));
     await put("organizationMembers/orgMain_t07", mem("orgMain", "t07", "org_admin", "active", { displayName: NAMES[6], email: "gv07@example.test" }));
     await page.click('[data-nav="classes"]'); await openOrg("orgMain");
-    await openPicker();
-    for (const id of ["t01", "t02", "t03", "t04", "t06", "t07"]) {
-      assert.ok(await page.isDisabled(`[data-picker-check="${id}"]`), id + " is disabled");
-      assert.ok((await text(`[data-picker-assoc="${id}"]`)).includes("Đã có trong đơn vị"), id + " is labelled");
-    }
-    assert.ok((await text('[data-picker-assoc="t06"]')).includes("Đã gỡ")); assert.ok((await text('[data-picker-assoc="t07"]')).includes("Quản trị đơn vị"));
-    assert.equal(await page.locator('[data-picker-assoc="t05"]').count(), 0); assert.ok(await page.isEnabled('[data-picker-check="t05"]'));
+    await openPicker(); await searchFor("gv0");
+    const kinds = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll("[data-search-row]")].map((r) => [r.dataset.searchRow, r.dataset.searchKind])));
+    assert.equal(kinds.t01, "member-active"); assert.equal(kinds.t06, "member-removed"); assert.equal(kinds.t07, "member-org-admin");
+    assert.equal(kinds.t05, "eligible"); assert.equal(kinds.t08, "eligible");
+    assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll("[data-search-add]")].map((b) => b.dataset.searchAdd).sort()), ["t05", "t08"], "only never-associated active teachers can be added");
+    assert.equal(await page.locator('#orgSearchResults input[type="checkbox"]').count(), 0, "no selection checkbox anywhere");
     await shot(page, "04-picker-associated");
+    await page.click("#orgSearchClose");
   });
 
-  await step("duplicate race: a membership created elsewhere while the dialog is open is detected at submit; nothing is overwritten, no duplicate document, the rest is added", async () => {
-    await page.check('[data-picker-check="t05"]'); await page.check('[data-picker-check="t08"]');
+  await step("duplicate race: a membership created elsewhere while the dialog is open is detected before the write; nothing is overwritten, no duplicate document, a different teacher is added afterwards", async () => {
+    await openPicker(); await searchFor(emailOf("t05"));
     await put("organizationMembers/orgMain_t05", mem("orgMain", "t05", "member", "active", { displayName: "Đã được thêm trước", email: "truoc@example.test", addedBy: "someoneElse" }));
     const before = await memberOf("orgMain", "t05");
-    await page.click("#orgPickerSubmit");
-    await page.waitForFunction(() => document.querySelectorAll("#orgMembersTable tbody tr").length >= 7, null, { timeout: 30000 });
-    assert.match(await toastText(), /bỏ qua 1/);
+    await page.click('[data-search-add="t05"]');
+    await page.waitForFunction(() => /Đã là thành viên/.test(document.querySelector('[data-search-note="t05"]')?.textContent || ""), null, { timeout: 30000 });
+    assert.equal(await page.locator('[data-search-add="t05"]').count(), 0, "no actionable Add button remains");
     assert.deepEqual(await memberOf("orgMain", "t05"), before, "the existing membership is untouched");
+    assert.equal((await members("orgMain")).filter((m) => m.uid === "t05").length, 1);
+    assert.equal((await auditBy("organization.members.add")).filter((a) => a.detail.uids[0] === "t05").length, 0, "no audit entry for a skipped add");
+    await page.click("#orgSearchClose");
+    await addViaSearch("t08");
     assert.equal((await memberOf("orgMain", "t08")).status, "active");
     assert.equal((await rowOrder())[0], "t08", "the newest addition is the first row");
-    assert.equal((await members("orgMain")).filter((m) => m.uid === "t05").length, 1);
-    const audit = (await auditBy("organization.members.add")).filter((a) => a.detail.skipped === 1); assert.equal(audit.length, 1); assert.deepEqual(audit[0].detail.uids, ["t08"]);
   });
 
   await step("suspend an ordinary member: confirmation text, Hủy changes nothing, confirm writes status + statusChanged meta only, audited", async () => {
@@ -267,9 +258,11 @@ try {
   });
 
   await step("already-removed membership: shown as 'Đã gỡ', not re-addable from the picker (no duplicate), and reinstatable through the Platform Admin authority the Rules allow", async () => {
-    await openPicker();
-    assert.ok(await page.isDisabled('[data-picker-check="t02"]')); assert.ok((await text('[data-picker-assoc="t02"]')).includes("Đã gỡ"));
-    await page.click("#orgPickerCancel");
+    await openPicker(); await searchFor(emailOf("t02"));
+    assert.equal(await page.locator('[data-search-row="t02"]').getAttribute("data-search-kind"), "member-removed");
+    assert.ok((await text('[data-search-note="t02"]')).includes("Đã gỡ khỏi đơn vị") && (await text('[data-search-note="t02"]')).includes("Khôi phục thành viên"));
+    assert.equal(await page.locator('[data-search-add="t02"]').count(), 0, "a removed member is not re-addable from the search");
+    await page.click("#orgSearchClose");
     await act("orgMain", "t02", "reinstate");
     assert.ok((await text("#globalModal .modal")).includes("Khôi phục thành viên đã gỡ?") && (await text("#orgMemberConfirmOk")) === "KHÔI PHỤC THÀNH VIÊN");
     await confirmOk();
@@ -323,7 +316,7 @@ try {
 
   await step("newest first with a large population: a teacher added to the 30-member organization is the FIRST row of page 1; load-more yields every older member exactly once", async () => {
     await page.click('[data-nav="classes"]'); await openOrg("orgPaged");
-    await openPicker(); await page.check('[data-picker-check="t01"]'); await page.click("#orgPickerSubmit");
+    await addViaSearch("t01", "orgPaged");
     await page.waitForFunction(() => document.querySelector("[data-member-row]")?.dataset.memberRow === "orgPaged_t01", null, { timeout: 30000 });
     assert.equal(await page.locator("#orgMembersTable tbody tr").count(), 25);
     assert.equal((await rowOrder())[0], "t01");
@@ -367,16 +360,15 @@ try {
     assert.ok(await page.isEnabled("#orgMemberAddBtn"));
   });
 
-  await step("archived while the screen is open: the Rules reject a membership create in an archived organization and the screen reports it without writing", async () => {
-    await openPicker();
-    await page.check('[data-picker-check="t05"]');
+  await step("archived while the dialog is open: the fresh Organization re-check stops the write before it happens and the row says so; nothing is written", async () => {
+    await openPicker(); await searchFor(emailOf("t05"));
+    assert.equal(await page.locator('[data-search-row="t05"]').getAttribute("data-search-kind"), "eligible");
     await put("organizations/orgTemp", { ...org("Đơn vị tạm", "don-vi-tam", "archived") });
-    await page.click("#orgPickerSubmit");
-    await page.waitForFunction(() => !document.querySelector("#orgPickerErr")?.classList.contains("hidden"), null, { timeout: 30000 });
-    assert.ok((await text("#orgPickerErr")).length > 5);
-    assert.equal(await modalOpen(), 1);
+    await page.click('[data-search-add="t05"]');
+    await page.waitForFunction(() => /đã được lưu trữ/.test(document.querySelector('[data-search-note="t05"]')?.textContent || ""), null, { timeout: 30000 });
+    assert.equal(await page.locator('[data-search-add="t05"]').count(), 0);
     assert.equal(await memberOf("orgTemp", "t05"), null);
-    await page.click("#orgPickerCancel");
+    await page.click("#orgSearchClose");
     await put("organizations/orgTemp", org("Đơn vị tạm", "don-vi-tam"));
   });
 
@@ -399,7 +391,7 @@ try {
     await shot(page, "09-members-mobile");
     await openPicker(); assert.ok(await overflow(), "picker: no horizontal overflow");
     await shot(page, "10-picker-mobile");
-    await page.click("#orgPickerCancel");
+    await page.click("#orgSearchClose");
     await page.setViewportSize({ width: 1280, height: 900 });
   });
 

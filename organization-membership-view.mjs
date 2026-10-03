@@ -1,15 +1,22 @@
-// Library V2 P2-S4 - Platform Admin ORDINARY membership management inside Organization Detail.
-// Scope: paged member list; add existing active teachers as ordinary `member` memberships (one or many); suspend, restore and
-// soft-remove (status `removed`) ordinary members; reinstate a removed member (the deployed Rules allow it for the Platform Admin).
+// Library V2 P2-S4 / HCMA2 O1 - Platform Admin ORDINARY membership management inside Organization Detail.
+// Scope: paged member list; add ONE existing active teacher at a time, found by an explicit bounded email search (O1 exception tool), as an
+// ordinary `member` membership; suspend, restore and soft-remove (status `removed`) ordinary members; reinstate a removed member (the
+// deployed Rules allow it for the Platform Admin).
 // NOT in this module: appoint/revoke/change Organization Admin, capabilities, current-organization wiring, switcher, bootstrap.
-// Every Firestore read goes through the S2 query contract (`queries`) or the dedicated picker query below, and every payload comes from
+// Every Firestore read goes through the S2 query contract (`queries`) or the dedicated email-search query below, and every payload comes from
 // the S2 write contract (`contract`); this module never builds a membership payload by hand and never names a membership field of its own.
 // Display name / email stored on a membership are SNAPSHOTS for display only - never identity, account status or authorization.
 
 import { chunkMembershipWrites, MEMBERSHIP_WRITE_CHUNK_DEFAULT } from "./organization-write-contract.mjs";
 
 export const MEMBER_PAGE_SIZE = 25;
-export const TEACHER_PICKER_PAGE_SIZE = 50;
+// O1 exception search. 20 is a per-search UX/result cap only (NOT a business limit or architecture contract); the query asks for one
+// more document (21) purely to detect that further matches exist.
+export const SEARCH_MIN_CHARS = 3;
+export const SEARCH_DISPLAY_COUNT = 20;
+export const SEARCH_QUERY_LIMIT = SEARCH_DISPLAY_COUNT + 1;
+export const SEARCH_MAX_INPUT = 100;
+export const EXCEPTION_SEARCH_PROVENANCE = "exception-search";
 
 const STATUS_VIEW = {
   active: { label: "Đang hoạt động", badge: "badge-green", icon: "🟢" },
@@ -98,19 +105,71 @@ export function summarizeMembers(members, hasMore) {
   return { ...count, partial: !!hasMore, text };
 }
 
-export function renderTeacherPickerHtml({ organization, teachers, associations, selected, esc, hasMore }) {
-  const rows = teachers.map((teacher) => {
-    const assoc = associations.get(teacher.id) || null;
-    const disabled = !!assoc;
-    return `<label class="flex gap-8" data-picker-row="${esc(teacher.id)}" style="align-items:flex-start;padding:8px 0;border-bottom:1px solid #e2e8f0"><input type="checkbox" data-picker-check="${esc(teacher.id)}"${disabled ? " disabled" : ""}${selected.has(teacher.id) && !disabled ? " checked" : ""}><span><b>${esc(teacher.displayName || "—")}</b><div class="small mut">${esc(teacher.email || "—")}</div>${assoc ? `<div class="small" data-picker-assoc="${esc(teacher.id)}">${esc(assoc.label)}</div>` : ""}</span></label>`;
+// ---------------------------------------------------------------- O1 exception search (pure helpers + markup)
+// Normalization of the typed term: trim + lowercase (production emails are all lowercase; Firebase Auth stores the normalized address).
+export function normalizeEmailTerm(raw) {
+  return String(raw == null ? "" : raw).trim().toLowerCase().slice(0, SEARCH_MAX_INPUT);
+}
+
+// Row kind for one account returned by the bounded email search. A membership document (any status) always wins: it is never recreated.
+export function classifySearchResult({ user, membership }) {
+  const platformOk = !!user && user.role === "teacher" && user.status === "active";
+  if (membership) {
+    if (membership.orgRole === "org_admin") return { kind: "member-org-admin", status: membership.status, platformOk };
+    if (membership.status === "suspended") return { kind: "member-suspended", platformOk };
+    if (membership.status === "removed") return { kind: "member-removed", platformOk };
+    return { kind: "member-active", platformOk };
+  }
+  if (platformOk) return { kind: "eligible", platformOk };
+  const reason = user && user.role === "admin" ? "admin" : user && user.role === "teacher" && user.status === "pending" ? "pending" : user && user.role === "teacher" && user.status === "suspended" ? "suspended" : "other";
+  return { kind: "not-active-teacher", reason, platformOk };
+}
+
+const NOT_ADDABLE = { pending: "Tài khoản đang chờ duyệt — chưa thể thêm.", suspended: "Tài khoản đã bị khóa — chưa thể thêm.", admin: "Tài khoản quản trị, không phải giảng viên — không thể thêm.", other: "Không phải giảng viên đang hoạt động — không thể thêm." };
+const ARCHIVED_NOTE = "Đơn vị đã được lưu trữ, không thể thêm thành viên.";
+function rowNote(row, organization, esc) {
+  switch (row.kind) {
+    case "eligible": return "Giảng viên đang hoạt động, chưa có trong đơn vị.";
+    case "added": return `✅ Đã thêm ${esc(row.user.displayName || row.user.email || "giảng viên")} vào ${esc(organization.name || "đơn vị")}.`;
+    case "member-active": return "Đã là thành viên.";
+    case "member-suspended": return "Đang tạm ngưng trong đơn vị. Quản lý tại <b>Đơn vị → Thành viên</b>.";
+    case "member-removed": return "Đã gỡ khỏi đơn vị. Khôi phục tại <b>Đơn vị → Thành viên → Khôi phục thành viên</b>.";
+    case "member-org-admin": return "Là quản trị đơn vị; không thêm lại tại đây.";
+    case "archived": return ARCHIVED_NOTE;
+    default: return esc(NOT_ADDABLE[row.reason] || NOT_ADDABLE.other);
+  }
+}
+
+export function renderEmailSearchShellHtml({ organization, term = "", esc }) {
+  return `<div id="orgSearchRoot"><h3>Thêm giảng viên</h3>
+    <p class="mut small">Đơn vị: <b>${esc(organization.name || "—")}</b>. Dành cho trường hợp ngoại lệ: giảng viên mới được duyệt thường đã được thêm ngay sau khi duyệt.</p>
+    <form id="orgSearchForm" novalidate><div class="flex gap-8"><input type="text" id="orgSearchInput" maxlength="${SEARCH_MAX_INPUT}" placeholder="Nhập email giảng viên…" autocomplete="off" value="${esc(term)}" style="flex:1"><button type="submit" class="btn" id="orgSearchBtn">TÌM</button></div></form>
+    <div id="orgSearchResults" class="mt-14" style="max-height:340px;overflow:auto"></div>
+    <div class="mt-14"><button type="button" class="btn btn-ghost" id="orgSearchClose">ĐÓNG</button></div></div>`;
+}
+
+// state: { status: "idle" | "tooShort" | "searching" | "results" | "error", term, rows: [{ user, kind, reason?, busy?, error? }], more, error }
+export function renderEmailSearchResultsHtml({ state, organization, esc }) {
+  if (organization.status !== "active") return `<div class="empty-state" id="orgSearchArchived">${ARCHIVED_NOTE}</div>`;
+  switch (state.status) {
+    case "idle": return `<p class="mut small" id="orgSearchHint">Nhập từ ${SEARCH_MIN_CHARS} ký tự đầu của email giảng viên rồi bấm <b>TÌM</b> hoặc nhấn Enter.</p>`;
+    case "tooShort": return `<p class="mut small" id="orgSearchHint">Nhập thêm ký tự (tối thiểu ${SEARCH_MIN_CHARS}).</p>`;
+    case "searching": return `<div class="center-screen" style="min-height:70px"><span class="spinner"></span></div>`;
+    case "error": return `<div class="error-text" id="orgSearchError">${esc(state.error || "Không tìm được.")} Bấm TÌM để thử lại.</div>`;
+    default: break;
+  }
+  const head = `<div class="small mut" id="orgSearchTerm">Kết quả cho “${esc(state.term)}”</div>`;
+  if (!state.rows.length) return `${head}<div class="empty-state" id="orgSearchEmpty">Không tìm thấy tài khoản nào có email bắt đầu bằng “${esc(state.term)}”.</div>`;
+  const rows = state.rows.map((row) => {
+    const id = esc(row.user.id);
+    const action = row.kind === "eligible"
+      ? `<button type="button" class="btn btn-sm" data-search-add="${id}"${row.busy ? " disabled" : ""}>${row.busy ? "ĐANG THÊM…" : "THÊM VÀO ĐƠN VỊ"}</button>`
+      : "";
+    const error = row.error ? `<div class="error-text small" data-search-error="${id}">${esc(row.error)} Có thể thử lại.</div>` : "";
+    return `<div class="flex-between" data-search-row="${id}" data-search-kind="${esc(row.kind)}" style="gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid #e2e8f0"><div><b>${esc(row.user.displayName || "—")}</b><div class="small mut">${esc(row.user.email || "—")}</div><div class="small" data-search-note="${id}">${rowNote(row, organization, esc)}</div>${error}</div><div>${action}</div></div>`;
   }).join("");
-  return `<h3>Thêm giảng viên vào “${esc(organization.name || "—")}”</h3>
-    <p class="mut small">Chỉ hiển thị giảng viên đang hoạt động. Thành viên được thêm với vai trò <b>Thành viên</b>; không thêm tự động.</p>
-    <input type="text" id="orgPickerSearch" placeholder="Tìm theo tên hoặc email trong danh sách đã tải…" autocomplete="off">
-    <div id="orgPickerList" style="max-height:320px;overflow:auto" class="mt-8">${rows || `<div class="empty-state" id="orgPickerEmpty">Không có giảng viên đang hoạt động phù hợp.</div>`}</div>
-    ${hasMore ? `<div class="mt-8"><button class="btn btn-outline btn-sm" type="button" id="orgPickerMore">TẢI THÊM</button></div>` : ""}
-    <div id="orgPickerErr" class="error-text hidden mt-8"></div>
-    <div class="flex-between mt-14"><button type="button" class="btn btn-ghost" id="orgPickerCancel">Hủy</button><button type="button" class="btn" id="orgPickerSubmit" disabled>THÊM <span id="orgPickerCount">0</span> GIẢNG VIÊN</button></div>`;
+  const more = state.more ? `<p class="small mut mt-8" id="orgSearchMore">Có thêm kết quả. Hãy nhập thêm ký tự để thu hẹp tìm kiếm.</p>` : "";
+  return `${head}${rows}${more}`;
 }
 
 export function renderMemberConfirmHtml({ action, member, organization, esc }) {
@@ -143,33 +202,60 @@ export function createMembershipWriter({ collection, doc, writeBatch, updateDoc 
   });
 }
 
-// PICKER QUERY - used only by the "Thêm giảng viên" dialog for the explicit purpose of creating memberships. It is a paged,
-// bounded read of the existing active-teacher population using the existing live index (users: role, status, createdAt desc).
-// It is not a general user directory and is not reachable from anywhere else.
-export function createActiveTeacherPickerQuery({ collection, query, where, orderBy, limit, startAfter, getDocs }) {
+// EMAIL SEARCH QUERY - used only by the "Thêm giảng viên" exception dialog, only on an explicit Admin search (Enter / TÌM).
+// Bounded: ONE query, email range + orderBy email on Firestore's automatic single-field index (no composite index), limit 21 (the
+// 21st document only signals "more exist"). role/status are NOT queried server-side; they are classified over this bounded result.
+// It never enumerates the population, never pages and never loops. A term shorter than SEARCH_MIN_CHARS never reaches Firestore.
+export function createTeacherEmailSearchQuery({ collection, query, where, orderBy, limit, getDocs }) {
   return Object.freeze({
-    async pageActiveTeachersForMembershipPicker(db, { pageSize = TEACHER_PICKER_PAGE_SIZE, cursor } = {}) {
-      if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) throw new RangeError("pageSize must be an integer from 1 to 100");
-      const constraints = [where("role", "==", "teacher"), where("status", "==", "active"), orderBy("createdAt", "desc")];
-      if (cursor) constraints.push(startAfter(cursor));
-      constraints.push(limit(pageSize + 1));
-      const snapshot = await getDocs(query(collection(db, "users"), ...constraints));
-      const documents = snapshot.docs.slice(0, pageSize);
+    async searchByEmailPrefix(db, rawTerm) {
+      const term = normalizeEmailTerm(rawTerm);
+      if (term.length < SEARCH_MIN_CHARS) throw new RangeError("the search term needs at least " + SEARCH_MIN_CHARS + " characters");
+      const snapshot = await getDocs(query(collection(db, "users"), where("email", ">=", term), where("email", "<=", term + String.fromCharCode(0xf8ff)), orderBy("email"), limit(SEARCH_QUERY_LIMIT)));
+      const documents = snapshot.docs.slice(0, SEARCH_DISPLAY_COUNT);
       return {
-        teachers: documents.map((d) => { const u = d.data(); return { id: d.id, role: u.role, status: u.status, displayName: u.displayName || "", email: u.email || "" }; }),
-        cursor: documents.at(-1) || null,
-        hasMore: snapshot.docs.length > pageSize
+        term,
+        users: documents.map((d) => { const u = d.data(); return { id: d.id, role: u.role, status: u.status, displayName: u.displayName || "", email: u.email || "" }; }),
+        more: snapshot.docs.length > SEARCH_DISPLAY_COUNT
       };
     }
   });
 }
 
+// Stale-result protection for repeated manual searches and dialog close: only the latest token is current; invalidate() ends all of them.
+export function createSequenceGuard() {
+  let current = 0;
+  return Object.freeze({ next: () => ++current, isCurrent: (token) => token === current, invalidate: () => { current += 1; } });
+}
+
+// O1 write core (DOM-free, never throws). One teacher, one Organization. Fresh re-checks immediately before the write:
+// user still teacher/active, Organization still active, exact membership still absent. Uses the unchanged S4 contract path.
+// deps: { readUser(db, uid), queries: { organizationById, membershipOf }, contract, writer: { createMany }, logAudit }
+export async function addTeacherFromSearch({ db, actorUid, organization, uid, deps }) {
+  const { readUser, queries, contract, writer, logAudit } = deps;
+  try {
+    const fresh = await readUser(db, uid);
+    if (!fresh || fresh.role !== "teacher" || fresh.status !== "active") return { outcome: "not-active-teacher", user: fresh || null };
+    const current = await queries.organizationById(db, organization.id);
+    if (!current || current.status !== "active") return { outcome: "organization-archived" };
+    const existing = await queries.membershipOf(db, organization.id, uid);
+    if (existing) return { outcome: "already-associated", membership: existing, user: fresh };
+    const plan = planMembershipAdditions({ organization: current, candidates: [{ id: uid, role: fresh.role, status: fresh.status, displayName: fresh.displayName || "", email: fresh.email || "" }], existingByUid: new Map([[uid, null]]), actorUid, contract });
+    if (!plan.toCreate.length) return { outcome: "not-eligible", user: fresh };
+    await writer.createMany(db, plan.toCreate);
+    try { await logAudit("organization.members.add", "organization", organization.id, { count: 1, uids: [uid], skipped: 0, via: EXCEPTION_SEARCH_PROVENANCE }); } catch { /* best-effort, like the rest of the audit trail */ }
+    return { outcome: "created", user: fresh };
+  } catch (error) {
+    return { outcome: "failed", error };
+  }
+}
+
 // ---------------------------------------------------------------- controller
 // deps: { db, actorUid, isPlatformAdmin, esc, fmtDate, toast, mapError, openModal, closeModal, logAudit,
-//         queries: { membersOfOrganization, membershipOf }, picker: { pageActiveTeachersForMembershipPicker },
+//         queries: { membersOfOrganization, membershipOf, organizationById }, teacherSearch: { searchByEmailPrefix }, readUser(db, uid),
 //         contract, writer: { createMany, update } }
 export function createOrganizationMembershipSection(deps) {
-  const { db, actorUid, isPlatformAdmin, esc, fmtDate, toast, mapError, openModal, closeModal, logAudit, queries, picker, contract, writer } = deps;
+  const { db, actorUid, isPlatformAdmin, esc, fmtDate, toast, mapError, openModal, closeModal, logAudit, queries, teacherSearch, readUser, contract, writer } = deps;
   const modalRoot = () => document.getElementById("globalModal");
   const modal$ = (selector) => modalRoot().querySelector(selector);
   const show = (el, message) => { if (el) { el.textContent = message; el.classList.remove("hidden"); } };
@@ -236,58 +322,66 @@ export function createOrganizationMembershipSection(deps) {
       };
     }
 
+    // O1: explicit, bounded email search (Enter / TÌM only; no auto-search, no population listing); one teacher per click.
+    let dialogCounter = 0;
     async function openPicker() {
       if (organization.status !== "active") return;
-      const selected = new Set(), teachers = [], associations = new Map();
-      let teacherCursor = null, teacherHasMore = false, filter = "";
-      const visible = () => teachers.filter((t) => !filter || `${t.displayName} ${t.email}`.toLowerCase().includes(filter));
-      async function fetchTeachers() {
-        const page = await picker.pageActiveTeachersForMembershipPicker(db, { pageSize: TEACHER_PICKER_PAGE_SIZE, cursor: teacherCursor || undefined });
-        // Exact association lookup (deterministic id) for exactly the teachers just loaded - never a guess from a partial list.
-        const found = await Promise.all(page.teachers.map((t) => queries.membershipOf(db, organization.id, t.id)));
-        page.teachers.forEach((t, i) => { teachers.push(t); associations.set(t.id, describeAssociation(found[i])); });
-        teacherCursor = page.cursor; teacherHasMore = page.hasMore;
-      }
-      function paintPicker() {
-        const keepFilter = filter;
-        openModal(renderTeacherPickerHtml({ organization, teachers: visible(), associations, selected, esc, hasMore: teacherHasMore }), true);
-        const search = modal$("#orgPickerSearch"); search.value = keepFilter;
-        search.oninput = () => { filter = search.value.trim().toLowerCase(); paintPicker(); const s = modal$("#orgPickerSearch"); s.focus(); s.setSelectionRange(s.value.length, s.value.length); };
-        modalRoot().querySelectorAll("[data-picker-check]").forEach((box) => { box.onchange = () => { box.checked ? selected.add(box.dataset.pickerCheck) : selected.delete(box.dataset.pickerCheck); refreshCount(); }; });
-        modal$("#orgPickerCancel").onclick = closeModal;
-        const more = modal$("#orgPickerMore");
-        if (more) more.onclick = async () => { more.disabled = true; try { await fetchTeachers(); paintPicker(); } catch (error) { show(modal$("#orgPickerErr"), mapError(error)); more.disabled = false; } };
-        modal$("#orgPickerSubmit").onclick = submit;
-        refreshCount();
-      }
-      function refreshCount() {
-        modal$("#orgPickerCount").textContent = String(selected.size);
-        modal$("#orgPickerSubmit").disabled = selected.size === 0;
-      }
-      async function submit() {
-        const button = modal$("#orgPickerSubmit");
-        button.disabled = true;
-        hide(modal$("#orgPickerErr"));
+      const dialog = ++dialogCounter;
+      const guard = createSequenceGuard();
+      let state = { status: "idle", term: "", rows: [], more: false };
+      const alive = () => dialog === dialogCounter && !!document.querySelector(`#globalModal #orgSearchRoot`) && modalRoot().dataset.orgSearchDialog === String(dialog);
+      const onKey = (event) => {
+        if (!alive()) { document.removeEventListener("keydown", onKey); return; }
+        if (event.key === "Escape") { document.removeEventListener("keydown", onKey); guard.invalidate(); closeModal(); }
+      };
+      openModal(renderEmailSearchShellHtml({ organization, esc }), true);
+      modalRoot().dataset.orgSearchDialog = String(dialog);
+      document.addEventListener("keydown", onKey);
+      const paint = () => { if (!alive()) return; const box = modal$("#orgSearchResults"); box.innerHTML = renderEmailSearchResultsHtml({ state, organization, esc }); box.querySelectorAll("[data-search-add]").forEach((button) => { button.onclick = () => addTeacher(button.dataset.searchAdd); }); };
+      const close = () => { guard.invalidate(); document.removeEventListener("keydown", onKey); closeModal(); };
+      modal$("#orgSearchClose").onclick = close;
+      const input = modal$("#orgSearchInput");
+      input.focus();
+      paint();
+
+      async function search() {
+        const term = normalizeEmailTerm(input.value);
+        const mySeq = guard.next();                                  // any newer search, a close or Esc invalidates this one
+        if (term.length < SEARCH_MIN_CHARS) { state = { status: "tooShort", term, rows: [], more: false }; paint(); return; }   // no Firestore query
+        state = { status: "searching", term, rows: [], more: false }; paint();
         try {
-          const chosen = teachers.filter((t) => selected.has(t.id));
-          // Fresh exact lookup immediately before writing; already-associated users are skipped, never overwritten.
-          const found = await Promise.all(chosen.map((t) => queries.membershipOf(db, organization.id, t.id)));
-          const existingByUid = new Map(chosen.map((t, i) => [t.id, found[i]]));
-          const plan = planMembershipAdditions({ organization, candidates: chosen, existingByUid, actorUid, contract });
-          if (plan.toCreate.length) {
-            await writer.createMany(db, plan.toCreate);
-            await logAudit("organization.members.add", "organization", organization.id, { count: plan.toCreate.length, uids: plan.toCreate.slice(0, 50).map((item) => item.data.uid), skipped: plan.skipped.length });
-          }
-          closeModal();
-          toast(plan.skipped.length ? `Đã thêm ${plan.toCreate.length} giảng viên; bỏ qua ${plan.skipped.length} người đã có trong đơn vị.` : `Đã thêm ${plan.toCreate.length} giảng viên.`, "ok");
-          await reload();
+          const found = await teacherSearch.searchByEmailPrefix(db, term);
+          const memberships = await Promise.all(found.users.map((user) => queries.membershipOf(db, organization.id, user.id)));
+          if (!alive() || !guard.isCurrent(mySeq)) return;          // stale result: dropped silently
+          state = { status: "results", term, more: found.more, rows: found.users.map((user, i) => ({ user, ...classifySearchResult({ user, membership: memberships[i] }) })) };
         } catch (error) {
-          show(modal$("#orgPickerErr"), mapError(error));
-          refreshCount();
+          if (!alive() || !guard.isCurrent(mySeq)) return;
+          state = { status: "error", term, rows: [], more: false, error: mapError(error) };
         }
+        paint();
       }
-      try { await fetchTeachers(); } catch (error) { toast(mapError(error), "err"); return; }
-      paintPicker();
+      modal$("#orgSearchForm").onsubmit = (event) => { event.preventDefault(); search(); };
+
+      async function addTeacher(uid) {
+        const row = state.rows.find((r) => r.user.id === uid);
+        if (!row || row.kind !== "eligible" || row.busy) return;   // double-click / stale button protection
+        row.busy = true; row.error = null; paint();
+        const out = await addTeacherFromSearch({ db, actorUid, organization, uid, deps: { readUser, queries, contract, writer, logAudit } });
+        if (out.outcome === "created") {
+          row.kind = "added"; row.user = { ...row.user, displayName: out.user.displayName || row.user.displayName, email: out.user.email || row.user.email };
+          toast(`Đã thêm ${row.user.displayName || row.user.email || "giảng viên"} vào ${organization.name || "đơn vị"}.`, "ok");
+          reload();                                                 // member list behind the dialog: newest-first, the teacher is at the top
+        } else if (out.outcome === "not-active-teacher") {
+          Object.assign(row, { user: { ...row.user, ...(out.user || {}) } }, classifySearchResult({ user: out.user, membership: null }));
+        } else if (out.outcome === "organization-archived") {
+          row.kind = "archived";
+        } else if (out.outcome === "already-associated") {
+          Object.assign(row, classifySearchResult({ user: out.user, membership: out.membership }));
+        } else {
+          row.error = out.outcome === "failed" ? mapError(out.error) : "Không đủ điều kiện để thêm.";
+        }
+        row.busy = false; paint();
+      }
     }
 
     await reload();

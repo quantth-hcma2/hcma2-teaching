@@ -627,7 +627,7 @@ import { createOrganizationQueries, createPlatformAdminOrganizationQueries } fro
 import { createOrganizationWriteContract } from "./organization-write-contract.mjs?v=20261003-p2s3";
 import { getAdminFeature } from "./admin-feature-registry.mjs?v=20261003-p2s3";
 import { createOrganizationAdminScreen, createOrganizationWriter } from "./organization-admin-view.mjs?v=20261004-p2s4";
-import { createOrganizationMembershipSection, createMembershipWriter, createActiveTeacherPickerQuery } from "./organization-membership-view.mjs?v=20261004-p2s4";
+import { createOrganizationMembershipSection, createMembershipWriter, createTeacherEmailSearchQuery } from "./organization-membership-view.mjs?v=20261006-o1";
 import { createActiveOrganizationLookup, createTeacherEnrollmentFlow } from "./teacher-organization-enrollment.mjs?v=20261005-o2";
 // GATE 5F.C: Knowledge Co-creation dashboard launch/close control for the Classroom Second Brain
 // (V2) projection. Talks only to the accepted, frozen Gate 5C HTTP contract — never touches
@@ -1730,7 +1730,9 @@ function adminRoute(key){
 const ORGANIZATION_QUERIES=createOrganizationQueries({collection,doc,query,where,orderBy,limit,startAfter,documentId,getDocs,getDoc});
 const ORGANIZATION_PLATFORM_QUERIES=createPlatformAdminOrganizationQueries({collection,query,orderBy,limit,getDocs});
 const ORGANIZATION_CONTRACT=createOrganizationWriteContract({serverTimestamp});
-const ORGANIZATION_TEACHER_PICKER=createActiveTeacherPickerQuery({collection,query,where,orderBy,limit,startAfter,getDocs});
+// O1: explicit bounded email-prefix search for the Add-Teacher exception dialog (replaces the old paged teacher picker).
+const ORGANIZATION_TEACHER_SEARCH=createTeacherEmailSearchQuery({collection,query,where,orderBy,limit,getDocs});
+const readUserForMembership=async(database,userId)=>{const snap=await getDoc(doc(database,"users",userId));return snap.exists()?{id:snap.id,...snap.data()}:null;};
 // Onboarding O2: optional Organization-membership step AFTER a successful teacher approval. Separate from the approval write; never throws.
 const ORGANIZATION_ACTIVE_LOOKUP=createActiveOrganizationLookup({collection,query,where,limit,getDocs});
 let __organizationEnrollmentFlow=null;
@@ -1756,7 +1758,7 @@ function adminOrganizations(c){
     membershipSection:createOrganizationMembershipSection({
       db, actorUid:STATE.user.uid, isPlatformAdmin:STATE.profile?.role==="admin",
       esc, fmtDate, toast, mapError, openModal, closeModal, logAudit,
-      queries:ORGANIZATION_QUERIES, picker:ORGANIZATION_TEACHER_PICKER, contract:ORGANIZATION_CONTRACT,
+      queries:ORGANIZATION_QUERIES, teacherSearch:ORGANIZATION_TEACHER_SEARCH, readUser:readUserForMembership, contract:ORGANIZATION_CONTRACT,
       writer:createMembershipWriter({collection,doc,writeBatch,updateDoc})
     })
   }).mount(c);

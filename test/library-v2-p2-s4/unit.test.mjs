@@ -3,8 +3,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   membershipStatusView, membershipRoleLabel, renderAddTeacherActionHtml, summarizeMembers, availableMemberActions, nextStatusForAction, describeAssociation, planMembershipAdditions,
-  renderMembersSectionHtml, renderTeacherPickerHtml, renderMemberConfirmHtml, createMembershipWriter, createActiveTeacherPickerQuery,
-  MEMBER_PAGE_SIZE, TEACHER_PICKER_PAGE_SIZE
+  renderMembersSectionHtml, renderMemberConfirmHtml, createMembershipWriter,
+  MEMBER_PAGE_SIZE
 } from "../../organization-membership-view.mjs";
 import { createOrganizationWriteContract, MEMBERSHIP_WRITE_CHUNK_DEFAULT } from "../../organization-write-contract.mjs";
 
@@ -111,21 +111,6 @@ test("member summary: exact when every member is loaded, explicitly partial whil
   assert.equal(summarizeMembers([{ id: "x", status: "weird" }], false).text, "1 thành viên");
 });
 
-test("teacher picker markup: associated teachers are disabled and labelled, selection preserved, submit disabled until selection", () => {
-  const teachers = [
-    { id: "t1", displayName: "Một", email: "1@example.test" },
-    { id: "t2", displayName: "Hai", email: "2@example.test" }
-  ];
-  const associations = new Map([["t1", describeAssociation(member("t1", "suspended"))], ["t2", null]]);
-  const html = renderTeacherPickerHtml({ organization: activeOrg, teachers, associations, selected: new Set(["t1", "t2"]), esc, hasMore: true });
-  assert.ok(/data-picker-check="t1" disabled/.test(html) && !/data-picker-check="t1" disabled checked/.test(html), "associated teacher disabled and never pre-checked");
-  assert.ok(/data-picker-check="t2" checked/.test(html));
-  assert.ok(html.includes('data-picker-assoc="t1"') && html.includes("Đã có trong đơn vị"));
-  assert.ok(html.includes('id="orgPickerMore"') && /id="orgPickerSubmit" disabled/.test(html));
-  assert.ok(html.includes("Khoa &lt;Quản trị&gt;"));
-  assert.ok(renderTeacherPickerHtml({ organization: activeOrg, teachers: [], associations: new Map(), selected: new Set(), esc, hasMore: false }).includes('id="orgPickerEmpty"'));
-});
-
 test("confirmation copy per action: removal is explicit that the membership record is kept and the platform account is unaffected", () => {
   for (const action of ["suspend", "restore", "remove", "reinstate"]) {
     const html = renderMemberConfirmHtml({ action, member: member("a"), organization: activeOrg, esc });
@@ -153,28 +138,4 @@ test("membership writer: one batch per chunk, deterministic ids, the default chu
   await writer.update({}, "orgX_u0", { status: "suspended" });
   assert.deepEqual(log.at(-1), ["update", "organizationMembers/orgX_u0", { status: "suspended" }]);
   assert.equal(await writer.createMany({}, []), 0);
-});
-
-test("active-teacher picker query: exactly role==teacher, status==active, createdAt desc, bounded, cursor-paged, never unbounded", async () => {
-  const constraints = [];
-  const q = createActiveTeacherPickerQuery({
-    collection: (db, name) => ({ name }),
-    query: (source, ...rest) => { constraints.push({ source: source.name, rest }); return { constraints: rest }; },
-    where: (field, op, value) => ["where", field, op, value],
-    orderBy: (field, dir) => ["orderBy", field, dir],
-    limit: (n) => ["limit", n],
-    startAfter: (c) => ["startAfter", c],
-    getDocs: async () => ({ docs: Array.from({ length: 4 }, (_, i) => ({ id: "t" + i, data: () => ({ role: "teacher", status: "active", displayName: "N" + i, email: "e" + i, secret: "x" }) })) })
-  });
-  const page = await q.pageActiveTeachersForMembershipPicker({}, { pageSize: 3 });
-  assert.equal(constraints[0].source, "users");
-  assert.deepEqual(constraints[0].rest, [["where", "role", "==", "teacher"], ["where", "status", "==", "active"], ["orderBy", "createdAt", "desc"], ["limit", 4]]);
-  assert.equal(page.teachers.length, 3);
-  assert.equal(page.hasMore, true);
-  assert.deepEqual(Object.keys(page.teachers[0]).sort(), ["displayName", "email", "id", "role", "status"], "only the fields needed for the picker are exposed");
-  await q.pageActiveTeachersForMembershipPicker({}, { pageSize: 3, cursor: "CUR" });
-  assert.deepEqual(constraints[1].rest.at(-2), ["startAfter", "CUR"]);
-  await assert.rejects(() => q.pageActiveTeachersForMembershipPicker({}, { pageSize: 101 }), RangeError);
-  await assert.rejects(() => q.pageActiveTeachersForMembershipPicker({}, { pageSize: 0 }), RangeError);
-  assert.ok(MEMBER_PAGE_SIZE <= 100 && TEACHER_PICKER_PAGE_SIZE <= 100);
 });

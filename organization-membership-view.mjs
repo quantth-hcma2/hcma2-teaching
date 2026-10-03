@@ -64,11 +64,10 @@ export function renderMembersSectionHtml({ organization, members, hasMore, esc, 
   const banner = archived
     ? `<div class="card mt-8" id="orgMembersArchivedNote" style="border-color:#94a3b8"><b>📦 Đơn vị đã lưu trữ.</b> Không thể thêm hoặc thay đổi thành viên. Khôi phục đơn vị để quản lý thành viên.</div>`
     : "";
-  const addButton = `<button class="btn" type="button" id="orgMemberAddBtn"${archived ? " disabled" : ""}>+ Thêm giảng viên</button>`;
   const rows = members.map((member) => {
     const view = membershipStatusView(member.status);
     const actions = availableMemberActions(member, organization);
-    const labels = { suspend: ["TẠM NGƯNG", "btn-outline"], restore: ["KHÔI PHỤC", "btn-ok"], remove: ["GỠ KHỎI ĐƠN VỊ", "btn-danger"], reinstate: ["ĐƯA TRỞ LẠI", "btn-ok"] };
+    const labels = { suspend: ["TẠM NGƯNG", "btn-outline"], restore: ["KHÔI PHỤC", "btn-ok"], remove: ["GỠ KHỎI ĐƠN VỊ", "btn-danger"], reinstate: ["KHÔI PHỤC THÀNH VIÊN", "btn-ok"] };
     const buttons = actions.map((action) => `<button class="btn btn-sm ${labels[action][1]}" type="button" data-member-action="${action}" data-member-id="${esc(member.id)}">${labels[action][0]}</button>`).join(" ");
     return `<tr data-member-row="${esc(member.id)}"><td><b>${esc(member.displayName || "—")}</b><div class="small mut">${esc(member.email || "—")}</div></td><td>${esc(membershipRoleLabel(member.orgRole))}</td><td><span class="badge ${view.badge}">${view.icon} ${esc(view.label)}</span></td><td>${esc(fmtDate ? fmtDate(member.createdAt) : "—")}</td><td style="text-align:right">${buttons}</td></tr>`;
   }).join("");
@@ -76,7 +75,27 @@ export function renderMembersSectionHtml({ organization, members, hasMore, esc, 
     ? `<div class="table-wrap mt-8"><table id="orgMembersTable"><thead><tr><th>Giảng viên</th><th>Vai trò</th><th>Trạng thái</th><th>Ngày thêm</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
     : `<div class="empty-state" id="orgMembersEmpty"><div class="ic">👥</div><h3>Chưa có thành viên</h3><p>Bấm “Thêm giảng viên” để thêm giảng viên đang hoạt động vào đơn vị này.</p></div>`;
   const more = hasMore ? `<div class="mt-8"><button class="btn btn-outline" type="button" id="orgMembersMore">TẢI THÊM</button></div>` : "";
-  return `<div class="card" id="orgMembersCard"><div class="flex-between" style="flex-wrap:wrap;gap:10px"><div><h3 style="margin:0">👥 Thành viên</h3><div class="small mut">Tên và email chỉ là bản chụp để hiển thị, không phải dữ liệu tài khoản.</div></div>${addButton}</div>${banner}${body}${more}<div id="orgMembersErr" class="error-text hidden mt-8"></div></div>`;
+  const summary = members.length ? `<div class="small" id="orgMembersSummary" style="font-weight:650">${esc(summarizeMembers(members, hasMore).text)}</div>` : "";
+  return `<div class="card" id="orgMembersCard"><div><h3 style="margin:0">👥 Thành viên</h3>${summary}<div class="small mut">Tên và email chỉ là bản chụp để hiển thị, không phải dữ liệu tài khoản.</div></div>${banner}${body}${more}<div id="orgMembersErr" class="error-text hidden mt-8"></div></div>`;
+}
+
+// The primary "add teacher" action lives in the upper Organization Detail action area (a placeholder rendered by the detail view),
+// not in the member card. Disabled for an archived organization.
+export function renderAddTeacherActionHtml({ organization }) {
+  const archived = organization.status !== "active";
+  return `<button class="btn" type="button" id="orgMemberAddBtn"${archived ? ' disabled title="Đơn vị đã lưu trữ. Khôi phục đơn vị để thêm giảng viên."' : ""}>+ Thêm giảng viên</button>`;
+}
+
+// Counts by membership state computed ONLY from the memberships already loaded by the screen (no extra query, no aggregation).
+// The member list is paged: while more pages exist the counts are explicitly labelled as covering the loaded members only, so the
+// summary is never a misleading global total. Zero-count states are omitted.
+export function summarizeMembers(members, hasMore) {
+  const count = { total: members.length, active: 0, suspended: 0, removed: 0 };
+  for (const member of members) if (member && count[member.status] !== undefined && member.status !== "total") count[member.status] += 1;
+  const parts = [[count.active, "hoạt động"], [count.suspended, "tạm ngưng"], [count.removed, "đã gỡ"]].filter(([n]) => n > 0).map(([n, label]) => `${n} ${label}`);
+  const lead = hasMore ? `Đã tải ${count.total} thành viên` : `${count.total} thành viên`;
+  const text = [lead, ...parts].join(" · ") + (hasMore ? " — còn thêm, bấm “Tải thêm” để xem đầy đủ" : "");
+  return { ...count, partial: !!hasMore, text };
 }
 
 export function renderTeacherPickerHtml({ organization, teachers, associations, selected, esc, hasMore }) {
@@ -99,7 +118,7 @@ export function renderMemberConfirmHtml({ action, member, organization, esc }) {
     suspend: ["Tạm ngưng thành viên?", "Thành viên bị tạm ngưng sẽ không còn quyền trong đơn vị này cho đến khi được khôi phục. Tài khoản HCMA2 của giảng viên không bị ảnh hưởng.", "TẠM NGƯNG", "btn-danger"],
     restore: ["Khôi phục thành viên?", "Thành viên sẽ hoạt động trở lại trong đơn vị này.", "KHÔI PHỤC", "btn-ok"],
     remove: ["Gỡ khỏi đơn vị?", "Thành viên sẽ được đánh dấu là đã gỡ và không còn quyền trong đơn vị này. Hồ sơ thành viên được giữ lại, và tài khoản HCMA2 của giảng viên không bị ảnh hưởng.", "GỠ KHỎI ĐƠN VỊ", "btn-danger"],
-    reinstate: ["Đưa thành viên trở lại?", "Thành viên đã gỡ sẽ hoạt động trở lại trong đơn vị này.", "ĐƯA TRỞ LẠI", "btn-ok"]
+    reinstate: ["Khôi phục thành viên đã gỡ?", "Thành viên đã gỡ sẽ hoạt động trở lại trong đơn vị này.", "KHÔI PHỤC THÀNH VIÊN", "btn-ok"]
   }[action];
   return `<h3>${copy[0]}</h3><p><b>${esc(member.displayName || "—")}</b><div class="small mut">${esc(member.email || "—")} · ${esc(organization.name || "—")}</div></p><p class="mut">${copy[1]}</p>
     <div id="orgMemberConfirmErr" class="error-text hidden"></div>
@@ -159,6 +178,13 @@ export function createOrganizationMembershipSection(deps) {
   async function mount(host, organization) {
     if (!host) return;
     if (!isPlatformAdmin) { host.innerHTML = ""; return; }
+    // Primary action in the upper Organization Detail action area (single instance; not repeated in the member card).
+    const actionHost = host.ownerDocument.querySelector("#orgPrimaryActions");
+    if (actionHost) {
+      actionHost.innerHTML = renderAddTeacherActionHtml({ organization });
+      const add = actionHost.querySelector("#orgMemberAddBtn");
+      if (add && !add.disabled) add.onclick = openPicker;
+    }
     let members = [], cursor = null, hasMore = false;
     const section = () => host.querySelector("#orgMembersCard");
 
@@ -169,8 +195,6 @@ export function createOrganizationMembershipSection(deps) {
     }
     function paint() {
       host.innerHTML = renderMembersSectionHtml({ organization, members, hasMore, esc, fmtDate });
-      const add = host.querySelector("#orgMemberAddBtn");
-      if (add && !add.disabled) add.onclick = openPicker;
       const more = host.querySelector("#orgMembersMore");
       if (more) more.onclick = async () => {
         more.disabled = true;

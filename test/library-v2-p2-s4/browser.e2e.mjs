@@ -135,7 +135,13 @@ try {
     assert.equal(await page.locator("#orgRenameForm").count(), 1); assert.equal(await page.locator("#orgArchiveBtn").count(), 1); assert.equal(await page.locator("#orgDetailCode").count(), 1);
     assert.ok((await text("#orgMembersEmpty")).includes("Chưa có thành viên"));
     assert.equal(await page.locator("#orgMembersTable").count(), 0);
+    // Add Teacher is promoted to the upper Organization Detail action area: ONE button, outside the member card, visible without scrolling.
+    assert.equal(await page.locator("#orgMemberAddBtn").count(), 1, "exactly one add button");
+    assert.equal(await page.locator("#orgMembersCard #orgMemberAddBtn").count(), 0, "not inside the member card");
+    assert.equal(await page.locator("#orgPrimaryActions #orgMemberAddBtn").count(), 1);
     assert.ok(await page.isEnabled("#orgMemberAddBtn"));
+    assert.ok(await page.evaluate(() => { const r = document.querySelector("#orgMemberAddBtn").getBoundingClientRect(); const c = document.querySelector("#orgMembersCard").getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight && r.top < c.top; }), "visible in the viewport above the member card, no scrolling");
+    assert.equal(await page.locator("#orgMembersSummary").count(), 0, "empty list shows no summary");
     assert.ok((await text("#orgMembersCard")).includes("không phải dữ liệu tài khoản"));
     assert.equal((await members("orgMain")).length, 0);
     await shot(page, "01-members-empty");
@@ -227,6 +233,7 @@ try {
     assert.equal(d.status, "suspended"); assert.equal(d.statusChangedBy, admin.uid); assert.ok(d.statusChangedAt);
     for (const k of ["orgRole", "organizationId", "uid", "addedBy", "createdAt", "displayName", "email", "schemaVersion"]) assert.deepEqual(d[k], before[k], k + " unchanged");
     assert.ok((await rowText("orgMain", "t01")).includes("Tạm ngưng"));
+    assert.match(await text("#orgMembersSummary"), /^8 thành viên · 6 hoạt động · 1 tạm ngưng · 1 đã gỡ$/, "summary follows the change");
     assert.equal(await page.locator('[data-member-id="orgMain_t01"][data-member-action="restore"]').count(), 1);
     const audit = await auditBy("organization.member.suspend"); assert.equal(audit.length, 1);
     assert.deepEqual(audit[0].detail, { organizationId: "orgMain", uid: "t01", from: "active", to: "suspended" }); assert.equal(audit[0].entityType, "organizationMember"); assert.equal(audit[0].entityId, "orgMain_t01");
@@ -240,7 +247,7 @@ try {
     assert.equal((await auditBy("organization.member.restore")).length, 1);
   });
 
-  await step("soft-remove: the membership document is KEPT with status 'removed' (snapshot retained); the row offers only 'Đưa trở lại'; audited", async () => {
+  await step("soft-remove: the membership document is KEPT with status 'removed' (snapshot retained); the row offers only 'KHÔI PHỤC THÀNH VIÊN'; audited", async () => {
     await act("orgMain", "t02", "remove");
     const t = await text("#globalModal .modal"); assert.ok(t.includes("Gỡ khỏi đơn vị?") && t.includes("Hồ sơ thành viên được giữ lại"));
     await shot(page, "06-remove-confirm");
@@ -249,6 +256,7 @@ try {
     assert.ok(d, "document still exists"); assert.equal(d.status, "removed"); assert.equal(d.displayName, "Trần Thị Bình"); assert.equal(d.orgRole, "member");
     const r = await rowText("orgMain", "t02"); assert.ok(r.includes("Đã gỡ"));
     assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('[data-member-id="orgMain_t02"]')].map((b) => b.dataset.memberAction)), ["reinstate"]);
+    assert.equal(await text('[data-member-id="orgMain_t02"]'), "KHÔI PHỤC THÀNH VIÊN", "removed-member action label");
     assert.equal((await auditBy("organization.member.remove")).length, 1);
     assert.equal((await members("orgMain")).filter((m) => m.uid === "t02").length, 1, "no deletion, no duplicate");
   });
@@ -258,7 +266,7 @@ try {
     assert.ok(await page.isDisabled('[data-picker-check="t02"]')); assert.ok((await text('[data-picker-assoc="t02"]')).includes("Đã gỡ"));
     await page.click("#orgPickerCancel");
     await act("orgMain", "t02", "reinstate");
-    assert.ok((await text("#globalModal .modal")).includes("Đưa thành viên trở lại?"));
+    assert.ok((await text("#globalModal .modal")).includes("Khôi phục thành viên đã gỡ?") && (await text("#orgMemberConfirmOk")) === "KHÔI PHỤC THÀNH VIÊN");
     await confirmOk();
     assert.equal((await memberOf("orgMain", "t02")).status, "active");
     assert.equal((await auditBy("organization.member.reinstate")).length, 1);
@@ -279,16 +287,21 @@ try {
     const expected = { t01: "Đang hoạt động", t02: "Đang hoạt động", t03: "Đang hoạt động", t04: "Đang hoạt động", t05: "Đang hoạt động", t06: "Đã gỡ", t07: "Đang hoạt động", t08: "Đang hoạt động" };
     for (const [uid, label] of Object.entries(expected)) assert.ok((await rowText("orgMain", uid)).includes(label), uid + " " + label);
     assert.equal(await page.locator("#orgMembersTable tbody tr").count(), 8);
+    assert.match(await text("#orgMembersSummary"), /^8 thành viên · 7 hoạt động · 1 đã gỡ$/, "exact summary when every member is loaded");
   });
 
   await step("paged member list: 25 members per page with 'TẢI THÊM'; the remaining members append without duplicates", async () => {
     await page.click('[data-nav="classes"]'); await openOrg("orgPaged");
     assert.equal(await page.locator("#orgMembersTable tbody tr").count(), 25);
     assert.equal(await page.locator("#orgMembersMore").count(), 1);
+    const partial = await text("#orgMembersSummary");
+    assert.ok(partial.startsWith("Đã tải 25 thành viên") && partial.includes("còn thêm"), "partial summary is labelled: " + partial);
+    assert.ok(!/^30 thành viên|^25 thành viên/.test(partial), "never a misleading global total");
     await shot(page, "07-members-paged");
     await page.click("#orgMembersMore");
     await page.waitForFunction(() => document.querySelectorAll("#orgMembersTable tbody tr").length === 30, null, { timeout: 30000 });
     assert.equal(await page.locator("#orgMembersMore").count(), 0);
+    assert.equal(await text("#orgMembersSummary"), "30 thành viên · 30 hoạt động", "exact once everything is loaded");
     const ids = await page.evaluate(() => [...document.querySelectorAll("[data-member-row]")].map((r) => r.dataset.memberRow));
     assert.equal(new Set(ids).size, 30);
   });
@@ -298,8 +311,11 @@ try {
     await page.click('[data-nav="classes"]'); await openOrg("orgArch");
     assert.ok((await text("#orgMembersArchivedNote")).includes("Không thể thêm hoặc thay đổi thành viên"));
     assert.ok(await page.isDisabled("#orgMemberAddBtn"));
+    assert.equal(await page.locator("#orgMemberAddBtn").count(), 1);
+    assert.equal(await page.locator("#orgPrimaryActions #orgMemberAddBtn").count(), 1);
     assert.equal(await page.locator("[data-member-action]").count(), 0);
     assert.equal(await page.locator("#orgMembersTable tbody tr").count(), 2);
+    assert.equal(await text("#orgMembersSummary"), "2 thành viên · 1 hoạt động · 1 tạm ngưng");
     await page.click("#orgMemberAddBtn", { force: true, timeout: 2000 }).catch(() => {});
     assert.equal(await modalOpen(), 0);
     assert.equal(JSON.stringify(await members("orgArch")), before);

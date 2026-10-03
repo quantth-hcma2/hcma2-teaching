@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  membershipStatusView, membershipRoleLabel, availableMemberActions, nextStatusForAction, describeAssociation, planMembershipAdditions,
+  membershipStatusView, membershipRoleLabel, renderAddTeacherActionHtml, summarizeMembers, availableMemberActions, nextStatusForAction, describeAssociation, planMembershipAdditions,
   renderMembersSectionHtml, renderTeacherPickerHtml, renderMemberConfirmHtml, createMembershipWriter, createActiveTeacherPickerQuery,
   MEMBER_PAGE_SIZE, TEACHER_PICKER_PAGE_SIZE
 } from "../../organization-membership-view.mjs";
@@ -69,7 +69,7 @@ test("members section markup: empty state, escaping, status badges, per-row acti
   const fmt = () => "02/10/2026";
   const empty = renderMembersSectionHtml({ organization: activeOrg, members: [], hasMore: false, esc, fmtDate: fmt });
   assert.ok(empty.includes('id="orgMembersEmpty"') && empty.includes("Chưa có thành viên") && !empty.includes("orgMembersTable") && !empty.includes('id="orgMembersMore"'));
-  assert.ok(empty.includes('id="orgMemberAddBtn"') && !empty.includes("disabled"));
+  assert.ok(!empty.includes("orgMemberAddBtn") && !empty.includes("orgMembersSummary"), "the add action is NOT in the member card; an empty list shows no summary");
   const rows = renderMembersSectionHtml({
     organization: activeOrg, hasMore: true, esc, fmtDate: fmt,
     members: [{ ...member("a"), displayName: "<img onerror=x>" }, member("b", "suspended"), member("c", "removed"), member("d", "active", "org_admin")]
@@ -81,11 +81,34 @@ test("members section markup: empty state, escaping, status badges, per-row acti
   assert.ok(rows.includes('data-member-action="reinstate" data-member-id="orgX_c"'));
   assert.ok(!rows.includes('data-member-id="orgX_d"'), "org_admin rows have no actions in S4");
   for (const label of ["Tạm ngưng", "Đã gỡ", "Quản trị đơn vị"]) assert.ok(rows.includes(label), label);
-  assert.ok(rows.includes('id="orgMembersMore"'));
+  assert.ok(rows.includes('id="orgMembersMore"') && !rows.includes("orgMemberAddBtn"));
+  assert.ok(rows.includes("KHÔI PHỤC THÀNH VIÊN") && !rows.includes("ĐƯA TRỞ LẠI") && rows.includes("GỠ KHỎI ĐƠN VỊ"), "reinstate label");
+  assert.ok(rows.includes('id="orgMembersSummary"') && rows.includes("Đã tải 4 thành viên"), "partial summary is labelled as loaded-only");
   assert.ok(rows.includes("không phải dữ liệu tài khoản"), "snapshot caveat is stated");
   const archived = renderMembersSectionHtml({ organization: archivedOrg, members: [member("a")], hasMore: false, esc, fmtDate: fmt });
-  assert.ok(archived.includes('id="orgMembersArchivedNote"') && /id="orgMemberAddBtn" disabled/.test(archived) && !archived.includes("data-member-action"));
+  assert.ok(archived.includes('id="orgMembersArchivedNote"') && !archived.includes("orgMemberAddBtn") && !archived.includes("data-member-action"));
   assert.ok(!/appoint|org_admin|Bổ nhiệm|quản trị đơn vị<\/button>/i.test(empty), "no appoint-admin control exists");
+});
+
+test("primary add action: one button for the upper detail action area; disabled with an explanation for an archived organization", () => {
+  const active = renderAddTeacherActionHtml({ organization: activeOrg });
+  assert.ok(active.includes('id="orgMemberAddBtn"') && active.includes("+ Thêm giảng viên") && !active.includes("disabled"));
+  const archived = renderAddTeacherActionHtml({ organization: archivedOrg });
+  assert.ok(/id="orgMemberAddBtn" disabled/.test(archived) && archived.includes("Đơn vị đã lưu trữ"));
+});
+
+test("member summary: exact when every member is loaded, explicitly partial while more pages exist, never a misleading total; zero states omitted", () => {
+  const list = [member("a"), member("b"), member("c", "suspended"), member("d", "removed"), member("e", "active", "org_admin")];
+  const full = summarizeMembers(list, false);
+  assert.deepEqual([full.total, full.active, full.suspended, full.removed, full.partial], [5, 3, 1, 1, false]);
+  assert.equal(full.text, "5 thành viên · 3 hoạt động · 1 tạm ngưng · 1 đã gỡ");
+  assert.equal(summarizeMembers([member("a"), member("b")], false).text, "2 thành viên · 2 hoạt động");
+  const partial = summarizeMembers(list, true);
+  assert.equal(partial.partial, true);
+  assert.ok(partial.text.startsWith("Đã tải 5 thành viên · 3 hoạt động") && partial.text.includes("còn thêm"), partial.text);
+  assert.ok(!/^5 thành viên/.test(partial.text), "a partial list must not read like a global total");
+  assert.equal(summarizeMembers([], false).total, 0);
+  assert.equal(summarizeMembers([{ id: "x", status: "weird" }], false).text, "1 thành viên");
 });
 
 test("teacher picker markup: associated teachers are disabled and labelled, selection preserved, submit disabled until selection", () => {

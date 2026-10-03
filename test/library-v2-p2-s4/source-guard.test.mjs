@@ -101,3 +101,16 @@ test("existing navigation preserved: Admin menu order and TEACHER_MENU unchanged
   const teacher = html.slice(html.indexOf("const TEACHER_MENU = ["), html.indexOf("];", html.indexOf("const TEACHER_MENU = [")));
   assert.equal(createHash("sha256").update(teacher).digest("hex"), "3bff38d3c4cdadc2c370985252e7909c256905d0973356e7d605892a2e9f46d8");
 });
+
+test("UX revision: ONE add-teacher button, rendered into the detail header action area (not the member card); summary uses only loaded data; reinstate wording", () => {
+  const src = code(view);
+  assert.equal((src.match(/id="orgMemberAddBtn"/g) || []).length, 1, "the add button markup exists exactly once");
+  const card = src.slice(src.indexOf("export function renderMembersSectionHtml"), src.indexOf("export function renderAddTeacherActionHtml"));
+  assert.ok(!card.includes("orgMemberAddBtn"), "not inside the member card markup");
+  assert.ok(src.includes('querySelector("#orgPrimaryActions")'));
+  assert.equal((adminView.match(/id="orgPrimaryActions"/g) || []).length, 1, "the detail view provides the single action placeholder");
+  const summary = src.slice(src.indexOf("export function summarizeMembers"), src.indexOf("export function renderTeacherPickerHtml"));
+  for (const token of ["getCountFromServer", "getDocs", "query(", "queries.", "await", "fetch("]) assert.ok(!summary.includes(token), "summary is pure over loaded members: " + token);
+  assert.ok(src.includes("KHÔI PHỤC THÀNH VIÊN") && !src.includes("ĐƯA TRỞ LẠI") && src.includes("GỠ KHỎI ĐƠN VỊ"));
+  assert.ok(!/getCountFromServer|aggregate|collectionGroup/.test(src), "no new aggregation architecture");
+});

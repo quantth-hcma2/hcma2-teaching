@@ -48,9 +48,9 @@ export function decideEnrollmentView({ teacher, organizations, truncated = false
 
 // ---------------------------------------------------------------- markup (pure; every dynamic text goes through the injected escaper)
 const BANNER = (teacher, esc) => `<div class="card" style="border-color:#16a34a"><b>✅ Đã duyệt tài khoản giảng viên</b>${teacher ? `<div class="mt-8"><b>${esc(teacher.displayName || "—")}</b><div class="small mut">${esc(teacher.email || "—")}</div></div>` : ""}</div>`;
-const OPTIONAL = `<p class="mut mt-14"><b>Bước tiếp theo (tùy chọn):</b> thêm giảng viên vào đơn vị. Việc duyệt đã hoàn tất; chọn <b>ĐỂ SAU</b>, đóng hộp thoại, nhấn Esc hoặc bấm ra ngoài sẽ <b>không</b> hủy việc duyệt.</p>`;
+const OPTIONAL = `<p class="mt-14"><b>Bước tiếp theo (tùy chọn)</b></p><p class="mut">Tài khoản đã được duyệt. Anh/chị có thể thêm giảng viên vào đơn vị ngay hoặc thực hiện sau. Bỏ qua hoặc đóng hộp thoại không hủy việc duyệt.</p>`;
 
-export function renderEnrollmentHtml({ token, teacher, view, outcomes = new Map(), busy = false, loadError = null, esc }) {
+export function renderEnrollmentHtml({ token, teacher, view, outcomes = new Map(), busy = false, loadError = null, doneInfo = null, esc }) {
   const root = (inner) => `<div id="orgEnrollRoot" data-enroll-token="${token}">${inner}</div>`;
   if (view === "loading") return root(`${BANNER(teacher, esc)}<div class="center-screen" style="min-height:90px"><span class="spinner"></span></div>`);
   if (loadError) {
@@ -62,29 +62,39 @@ export function renderEnrollmentHtml({ token, teacher, view, outcomes = new Map(
   if (view.kind === "none") {
     return root(`${BANNER(teacher, esc)}<p class="mut mt-14">Chưa có đơn vị nào đang hoạt động. Giảng viên đã có thể sử dụng hệ thống; bạn có thể thêm vào đơn vị sau.</p><div class="mt-14"><button type="button" class="btn" id="orgEnrollClose">ĐÓNG</button></div>`);
   }
+  if (doneInfo) {
+    const names = doneInfo.organizationNames.map((n) => esc(n)).join(", ");
+    return root(`${BANNER(teacher, esc)}<div class="card mt-14" id="orgEnrollDone" style="border-color:#16a34a"><b>✅ Đã thêm ${esc(doneInfo.teacherName)} vào ${names}.</b><div class="small mut mt-8">Giảng viên đã là thành viên. Xem tại Đơn vị → Thành viên.</div></div><div class="mt-14"><button type="button" class="btn" id="orgEnrollClose">ĐÓNG</button></div>`);
+  }
+  const memberLabel = (membership) => describeAssociation(membership).label;
+  const createdNames = view.rows.filter((row) => { const o = outcomes.get(row.organization.id); return o && o.outcome === "created"; }).map((row) => row.organization.name || "—");
+  const partialLine = createdNames.length ? `<div class="mt-14" id="orgEnrollPartial" style="color:#15803d"><b>✅ Đã thêm ${esc(teacher ? teacher.displayName || teacher.email || "giảng viên" : "giảng viên")} vào ${createdNames.map((n) => esc(n)).join(", ")}.</b></div>` : "";
   const rows = view.rows.map((row) => {
-    const out = outcomes.get(row.organization.id);
-    let note = "";
-    if (row.association) note = `<div class="small" data-enroll-note="${esc(row.organization.id)}">${esc(row.association.label)} — quản lý trong mục Thành viên của đơn vị.</div>`;
-    if (out && out.outcome === "created") note = `<div class="small" data-enroll-note="${esc(row.organization.id)}">✅ Đã thêm vào đơn vị.</div>`;
-    else if (out && out.outcome === "failed") note = `<div class="error-text small" data-enroll-note="${esc(row.organization.id)}">❌ ${esc(out.message || "Không thêm được.")} Có thể thử lại.</div>`;
-    else if (out && out.outcome && out.outcome !== "already-associated") note = `<div class="small" data-enroll-note="${esc(row.organization.id)}">⚠️ ${esc(out.message || "Đã bỏ qua.")}</div>`;
-    const done = !!(out && (out.outcome === "created" || out.outcome === "already-associated" || out.outcome === "organization-archived" || out.outcome === "organization-missing"));
-    const disabled = !row.selectable || done || busy;
-    const checked = !disabled && (out ? !!out.retrySelected : row.preselected);
-    return `<label class="flex gap-8" data-enroll-row="${esc(row.organization.id)}" style="align-items:flex-start;padding:8px 0;border-bottom:1px solid #e2e8f0"><input type="checkbox" data-enroll-org="${esc(row.organization.id)}"${disabled ? " disabled" : ""}${checked ? " checked" : ""}><span><b>${esc(row.organization.name || "—")}</b> <code>${esc(row.organization.code || "")}</code>${note}</span></label>`;
+    const id = row.organization.id;
+    const out = outcomes.get(id);
+    const head = `<b>${esc(row.organization.name || "—")}</b>${row.organization.code ? `<div class="small mut">Mã đơn vị: ${esc(row.organization.code)}</div>` : ""}`;
+    const rowStyle = 'padding:8px 0;border-bottom:1px solid #e2e8f0';
+    const info = (icon, note) => `<div class="flex gap-8" data-enroll-row="${esc(id)}" data-enroll-info style="align-items:flex-start;${rowStyle}"><span aria-hidden="true">${icon}</span><span>${head}<div class="small" data-enroll-note="${esc(id)}">${note}</div></span></div>`;
+    const manage = (label) => `${esc(label)}. Không thêm lại tại đây — quản lý hoặc khôi phục tại <b>Đơn vị → Thành viên</b>.`;
+    if (out && out.outcome === "created") return info("✅", "Đã thêm vào đơn vị.");
+    if (out && out.outcome === "already-associated") return info("ℹ️", manage(memberLabel(out.membership || { status: out.membershipStatus })));
+    if (out && (out.outcome === "organization-archived" || out.outcome === "organization-missing" || out.outcome === "blocked" || out.outcome === "skipped")) return info("⚠️", esc(out.message || "Đã bỏ qua."));
+    if (row.association) return info("ℹ️", row.association.status === "suspended" || row.association.status === "removed" ? manage(row.association.label) : `${esc(row.association.label)}. Giảng viên đã là thành viên; không cần thêm lại.`);
+    const failed = out && out.outcome === "failed" ? `<div class="error-text small" data-enroll-note="${esc(id)}">❌ ${esc(out.message || "Không thêm được.")} Có thể thử lại.</div>` : "";
+    const checked = out ? !!out.retrySelected : row.preselected;
+    return `<label class="flex gap-8" data-enroll-row="${esc(id)}" style="align-items:flex-start;${rowStyle}"><input type="checkbox" data-enroll-org="${esc(id)}"${busy ? " disabled" : ""}${checked ? " checked" : ""}><span>${head}${failed}</span></label>`;
   }).join("");
   const truncatedNote = view.truncated ? `<p class="small mut mt-8">Hiển thị ${view.rows.length} đơn vị đầu tiên; thêm vào các đơn vị khác từ màn hình Đơn vị.</p>` : "";
   const anyFailed = [...outcomes.values()].some((o) => o.outcome === "failed");
   const canSubmit = view.kind === "choose" || anyFailed;
   const addLabel = busy ? "ĐANG THÊM…" : anyFailed ? "THỬ LẠI" : "THÊM VÀO ĐƠN VỊ";
   const intro = view.kind === "already"
-    ? `<p class="mut mt-14">Giảng viên đã thuộc đơn vị. Không cần thêm lại.</p>`
+    ? `<p class="mut mt-14">Không có đơn vị nào để thêm: giảng viên đã có hồ sơ thành viên ở đơn vị bên dưới.</p>`
     : view.mode === "single" ? `<p class="mt-14"><b>Đơn vị:</b></p>` : `<p class="mt-14"><b>Chọn đơn vị</b> (có thể chọn nhiều đơn vị):</p>`;
   const buttons = view.kind === "already"
     ? `<div class="mt-14"><button type="button" class="btn" id="orgEnrollClose">ĐÓNG</button></div>`
     : `<div class="flex-between mt-14"><button type="button" class="btn btn-ghost" id="orgEnrollLater"${busy ? " disabled" : ""}>ĐỂ SAU</button><button type="button" class="btn" id="orgEnrollAdd"${busy || !canSubmit ? " disabled" : ""}>${addLabel}</button></div>`;
-  return root(`${BANNER(teacher, esc)}${view.kind === "already" ? "" : OPTIONAL}${intro}<div id="orgEnrollList">${rows}</div>${truncatedNote}<div id="orgEnrollErr" class="error-text hidden mt-8"></div>${buttons}`);
+  return root(`${BANNER(teacher, esc)}${view.kind === "already" ? "" : OPTIONAL}${partialLine}${intro}<div id="orgEnrollList">${rows}</div>${truncatedNote}<div id="orgEnrollErr" class="error-text hidden mt-8"></div>${buttons}`);
 }
 
 // ---------------------------------------------------------------- core write path (DOM-free; never throws)
@@ -104,7 +114,7 @@ export async function enrollTeacherInOrganizations({ db, actorUid, uid, organiza
       if (!organization) { results.push({ organizationId, outcome: "organization-missing", message: "Không tìm thấy đơn vị." }); continue; }
       if (organization.status !== "active") { results.push({ organizationId, outcome: "organization-archived", message: "Đơn vị đã được lưu trữ, không thể thêm thành viên." }); continue; }
       const existing = await queries.membershipOf(db, organizationId, uid);
-      if (existing) { results.push({ organizationId, outcome: "already-associated", membershipStatus: existing.status, message: "Đã có trong đơn vị." }); continue; }
+      if (existing) { results.push({ organizationId, outcome: "already-associated", membershipStatus: existing.status, membership: existing, message: "Đã có trong đơn vị." }); continue; }
       const plan = planMembershipAdditions({
         organization, actorUid, contract, existingByUid: new Map([[uid, null]]),
         candidates: [{ id: uid, role: teacher.role, status: teacher.status, displayName: teacher.displayName || "", email: teacher.email || "" }]
@@ -133,7 +143,7 @@ export function createTeacherEnrollmentFlow(deps) {
       const token = ++sequence;                       // a newer approval replaces this prompt: that is equivalent to ĐỂ SAU
       const host = () => document.getElementById("globalModal");
       const paintInto = (html) => { if (live(token)) { host().querySelector(".modal").innerHTML = html; wire(); } };
-      let teacher = null, view = null, outcomes = new Map(), busy = false;
+      let teacher = null, view = null, outcomes = new Map(), busy = false, doneInfo = null;
       const onKey = (event) => {
         if (!live(token)) { document.removeEventListener("keydown", onKey); return; }
         if (event.key === "Escape") { document.removeEventListener("keydown", onKey); closeModal(); }
@@ -141,7 +151,7 @@ export function createTeacherEnrollmentFlow(deps) {
       document.addEventListener("keydown", onKey);
       openModal(renderEnrollmentHtml({ token, teacher: null, view: "loading", esc }));
 
-      const render = () => paintInto(renderEnrollmentHtml({ token, teacher, view, outcomes, busy, esc }));
+      const render = () => paintInto(renderEnrollmentHtml({ token, teacher, view, outcomes, busy, doneInfo, esc }));
       const later = () => { document.removeEventListener("keydown", onKey); closeModal(); };
 
       function wire() {
@@ -160,7 +170,7 @@ export function createTeacherEnrollmentFlow(deps) {
       }
 
       async function load() {
-        outcomes = new Map(); view = null; teacher = null;
+        outcomes = new Map(); view = null; teacher = null; doneInfo = null;
         if (live(token)) host().querySelector(".modal").innerHTML = renderEnrollmentHtml({ token, teacher: null, view: "loading", esc });
         let fresh, listing, associations = new Map();
         try {
@@ -197,8 +207,10 @@ export function createTeacherEnrollmentFlow(deps) {
         for (const r of outcome.results) outcomes.set(r.organizationId, { ...r, retrySelected: r.outcome === "failed" });
         const created = outcome.results.filter((r) => r.outcome === "created");
         const problems = outcome.results.filter((r) => r.outcome !== "created");
-        if (created.length) toast(created.length === 1 ? "Đã thêm giảng viên vào đơn vị." : `Đã thêm giảng viên vào ${created.length} đơn vị.`, "ok");
-        if (!problems.length) { document.removeEventListener("keydown", onKey); closeModal(); return; }
+        const nameOf = (id) => { const row = view && view.rows ? view.rows.find((x) => x.organization.id === id) : null; return row ? row.organization.name || "—" : "đơn vị"; };
+        const who = (teacher && (teacher.displayName || teacher.email)) || "giảng viên";
+        if (created.length) toast(created.length === 1 ? `Đã thêm ${who} vào ${nameOf(created[0].organizationId)}.` : `Đã thêm ${who} vào ${created.length} đơn vị.`, "ok");
+        if (!problems.length) { doneInfo = { teacherName: who, organizationNames: created.map((x) => nameOf(x.organizationId)) }; render(); return; }
         if (outcome.blocked) view = decideEnrollmentView({ teacher: null, organizations: [] });
         render();
       }

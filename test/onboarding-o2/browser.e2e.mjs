@@ -99,6 +99,7 @@ const mem = (orgId, uid, orgRole = "member", status = "active") => ({ schemaVers
 const memberDocs = async () => list("organizationMembers");
 const auditAdds = async () => (await list("auditLogs")).filter((a) => a.action === "organization.members.add");
 const userDoc = (id) => get(`users/${id}`);
+const toastText = () => page.evaluate(() => [...document.querySelectorAll("#toast-root .toast")].map((t) => t.textContent).join(" | "));
 const modalText = () => page.evaluate(() => (document.querySelector("#globalModal .modal")?.textContent || "").replace(/\s+/g, " ").trim());
 const waitEnroll = () => page.waitForSelector("#orgEnrollRoot", { timeout: 30000 }).then(() => page.waitForFunction(() => !document.querySelector("#orgEnrollRoot .spinner"), null, { timeout: 30000 }));
 const gone = () => page.waitForFunction(() => !document.querySelector("#globalModal .modal"), null, { timeout: 15000 });
@@ -137,7 +138,10 @@ try {
   await step("exactly one active Organization (teachers-screen entry point): it is preselected; ĐỂ SAU leaves the teacher active without membership and writes nothing", async () => {
     await approveInTeachers(P(2));
     const t = await modalText();
-    assert.ok(t.includes("Đã duyệt tài khoản giảng viên") && t.includes("Bước tiếp theo (tùy chọn)") && t.includes("không hủy việc duyệt") && t.includes("Khoa Quản trị"));
+    assert.ok(t.includes("Đã duyệt tài khoản giảng viên") && t.includes("Bước tiếp theo (tùy chọn)") && t.includes("Tài khoản đã được duyệt. Anh/chị có thể thêm giảng viên vào đơn vị ngay hoặc thực hiện sau.") && t.includes("không hủy việc duyệt") && t.includes("Khoa Quản trị"));
+    assert.equal(await page.locator('[data-enroll-row="orgOne"] code').count(), 0, "the code is not rendered as part of the name");
+    assert.equal(await page.textContent('[data-enroll-row="orgOne"] b'), "Khoa Quản trị");
+    assert.match(await page.textContent('[data-enroll-row="orgOne"] .small'), /^Mã đơn vị: khoa-quan-tri$/);
     assert.ok(!t.includes("Trung tâm cũ"), "archived Organization is not offered");
     assert.ok(await page.isChecked('[data-enroll-org="orgOne"]'), "single Organization preselected");
     assert.ok(await page.isEnabled("#orgEnrollAdd"));
@@ -160,7 +164,14 @@ try {
   await step("one Organization + THÊM VÀO ĐƠN VỊ: exactly one ordinary active member via the S4 contract; users unchanged by the membership step; audit carries via; teacher is first in the member list", async () => {
     await approveInTeachers(P(5));
     const afterApproval = await userDoc(P(5));
-    await page.click("#orgEnrollAdd"); await gone();
+    await page.click("#orgEnrollAdd");
+    await page.waitForSelector("#orgEnrollDone", { timeout: 30000 });
+    const doneText = await modalText();
+    assert.ok(doneText.includes("✅ Đã thêm Giảng viên chờ 5 vào Khoa Quản trị.") && doneText.includes("Đơn vị → Thành viên"), "explicit success confirmation: " + doneText);
+    assert.equal(await page.locator("#orgEnrollAdd").count(), 0, "no second add button after success");
+    assert.match(await toastText(), /Đã thêm Giảng viên chờ 5 vào Khoa Quản trị\./);
+    await shot(page, "05-done");
+    await page.click("#orgEnrollClose"); await gone();
     const docs = await memberDocs();
     assert.equal(docs.length, 1);
     const d = docs[0];
@@ -183,8 +194,11 @@ try {
       const before = await get(`organizationMembers/orgOne_${id}`);
       await approveInTeachers(id);
       const t = await modalText();
-      assert.ok(t.includes("Đã duyệt tài khoản giảng viên") && t.includes(label) && t.includes("quản lý trong mục Thành viên") && !t.includes("Chưa có đơn vị"));
+      assert.ok(t.includes("Đã duyệt tài khoản giảng viên") && t.includes(label) && t.includes("Đơn vị → Thành viên") && t.includes("Không thêm lại tại đây") && !t.includes("Chưa có đơn vị"));
       assert.equal(await page.locator("#orgEnrollAdd").count(), 0);
+      assert.equal(await page.locator("[data-enroll-org]").count(), 0, "no selection checkbox for a suspended/removed membership");
+      assert.equal(await page.locator('[data-enroll-row="orgOne"][data-enroll-info]').count(), 1, "rendered as an information row");
+      if (status === "removed") await shot(page, "06-info-row");
       await page.click("#orgEnrollClose"); await gone();
       assert.deepEqual(await get(`organizationMembers/orgOne_${id}`), before);
       assert.equal((await userDoc(id)).status, "active");
@@ -204,7 +218,10 @@ try {
     await shot(page, "03-multi");
     await page.check('[data-enroll-org="orgOne"]'); await page.check('[data-enroll-org="orgTwo"]');
     assert.ok(await page.isEnabled("#orgEnrollAdd"));
-    await page.click("#orgEnrollAdd"); await gone();
+    await page.click("#orgEnrollAdd");
+    await page.waitForSelector("#orgEnrollDone", { timeout: 30000 });
+    assert.ok((await modalText()).includes("✅ Đã thêm Giảng viên chờ 8 vào Khoa Quản trị, Trung tâm Bồi dưỡng."), await modalText());
+    await page.click("#orgEnrollClose"); await gone();
     for (const o of ["orgOne", "orgTwo"]) { const d = await get(`organizationMembers/${o}_${P(8)}`); assert.deepEqual([d.orgRole, d.status, d.addedBy], ["member", "active", admin.uid]); }
     const adds = (await auditAdds()).filter((a) => a.detail.uids[0] === P(8));
     assert.equal(adds.length, 2); assert.ok(adds.every((a) => a.detail.count === 1 && a.detail.via === "teacher-approval"));
@@ -219,6 +236,8 @@ try {
     await page.waitForSelector('[data-enroll-note="orgTwo"]', { timeout: 30000 });
     assert.match(await page.textContent('[data-enroll-note="orgTwo"]'), /đã được lưu trữ/);
     assert.match(await page.textContent('[data-enroll-note="orgOne"]'), /Đã thêm vào đơn vị/);
+    assert.match(await page.textContent("#orgEnrollPartial"), /Đã thêm Giảng viên chờ 9 vào Khoa Quản trị\./);
+    assert.equal(await page.locator('[data-enroll-org="orgOne"]').count(), 0, "a created row is an information row, not a checkbox");
     assert.equal((await get(`organizationMembers/orgOne_${P(9)}`)).status, "active");
     assert.equal(await get(`organizationMembers/orgTwo_${P(9)}`), null);
     assert.equal((await userDoc(P(9))).status, "active");

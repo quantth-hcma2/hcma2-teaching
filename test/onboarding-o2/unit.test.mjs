@@ -63,32 +63,61 @@ test("decision: blocked / none / single preselected / multi nothing preselected 
   assert.equal(decideEnrollmentView({ teacher, organizations: [org("a", "x", "active")], associations: new Map([["a", member("a", "active", "org_admin")]]) }).kind, "already", "an Organization Admin membership also counts as associated");
 });
 
-test("markup: approval already succeeded, membership optional, ĐỂ SAU/close/Esc/backdrop do not undo it; one org preselected, many none; escaping; states", () => {
+test("markup: concise 'next step (optional)' wording; approval already succeeded; skipping/closing does not undo it; one org preselected, many none; escaping; states", () => {
   const single = renderEnrollmentHtml({ token: 3, teacher, view: decideEnrollmentView({ teacher, organizations: [org("a", "Học viện <X>")] }), esc });
-  assert.ok(single.includes("Đã duyệt tài khoản giảng viên") && single.includes("Bước tiếp theo (tùy chọn)") && single.includes("không</b> hủy việc duyệt") && single.includes("Esc"));
+  assert.ok(single.includes("Đã duyệt tài khoản giảng viên") && single.includes("Bước tiếp theo (tùy chọn)"));
+  assert.ok(single.includes("Tài khoản đã được duyệt. Anh/chị có thể thêm giảng viên vào đơn vị ngay hoặc thực hiện sau.") && single.includes("không hủy việc duyệt"));
+  assert.ok(!single.includes("Esc") && !single.includes("bấm ra ngoài"), "the explanation stays concise");
   assert.ok(single.includes('data-enroll-token="3"') && single.includes("THÊM VÀO ĐƠN VỊ") && single.includes("ĐỂ SAU"));
   assert.ok(/data-enroll-org="a" checked/.test(single), "single organization preselected");
-  assert.ok(!single.includes("<Văn>") && !single.includes("Học viện <X>") && single.includes("Học viện &lt;X&gt;"), "escaped");
+  assert.ok(single.includes('<b>Học viện &lt;X&gt;</b><div class="small mut">Mã đơn vị: ma-a</div>'), "the Organization name is the primary label; the code is a separate, subtle secondary line");
+  assert.ok(!single.includes("<code>") && !/<b>[^<]*<\/b>\s*<code>/.test(single), "the code is never concatenated to the name");
+  assert.ok(!single.includes("<Văn>") && !single.includes("Học viện <X>"), "escaped");
   const multi = renderEnrollmentHtml({ token: 4, teacher, view: decideEnrollmentView({ teacher, organizations: [org("a"), org("b")] }), esc });
   assert.ok(!/data-enroll-org="[ab]" checked/.test(multi) && multi.includes("có thể chọn nhiều đơn vị"));
   const none = renderEnrollmentHtml({ token: 5, teacher, view: decideEnrollmentView({ teacher, organizations: [] }), esc });
   assert.ok(none.includes("Chưa có đơn vị nào đang hoạt động") && none.includes('id="orgEnrollClose"') && !none.includes('id="orgEnrollAdd"'));
   const blocked = renderEnrollmentHtml({ token: 6, teacher, view: decideEnrollmentView({ teacher: { ...teacher, status: "suspended" }, organizations: [org("a")] }), esc });
   assert.ok(blocked.includes("không còn là giảng viên đang hoạt động") && blocked.includes("Việc duyệt trước đó không bị ảnh hưởng") && !blocked.includes('id="orgEnrollAdd"'));
-  const already = renderEnrollmentHtml({ token: 7, teacher, view: decideEnrollmentView({ teacher, organizations: [org("a")], associations: new Map([["a", member("a", "removed")]]) }), esc });
-  assert.ok(already.includes("Đã gỡ") && already.includes("quản lý trong mục Thành viên") && !already.includes('id="orgEnrollAdd"') && already.includes('id="orgEnrollClose"'));
-  const disabledRow = renderEnrollmentHtml({ token: 8, teacher, view: decideEnrollmentView({ teacher, organizations: [org("a"), org("b")], associations: new Map([["a", member("a", "suspended")]]) }), esc });
-  assert.ok(/data-enroll-org="a" disabled/.test(disabledRow) && /data-enroll-org="b"/.test(disabledRow) && !/data-enroll-org="b" disabled/.test(disabledRow));
   assert.ok(renderEnrollmentHtml({ token: 9, teacher: null, view: "loading", esc }).includes("spinner"));
   const err = renderEnrollmentHtml({ token: 10, teacher: null, view: null, loadError: "Mất kết nối", esc });
   assert.ok(err.includes("Mất kết nối") && err.includes("THỬ LẠI") && err.includes("ĐỂ SAU"));
   const truncated = renderEnrollmentHtml({ token: 11, teacher, view: decideEnrollmentView({ teacher, organizations: [org("a"), org("b")], truncated: true }), esc });
   assert.ok(truncated.includes("thêm vào các đơn vị khác từ màn hình Đơn vị"));
+});
+
+test("suspended / removed / active memberships are NON-selectable information rows (no checkbox) that point to Đơn vị → Thành viên; they are never selectable", () => {
+  for (const status of ["suspended", "removed"]) {
+    const html = renderEnrollmentHtml({ token: 8, teacher, view: decideEnrollmentView({ teacher, organizations: [org("a", "Khoa A"), org("b", "Khoa B")], associations: new Map([["a", member("a", status)]]) }), esc });
+    assert.ok(!/data-enroll-org="a"/.test(html), status + ": no checkbox for the associated Organization");
+    assert.ok(/data-enroll-org="b"/.test(html) && !/data-enroll-org="b" disabled/.test(html), "the other Organization stays selectable");
+    assert.ok(/data-enroll-row="a" data-enroll-info/.test(html), "rendered as an information row");
+    const note = html.slice(html.indexOf('data-enroll-note="a"'), html.indexOf('data-enroll-note="a"') + 400);
+    assert.ok(note.includes(status === "removed" ? "Đã gỡ" : "Tạm ngưng") && note.includes("Đơn vị → Thành viên") && note.includes("Không thêm lại tại đây"), note);
+  }
+  const active = renderEnrollmentHtml({ token: 8, teacher, view: decideEnrollmentView({ teacher, organizations: [org("a", "Khoa A"), org("b", "Khoa B")], associations: new Map([["a", member("a", "active")]]) }), esc });
+  assert.ok(!/data-enroll-org="a"/.test(active) && active.includes("không cần thêm lại"));
+  const all = renderEnrollmentHtml({ token: 7, teacher, view: decideEnrollmentView({ teacher, organizations: [org("a")], associations: new Map([["a", member("a", "removed")]]) }), esc });
+  assert.ok(all.includes("Đã gỡ") && all.includes("Đơn vị → Thành viên") && !all.includes('id="orgEnrollAdd"') && !all.includes("data-enroll-org=") && all.includes('id="orgEnrollClose"'));
+  assert.ok(!all.includes("Bước tiếp theo (tùy chọn)"), "nothing to choose: no optional-step prompt");
+});
+
+test("success feedback: an explicit confirmation names the teacher and the Organization(s) and stays until ĐÓNG; partial results show the created part and keep failures retryable", () => {
+  const view = decideEnrollmentView({ teacher, organizations: [org("a", "Khoa Quản trị (mẫu)"), org("b", "Trung tâm <B>")] });
+  const done = renderEnrollmentHtml({ token: 20, teacher, view, doneInfo: { teacherName: "Nguyễn <Văn> An", organizationNames: ["Khoa Quản trị (mẫu)"] }, esc });
+  assert.ok(done.includes('id="orgEnrollDone"') && done.includes("✅ Đã thêm Nguyễn &lt;Văn&gt; An vào Khoa Quản trị (mẫu).") && done.includes("Đơn vị → Thành viên"));
+  assert.ok(done.includes('id="orgEnrollClose"') && !done.includes('id="orgEnrollAdd"') && !done.includes("Bước tiếp theo (tùy chọn)"));
+  const two = renderEnrollmentHtml({ token: 21, teacher, view, doneInfo: { teacherName: "An", organizationNames: ["Khoa A", "Trung tâm <B>"] }, esc });
+  assert.ok(two.includes("Đã thêm An vào Khoa A, Trung tâm &lt;B&gt;."));
   const partial = renderEnrollmentHtml({
-    token: 12, teacher, view: decideEnrollmentView({ teacher, organizations: [org("a"), org("b")] }), esc,
+    token: 22, teacher, view, esc,
     outcomes: new Map([["a", { outcome: "created" }], ["b", { outcome: "failed", message: "Không thêm được vào đơn vị.", retrySelected: true }]])
   });
-  assert.ok(/data-enroll-org="a" disabled/.test(partial) && /data-enroll-org="b" checked/.test(partial) && partial.includes("THỬ LẠI") && partial.includes("Đã thêm vào đơn vị"));
+  assert.ok(partial.includes('id="orgEnrollPartial"') && partial.includes("Đã thêm Nguyễn &lt;Văn&gt; An vào Khoa Quản trị (mẫu)."), "created part is confirmed");
+  assert.ok(!/data-enroll-org="a"/.test(partial) && /data-enroll-row="a" data-enroll-info/.test(partial) && partial.includes("Đã thêm vào đơn vị."));
+  assert.ok(/data-enroll-org="b" checked/.test(partial) && partial.includes("THỬ LẠI") && partial.includes("Có thể thử lại"));
+  const race = renderEnrollmentHtml({ token: 23, teacher, view, esc, outcomes: new Map([["a", { outcome: "already-associated", membershipStatus: "removed", membership: member("a", "removed") }]]) });
+  assert.ok(!/data-enroll-org="a"/.test(race) && race.includes("Đơn vị → Thành viên"));
 });
 
 function fakeDeps({ user = teacher, orgs = {}, memberships = {}, failWrite = new Set(), audit = [], writes = [] } = {}) {
@@ -122,6 +151,7 @@ test("core: never recreates active, suspended or removed memberships; archived/m
     const deps = fakeDeps({ orgs: { a: org("a") }, memberships: { a_t1: member("a", status) }, writes, audit });
     const out = await enrollTeacherInOrganizations({ db: {}, actorUid: "admin1", uid: "t1", organizationIds: ["a"], deps });
     assert.deepEqual([out.results[0].outcome, out.results[0].membershipStatus], ["already-associated", status]);
+    assert.equal(out.results[0].membership.status, status, "the existing membership is reported for display only");
     assert.equal(writes.length, 0); assert.equal(audit.length, 0);
   }
   const writes = [], audit = [];

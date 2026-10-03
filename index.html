@@ -628,6 +628,7 @@ import { createOrganizationWriteContract } from "./organization-write-contract.m
 import { getAdminFeature } from "./admin-feature-registry.mjs?v=20261003-p2s3";
 import { createOrganizationAdminScreen, createOrganizationWriter } from "./organization-admin-view.mjs?v=20261004-p2s4";
 import { createOrganizationMembershipSection, createMembershipWriter, createActiveTeacherPickerQuery } from "./organization-membership-view.mjs?v=20261004-p2s4";
+import { createActiveOrganizationLookup, createTeacherEnrollmentFlow } from "./teacher-organization-enrollment.mjs?v=20261005-o2";
 // GATE 5F.C: Knowledge Co-creation dashboard launch/close control for the Classroom Second Brain
 // (V2) projection. Talks only to the accepted, frozen Gate 5C HTTP contract — never touches
 // Firestore Rules/indexes, the Public Second Brain V1 service, or any Classroom backend file.
@@ -1730,6 +1731,21 @@ const ORGANIZATION_QUERIES=createOrganizationQueries({collection,doc,query,where
 const ORGANIZATION_PLATFORM_QUERIES=createPlatformAdminOrganizationQueries({collection,query,orderBy,limit,getDocs});
 const ORGANIZATION_CONTRACT=createOrganizationWriteContract({serverTimestamp});
 const ORGANIZATION_TEACHER_PICKER=createActiveTeacherPickerQuery({collection,query,where,orderBy,limit,startAfter,getDocs});
+// Onboarding O2: optional Organization-membership step AFTER a successful teacher approval. Separate from the approval write; never throws.
+const ORGANIZATION_ACTIVE_LOOKUP=createActiveOrganizationLookup({collection,query,where,limit,getDocs});
+let __organizationEnrollmentFlow=null;
+function organizationEnrollmentAfterApproval(uid){
+  try{
+    if(!__organizationEnrollmentFlow) __organizationEnrollmentFlow=createTeacherEnrollmentFlow({
+      db, getActorUid:()=>STATE.user.uid, isPlatformAdmin:()=>STATE.profile?.role==="admin",
+      esc, toast, mapError, openModal, closeModal, logAudit,
+      readUser:async(database,userId)=>{const snap=await getDoc(doc(database,"users",userId));return snap.exists()?{id:snap.id,...snap.data()}:null;},
+      orgLookup:ORGANIZATION_ACTIVE_LOOKUP, queries:ORGANIZATION_QUERIES, contract:ORGANIZATION_CONTRACT,
+      writer:createMembershipWriter({collection,doc,writeBatch,updateDoc})
+    });
+    __organizationEnrollmentFlow.offerAfterApproval(uid).catch(()=>{});
+  }catch(e){ console.warn("organization enrollment",e); }
+}
 function adminOrganizations(c){
   return createOrganizationAdminScreen({
     db, actorUid:STATE.user.uid, isPlatformAdmin:STATE.profile?.role==="admin",
@@ -1830,11 +1846,14 @@ function errorBlock(e, retryFn){
 }
 
 async function approveTeacher(uid, cb){
+  let approved = false;
   try{
     await updateDoc(doc(db,"users",uid), { status:"active", approvedAt: serverTimestamp(), approvedBy: STATE.user.uid, updatedAt: serverTimestamp() });
+    approved = true;
     toast("Đã duyệt tài khoản giảng viên.","ok");
     cb && cb();
   }catch(e){ toast(mapError(e),"err"); }
+  if(approved) organizationEnrollmentAfterApproval(uid);
 }
 async function suspendTeacher(uid, cb){
   if(!confirm("Khóa tài khoản giảng viên này? Giảng viên sẽ không thể sử dụng hệ thống.")) return;

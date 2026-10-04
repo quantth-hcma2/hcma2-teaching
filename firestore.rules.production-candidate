@@ -2059,6 +2059,145 @@ service cloud.firestore {
     }
     // ===== LIBRARY V2 P2-S1 (ORGANIZATION FOUNDATION) - END =====
 
+    // ===== LIBRARY V2 P3-S1 (CURRICULUM) - BEGIN =====
+    // Organization-owned curriculum frameworks and their node subcollection (additive; P2-S1 block above is unchanged).
+    // Authority: LIBRARY_V2_P3_DESIGN_R1.md (Owner decisions D1-D7) and LIBRARY_V2_FROZEN_CONTRACTS_v1.1.md (sections 4, 6, 11).
+    //  - organizationId is a SECURITY BOUNDARY: read and write are authorized against the document's own organization through
+    //    the existing P2 helpers orgGoverns / hasOrgCap(orgId, 'curriculum.manage'), which already imply Platform Admin (always), an active
+    //    Organization Admin and an active member holding the capability, and which always requires an active platform account
+    //    (users) in the same evaluation. Nothing here reads or writes the platform-wide users collection.
+    //  - READ keeps governance access (Platform Admin, Organization Admin) in an ARCHIVED organization (Invariant I4); a capability
+    //    holder reads only while the organization is active (hasOrgCap requires it); WRITE additionally requires an ACTIVE
+    //    organization for EVERY writer, including the Platform Admin (curriculum is new content: no governance exception).
+    //    The existing P2 membership/capability archived-organization semantics are NOT touched by this block.
+    //  - Ordinary members (without the capability) have NO curriculum access in P3-S1; member read arrives with its first consumer.
+    //  - Rules prove only what they can: ownership, schema, lifecycle, relation to the parent framework, shallow node shape
+    //    (depth <= 4, parentId == last ancestor, no self/duplicate ancestors). They do NOT prove that ancestors match the real
+    //    parent chain, sibling order or code uniqueness, or the 5000-node / 100-framework bounds; the write contracts and tests do.
+    //  - Document-access budget: the Platform Admin pays organization (1) + users (2) + parent framework (1); every repeated read
+    //    is cached, so 400-write batches stay inside the limits (measured in test/library-v2-p3-s1/budget.test.mjs).
+    function fwPath(fwId) { return /databases/$(database)/documents/curriculumFrameworks/$(fwId); }
+    function mayReadCurriculum(orgId) { return orgGoverns(orgId) || hasOrgCap(orgId, 'curriculum.manage'); }
+    function mayWriteCurriculum(orgId) { return orgActive(orgId) && hasOrgCap(orgId, 'curriculum.manage'); }
+    function validFrameworkName(n) { return n is string && n.size() >= 3 && n.size() <= 120; }
+
+    match /curriculumFrameworks/{fwId} {
+      function fwShapeOk(d) {
+        return d.keys().hasAll(['schemaVersion', 'organizationId', 'scope', 'name', 'status', 'createdAt', 'createdBy', 'updatedAt']) &&
+          d.keys().hasOnly(['schemaVersion', 'organizationId', 'scope', 'name', 'status', 'createdAt', 'createdBy', 'updatedAt', 'activatedAt', 'statusChangedAt', 'statusChangedBy', 'cloneSource']) &&
+          d.schemaVersion == 1 &&
+          d.organizationId is string &&
+          d.scope == 'organization' &&
+          validFrameworkName(d.name) &&
+          d.status in ['draft', 'active', 'archived'] &&
+          d.createdBy is string &&
+          (!('cloneSource' in d) ||
+            (d.cloneSource is map &&
+             d.cloneSource.keys().hasOnly(['frameworkId', 'nodeCount']) &&
+             d.cloneSource.keys().hasAll(['frameworkId', 'nodeCount']) &&
+             d.cloneSource.frameworkId is string &&
+             d.cloneSource.nodeCount is int &&
+             d.cloneSource.nodeCount >= 0 && d.cloneSource.nodeCount <= 5000));
+      }
+      function fwImmutableOk(b, a) {
+        return a.organizationId == b.organizationId && a.scope == b.scope && a.createdAt == b.createdAt &&
+          a.createdBy == b.createdBy && a.schemaVersion == b.schemaVersion &&
+          (('cloneSource' in b) ? ('cloneSource' in a && a.cloneSource == b.cloneSource) : !('cloneSource' in a));
+      }
+      // Same status: rename or no-op while draft/active (archived is read-only); activatedAt and status metadata stay as they were.
+      // Status change: only draft->active (stamps activatedAt once), active->archived, archived->active; metadata stamped by the writer.
+      function fwTransitionOk(b, a) {
+        return (a.status == b.status
+          ? (b.status in ['draft', 'active'] &&
+             a.get('activatedAt', null) == b.get('activatedAt', null) &&
+             a.get('statusChangedAt', null) == b.get('statusChangedAt', null) &&
+             a.get('statusChangedBy', null) == b.get('statusChangedBy', null))
+          : (((b.status == 'draft' && a.status == 'active') ||
+              (b.status == 'active' && a.status == 'archived') ||
+              (b.status == 'archived' && a.status == 'active')) &&
+             a.name == b.name &&
+             'statusChangedAt' in a && 'statusChangedBy' in a &&
+             a.statusChangedAt == request.time && a.statusChangedBy == request.auth.uid &&
+             (b.status == 'draft'
+               ? ('activatedAt' in a && a.activatedAt == request.time)
+               : a.get('activatedAt', null) == b.get('activatedAt', null))));
+      }
+
+      allow get, list: if isAdmin() || mayReadCurriculum(resource.data.organizationId);
+      // Created as a never-activated draft only. A clone marker, when present, must point at a framework of the SAME organization
+      // (the source is read once; a missing source is an evaluation error and therefore a denial).
+      allow create: if fwShapeOk(request.resource.data) &&
+        request.resource.data.status == 'draft' &&
+        !('activatedAt' in request.resource.data) &&
+        !('statusChangedAt' in request.resource.data) &&
+        !('statusChangedBy' in request.resource.data) &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        mayWriteCurriculum(request.resource.data.organizationId) &&
+        (!('cloneSource' in request.resource.data) ||
+          get(fwPath(request.resource.data.cloneSource.frameworkId)).data.organizationId == request.resource.data.organizationId);
+      allow update: if fwShapeOk(request.resource.data) &&
+        fwImmutableOk(resource.data, request.resource.data) &&
+        request.resource.data.updatedAt == request.time &&
+        fwTransitionOk(resource.data, request.resource.data) &&
+        mayWriteCurriculum(resource.data.organizationId);
+      // Only a never-activated draft may be deleted (children are removed first by the client; nothing is cascaded).
+      allow delete: if resource.data.status == 'draft' &&
+        !('activatedAt' in resource.data) &&
+        mayWriteCurriculum(resource.data.organizationId);
+
+      match /nodes/{nodeId} {
+        function nodeParent() { return get(fwPath(fwId)).data; }
+        function nodeShapeOk(d) {
+          return d.keys().hasAll(['schemaVersion', 'organizationId', 'kind', 'parentId', 'ancestors', 'order', 'code', 'name', 'status', 'createdAt', 'updatedAt']) &&
+            d.keys().hasOnly(['schemaVersion', 'organizationId', 'kind', 'parentId', 'ancestors', 'order', 'code', 'name', 'status', 'createdAt', 'updatedAt']) &&
+            d.schemaVersion == 1 &&
+            d.organizationId is string &&
+            d.kind in ['subject', 'unit', 'lesson'] &&
+            d.ancestors is list && d.ancestors.size() <= 3 &&
+            (d.ancestors.size() < 1 || d.ancestors[0] is string) &&
+            (d.ancestors.size() < 2 || d.ancestors[1] is string) &&
+            (d.ancestors.size() < 3 || d.ancestors[2] is string) &&
+            d.ancestors.toSet().size() == d.ancestors.size() &&
+            !(nodeId in d.ancestors) &&
+            ((d.parentId == null && d.ancestors.size() == 0) ||
+             (d.parentId is string && d.parentId != nodeId && d.ancestors.size() >= 1 && d.ancestors[d.ancestors.size() - 1] == d.parentId)) &&
+            d.order is int && d.order >= 0 && d.order <= 100000 &&
+            (d.code == null || (d.code is string && d.code.size() >= 1 && d.code.size() <= 40)) &&
+            d.name is string && d.name.size() >= 1 && d.name.size() <= 200 &&
+            d.status in ['active', 'retired'];
+        }
+        function nodeImmutableOk(b, a) {
+          return a.organizationId == b.organizationId && a.kind == b.kind && a.parentId == b.parentId &&
+            a.ancestors == b.ancestors && a.createdAt == b.createdAt && a.schemaVersion == b.schemaVersion;
+        }
+
+        allow get, list: if isAdmin() || mayReadCurriculum(resource.data.organizationId);
+        // The parent framework must exist, belong to the SAME organization and still be editable (draft or active). A framework and
+        // its first nodes can therefore never be created in one commit (get() sees pre-commit state): create the framework first.
+        allow create: if nodeShapeOk(request.resource.data) &&
+          request.resource.data.status == 'active' &&
+          request.resource.data.createdAt == request.time &&
+          request.resource.data.updatedAt == request.time &&
+          request.resource.data.organizationId == nodeParent().organizationId &&
+          nodeParent().status in ['draft', 'active'] &&
+          mayWriteCurriculum(request.resource.data.organizationId);
+        // Structure (parent, ancestors, kind) is immutable in P3; only label/code/order/status move, never in an archived framework.
+        allow update: if nodeShapeOk(request.resource.data) &&
+          nodeImmutableOk(resource.data, request.resource.data) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'code', 'order', 'status', 'updatedAt']) &&
+          request.resource.data.updatedAt == request.time &&
+          nodeParent().status in ['draft', 'active'] &&
+          mayWriteCurriculum(resource.data.organizationId);
+        // Deletable while the parent is a never-activated draft, or when the parent framework no longer exists (orphan cleanup).
+        allow delete: if mayWriteCurriculum(resource.data.organizationId) &&
+          (!exists(fwPath(fwId)) ||
+            (nodeParent().status == 'draft' && !('activatedAt' in nodeParent())));
+      }
+    }
+    // ===== LIBRARY V2 P3-S1 (CURRICULUM) - END =====
+
     // ---------------- Mặc định: chặn tất cả ----------------
     match /{document=**} {
       allow read, write: if false;

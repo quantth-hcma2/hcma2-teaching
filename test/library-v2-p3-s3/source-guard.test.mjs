@@ -26,6 +26,11 @@ test("no domain logic or payload is duplicated in the view: it never defines rea
   for (const token of ["schemaVersion", "createdBy", "statusChangedAt", "statusChangedBy", "createdAt:", "updatedAt:", "activatedAt:", "scope:"]) assert.ok(!view.includes(token), "payload key leaked: " + token);
   for (const token of ["buildNode", "planClone", "planDeleteDraft", "planSiblingMove", "canonicalizeNodeCode", "userCapabilities", "organizationMembers", "importBatches", "xlsx", "XLSX", "STATE.", "organization-context", "mapKeys", "deleteDoc", "data-fw-action=\"delete\"", "Sắp có", "Xóa"]) assert.ok(!view.includes(token), "excluded feature: " + token);
 });
+test("focus restoration is ONE contract: every dismissal path (Cancel, Escape, close after success, backdrop click) goes through restoreFocus; the shared openModal is not modified", () => {
+  assert.equal(count(view, "function restoreFocus()"), 1); assert.equal(count(view, "restoreFocus();"), 2, "dialogClose and the backdrop listener");
+  assert.equal(count(view, "querySelector(\"#modalBackdrop\")"), 1); assert.ok(view.includes("if (event.target === backdrop) restoreFocus();"));
+  // openModal/closeModal in index.html stay untouched: the reversal test above proves index.html differs from the baseline ONLY by the three approved edits
+});
 test("P3-S2 API consumption is exactly the approved set (model, queries, contract); every write goes through contract builders; nothing else is called", () => {
   const modelFns = new Set([...view.matchAll(/model\.([A-Za-z]+)/g)].map((m) => m[1]));
   assert.deepEqual([...modelFns].sort(), ["activationReadiness", "frameworkAvailability"]);   // used by the factory guard and the activation gate

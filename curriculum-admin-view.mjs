@@ -293,14 +293,24 @@ export function createCurriculumSection(deps) {
     }
 
     // ---------------------------------------------------------- dialog helpers (focus, Escape, return focus)
+    // ONE focus-restoration contract for every dismissal path (Cancel, Escape, successful close, backdrop click): back to the control that opened the dialog,
+    // or to the section heading when that control no longer exists (the list was repainted).
+    function restoreFocus() {
+      if (trigger && typeof trigger.focus === "function" && document.contains(trigger)) trigger.focus();
+      else { const title = host.querySelector("#orgCurriculumTitle"); if (title) title.focus(); }
+    }
     function dialogClose() {
       closeModal();
-      if (trigger && typeof trigger.focus === "function" && document.contains(trigger)) trigger.focus();
+      restoreFocus();
     }
     function dialogOpen(html, focusSelector) {
       openModal(html);
       const shell = modal$(".modal");   // the shell persists when the activation dialog re-renders its content, so Escape keeps working
+      if (shell) { shell.setAttribute("tabindex", "-1"); shell.style.outline = "none"; }   // a click on non-focusable dialog text keeps focus INSIDE the dialog, so Escape keeps working
       if (shell) shell.addEventListener("keydown", (event) => { if (event.key === "Escape" && !busy) { event.stopPropagation(); dialogClose(); } });
+      // The shared openModal already closes the dialog on a backdrop click (its listener was registered first); this one only applies the focus contract.
+      const backdrop = modalRoot() && modalRoot().querySelector("#modalBackdrop");
+      if (backdrop) backdrop.addEventListener("click", (event) => { if (event.target === backdrop) restoreFocus(); });
       const cancel = modal$("#orgFwCancel"); if (cancel) cancel.onclick = () => { if (!busy) dialogClose(); };
       const focusTarget = focusSelector && modal$(focusSelector); if (focusTarget) focusTarget.focus();
     }

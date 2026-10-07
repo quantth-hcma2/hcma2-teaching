@@ -313,6 +313,35 @@ await step("dialog accessibility: focus moves into the dialog, Escape closes it 
   await clickAction("d1", "activate"); await page.waitForSelector("#orgFwBlocked"); await page.keyboard.press("Escape"); await page.waitForFunction(() => !document.querySelector('#globalModal [role="dialog"]'));   // Escape still works after the dialog re-rendered
 });
 
+await step("backdrop dismissal follows the SAME focus-restoration contract as Cancel/Escape: focus returns to the opening control (rename, create, archive, activation incl. while still checking), or to the section heading when that control is gone; clicks inside the dialog do not dismiss; a busy write completes normally", async () => {
+  await setup({ frameworks: [FW("d1", "draft", 20), FW("a1", "active", 30)] });
+  const backdrop = () => page.click("#modalBackdrop", { position: { x: 4, y: 4 } });
+  const closed = () => page.waitForFunction(() => !document.querySelector('#globalModal [role="dialog"]'));
+  const focused = () => ev(() => { const a = document.activeElement; return a ? (a.dataset.fwAction ? a.dataset.fwAction + ":" + a.dataset.fwId : a.id) : null; });
+  await clickAction("d1", "rename"); await page.waitForSelector("#orgFwName"); await backdrop(); await closed(); assert.equal(await focused(), "rename:d1");
+  await page.click("#orgFwCreateBtn"); await page.waitForSelector("#orgFwName"); await backdrop(); await closed(); assert.equal(await focused(), "orgFwCreateBtn");
+  await clickAction("a1", "archive"); await page.waitForSelector("#orgFwConfirm"); await backdrop(); await closed(); assert.equal(await focused(), "archive:a1");
+  await clickAction("d1", "activate"); await page.waitForSelector("#orgFwBlocked"); await backdrop(); await closed(); assert.equal(await focused(), "activate:d1");
+  assert.equal((await calls("update")).length + (await calls("set")).length, 0);
+  // dismissed while the readiness check is still running: focus returns at once and the late result never repaints a closed dialog
+  await ev(() => { window.__h.FAKE.delays.getDocs = 500; });
+  await clickAction("d1", "activate"); await page.waitForSelector("#orgFwChecking"); await backdrop(); await closed(); assert.equal(await focused(), "activate:d1");
+  await page.waitForTimeout(900); assert.equal(await dialogOpen(), 0); await ev(() => { window.__h.FAKE.delays = {}; });
+  // a click INSIDE the dialog (title / content) is not a dismissal
+  await page.click("#orgFwCreateBtn"); await page.waitForSelector("#orgFwName"); await page.click("#orgFwDialogTitle"); assert.equal(await dialogOpen(), 1); await page.click("#orgFwNameHint"); assert.equal(await dialogOpen(), 1);
+  await page.keyboard.press("Escape"); await closed();
+  // the opening control no longer exists (list repainted): focus falls back to the section heading
+  await clickAction("d1", "rename"); await page.waitForSelector("#orgFwName");
+  await ev(() => document.querySelector('[data-fw-id="d1"][data-fw-action="rename"]').remove());
+  await backdrop(); await closed(); assert.equal(await focused(), "orgCurriculumTitle");
+  // dismissed while a write is in flight: dialog closes and focus is restored; the write still completes and the list refreshes
+  await ev(() => { window.__h.FAKE.delays.write = 500; });
+  await setup({ frameworks: [FW("d1", "draft", 20)] }); await ev(() => { window.__h.FAKE.delays.write = 500; });
+  await clickAction("d1", "rename"); await page.fill("#orgFwName", "Tên đang ghi"); await page.click("#orgFwSubmit"); await page.waitForTimeout(150);
+  await backdrop(); await closed(); await page.waitForFunction(() => document.querySelector("#orgCurriculumCard")?.getAttribute("aria-busy") === "false" && /Tên đang ghi/.test(document.querySelector("[data-fw-row]")?.textContent || ""), null, { timeout: 15000 });
+  assert.equal((await calls("update")).length, 1); assert.equal(await dialogOpen(), 0);
+});
+
 await step("non-admin mounts nothing; no console or page errors in the whole run", async () => {
   await setup({ frameworks: [FW("d1", "draft", 20)], isAdmin: false });
   assert.equal(await ev(() => document.getElementById("host").innerHTML.trim()), ""); assert.equal((await calls("getDocs")).length, 0);

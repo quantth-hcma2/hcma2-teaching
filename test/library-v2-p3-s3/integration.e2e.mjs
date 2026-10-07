@@ -109,8 +109,8 @@ const count = (sel) => page.locator(sel).count();
 const fws = async (orgId) => (await list("curriculumFrameworks")).filter((f) => f.organizationId === orgId);
 const fwGet = (id) => get(`curriculumFrameworks/${id}`);
 const rows = () => page.evaluate(() => [...document.querySelectorAll("[data-fw-row]")].map((r) => r.dataset.fwRow + ":" + r.dataset.fwStatus));
-// P3-S4 aligned: the combined tree offers MO on every row (the editor seam); the S3 lifecycle assertions below compare the REMAINING actions (the MO control is asserted by test/library-v2-p3-s4).
-const actionsOf = (id) => page.evaluate((i) => [...document.querySelectorAll(`[data-fw-id="${i}"][data-fw-action]`)].map((b) => b.dataset.fwAction).filter((a) => a !== "open"), id);
+// P3-S4 aligned: the combined tree offers MO (S4 editor seam) and NHÂN BẢN / XÓA BẢN NHÁP (S5) on rows; the S3 lifecycle assertions below compare the REMAINING actions (the MO control is asserted by test/library-v2-p3-s4).
+const actionsOf = (id) => page.evaluate((i) => [...document.querySelectorAll(`[data-fw-id="${i}"][data-fw-action]`)].map((b) => b.dataset.fwAction).filter((a) => !["open", "clone", "delete-draft"].includes(a)), id);
 const toastText = () => page.evaluate(() => [...document.querySelectorAll("#toast-root .toast")].map((t) => t.textContent).join(" | "));
 const waitSection = () => page.waitForFunction(() => document.querySelector("#orgCurriculumCard")?.getAttribute("aria-busy") === "false" && !document.querySelector("#orgCurriculumLoading"), null, { timeout: 30000 });
 const openOrg = async (id) => { await page.click('[data-nav="classes"]'); await openOrgs(); await page.click(`[data-org-open="${id}"]`); await page.waitForSelector("#orgDetailTitle"); await page.waitForSelector("#orgMembersCard", { timeout: 30000 }); await waitSection(); };

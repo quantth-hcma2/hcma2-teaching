@@ -75,7 +75,8 @@ test("no index, Storage, UI, dependency or data-model change (byte-pinned)", () 
   for (const f of ["storage.rules", "firebase.json", "cors.json"]) assert.ok(!existsSync(new URL(f, root)), f + " must not exist at the repository root");
   const html = read("index.html").toString("utf8");
   for (const n of ["curriculumFrameworks", "curriculum-model", "curriculum-queries", "importBatches", "libraryResources"]) assert.ok(!html.includes(n), "index.html must not reference " + n);
-  for (const f of ["curriculum-model.mjs", "curriculum-queries.mjs", "curriculum-admin-view.mjs"]) assert.ok(!existsSync(new URL(f, root)), f + " must not exist (P3-S2 is not part of this candidate)");
+  // P3-S2 aligned: the pure modules curriculum-model/queries/write-contract now exist (pinned and guarded by test/library-v2-p3-s2/source-guard.test.mjs); the UI module must still not exist (P3-S3/S4).
+  for (const f of ["curriculum-admin-view.mjs"]) assert.ok(!existsSync(new URL(f, root)), f + " must not exist (UI is not part of P3-S2)");
 });
 
 // ---------- behavior proof ----------

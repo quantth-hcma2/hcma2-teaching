@@ -628,12 +628,13 @@ import { createOrganizationWriteContract } from "./organization-write-contract.m
 import { getAdminFeature } from "./admin-feature-registry.mjs?v=20261003-p2s3";
 import { createOrganizationAdminScreen, createOrganizationWriter } from "./organization-admin-view.mjs?v=20261004-p2s4";
 import { createOrganizationMembershipSection, createMembershipWriter, createTeacherEmailSearchQuery } from "./organization-membership-view.mjs?v=20261006-o1";
-// Library V2 P3-S3: curriculum frameworks (Platform Admin). The model is imported WITHOUT a token on purpose: curriculum-queries/write-contract import it by bare URL,
-// so this keeps ONE model instance per page; the view receives every P3-S2 module by injection.
-import * as CURRICULUM_MODEL from "./curriculum-model.mjs";
+// Library V2 P3-S3/S4: curriculum frameworks and the node editor (Platform Admin). The model gained codeConflictOf in S4, so the page imports it WITH the S4 cache token
+// (curriculum-queries/write-contract still import it by bare URL: pure functions, errors are matched by name + code, never instanceof); every P3-S2 module is injected into the views.
+import * as CURRICULUM_MODEL from "./curriculum-model.mjs?v=20261007-p3s4";
 import { createCurriculumQueries } from "./curriculum-queries.mjs?v=20261007-p3s2";
 import { createCurriculumWriteContract } from "./curriculum-write-contract.mjs?v=20261007-p3s2";
-import { createCurriculumSection, createCurriculumWriter } from "./curriculum-admin-view.mjs?v=20261007-p3s3";
+import { createCurriculumSection, createCurriculumWriter, createCurriculumViewHelpers } from "./curriculum-admin-view.mjs?v=20261007-p3s4";
+import { createCurriculumEditor, createCurriculumNodeWriter } from "./curriculum-editor-view.mjs?v=20261007-p3s4";
 import { createActiveOrganizationLookup, createTeacherEnrollmentFlow } from "./teacher-organization-enrollment.mjs?v=20261005-o2";
 // GATE 5F.C: Knowledge Co-creation dashboard launch/close control for the Classroom Second Brain
 // (V2) projection. Talks only to the accepted, frozen Gate 5C HTTP contract — never touches
@@ -1763,12 +1764,19 @@ function adminOrganizations(c){
     esc, fmtDate, toast, mapError, openModal, closeModal, logAudit,
     queries:ORGANIZATION_QUERIES, platformQueries:ORGANIZATION_PLATFORM_QUERIES, contract:ORGANIZATION_CONTRACT,
     writer:createOrganizationWriter({collection,doc,setDoc,updateDoc}),
-    // P3-S3: curriculum framework list + lifecycle above the members section (Platform Admin only). No onOpenFramework hook yet: the node editor is P3-S4.
+    // P3-S3: curriculum framework list + lifecycle above the members section (Platform Admin only). The screen hands the section its MỞ hook when frameworkEditor exists (P3-S4).
     curriculumSection:createCurriculumSection({
       db, actorUid:STATE.user.uid, isPlatformAdmin:STATE.profile?.role==="admin",
       esc, fmtDate, toast, mapError, openModal, closeModal, logAudit,
       model:CURRICULUM_MODEL, queries:CURRICULUM_QUERIES, organizationQueries:ORGANIZATION_QUERIES, contract:CURRICULUM_CONTRACT,
       writer:createCurriculumWriter({collection,doc,setDoc,updateDoc})
+    }),
+    // P3-S4: the MÔN -> BÀI node editor (replaces Organization Detail; Platform Admin only). Activation stays in the S3 list.
+    frameworkEditor:createCurriculumEditor({
+      db, actorUid:STATE.user.uid, isPlatformAdmin:STATE.profile?.role==="admin",
+      esc, fmtDate, toast, mapError, openModal, closeModal, logAudit,
+      model:CURRICULUM_MODEL, viewHelpers:createCurriculumViewHelpers({model:CURRICULUM_MODEL}), queries:CURRICULUM_QUERIES, organizationQueries:ORGANIZATION_QUERIES, contract:CURRICULUM_CONTRACT,
+      writer:createCurriculumNodeWriter({collection,doc,setDoc,updateDoc,writeBatch})
     }),
     // P2-S4: ordinary membership management inside Organization Detail (Platform Admin only; no Organization Admin / capability work).
     membershipSection:createOrganizationMembershipSection({

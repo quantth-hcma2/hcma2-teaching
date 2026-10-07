@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { reverseS3IndexEdits, reverseS3AdminViewEdits, INDEX_EDITS, ADMIN_VIEW_EDITS, INDEX_ADDED } from "./s3-edits.mjs";
-import { reverseS4SectionViewEdits, reverseS4ModelEdits } from "../library-v2-p3-s4/s4-edits.mjs";   // P3-S4 aligned: every assertion below describes the P3-S3 candidate bytes (c95595a), i.e. with the approved S4 edits reversed first
+import { reverseS4SectionViewEdits, reverseS4ModelEdits, reverseS4IndexEdits } from "../library-v2-p3-s4/s4-edits.mjs";   // P3-S4 aligned: every assertion below describes the P3-S3 candidate bytes (c95595a), i.e. with the approved S4 edits reversed first
 
 const root = new URL("../../", import.meta.url);
 const text = (p) => readFileSync(new URL(p, root), "utf8");
@@ -52,7 +52,7 @@ test("edits to released files are EXACTLY the approved ones: reversing them rest
   assert.notEqual(sha("index.html"), "b7a46dc0a222c5c64ceb6b72c8de42652b80e3b8663391772366042be40be63e"); assert.notEqual(sha("organization-admin-view.mjs"), "7f7f535041db3ec2f31411cca8afdbabe985552174620105b5132bff5df4255f");
 });
 test("index.html wiring: versioned imports (queries/contract p3s2, view p3s3; model deliberately bare = one instance), one curriculumSection dependency, NO onOpenFramework hook, no new top-level menu entry, no Open destination", () => {
-  const html = text("index.html");
+  const html = reverseS4IndexEdits(text("index.html"));   // P3-S4 aligned: the P3-S3 candidate wiring (the S4 additions are guarded by test/library-v2-p3-s4)
   for (const block of Object.values(INDEX_ADDED)) assert.equal(count(html, block), 1);
   assert.ok(html.includes("import * as CURRICULUM_MODEL from \"./curriculum-model.mjs\";"));
   assert.ok(html.includes("from \"./curriculum-queries.mjs?v=20261007-p3s2\"") && html.includes("from \"./curriculum-write-contract.mjs?v=20261007-p3s2\"") && html.includes("from \"./curriculum-admin-view.mjs?v=20261007-p3s3\""));
@@ -87,11 +87,11 @@ test("ZERO-INDEX guard and identity: Rules (deployed P3-S1), firestore.indexes.j
   for (const f of ["storage.rules", "firebase.json", "cors.json"]) assert.ok(!existsSync(new URL(f, root)), f + " must not exist at the repository root");
   const manifest = JSON.parse(text("firestore.indexes.json")); assert.equal(manifest.indexes.length, 14);          // untouched, drifted manifest is never deployed
   assert.ok(!code("curriculum-queries.mjs").includes("orderBy")); assert.ok(!view.includes("orderBy"));
-  const rootMjs = readdirSync(new URL("./", root)).filter((f) => f.endsWith(".mjs") && f.startsWith("curriculum-")).sort();
+  const rootMjs = readdirSync(new URL("./", root)).filter((f) => f.endsWith(".mjs") && f.startsWith("curriculum-") && f !== "curriculum-editor-view.mjs").sort();   // P3-S4 aligned: the node editor view is guarded by test/library-v2-p3-s4
   assert.deepEqual(rootMjs, ["curriculum-admin-view.mjs", "curriculum-model.mjs", "curriculum-queries.mjs", "curriculum-write-contract.mjs"]);
 });
 test("harness and e2e fixtures are test-only: nothing under test/ is referenced by index.html or the production modules", () => {
-  const html = text("index.html");
+  const html = reverseS4IndexEdits(text("index.html"));
   assert.ok(!html.includes("harness.html") && !html.includes("test/library-v2-p3-s3"));
   assert.ok(!view.includes("harness"));
 });

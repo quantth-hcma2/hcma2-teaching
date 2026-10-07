@@ -107,3 +107,43 @@ export const ADMIN_VIEW_EDITS_S4 = [
 ];
 export const reverseS4AdminViewEdits = (src) => transform(src, ADMIN_VIEW_EDITS_S4, "P3-S4 organization-admin-view", "reverse");
 export const applyS4AdminViewEdits = (src) => transform(src, ADMIN_VIEW_EDITS_S4, "P3-S4 organization-admin-view", "forward");
+
+// ---------------------------------------------------------------- index.html: editor wiring (+ cache tokens bumped for the files that changed after the S3 candidate)
+const I_IMPORT_OLD = `// Library V2 P3-S3: curriculum frameworks (Platform Admin). The model is imported WITHOUT a token on purpose: curriculum-queries/write-contract import it by bare URL,
+// so this keeps ONE model instance per page; the view receives every P3-S2 module by injection.
+import * as CURRICULUM_MODEL from "./curriculum-model.mjs";
+import { createCurriculumQueries } from "./curriculum-queries.mjs?v=20261007-p3s2";
+import { createCurriculumWriteContract } from "./curriculum-write-contract.mjs?v=20261007-p3s2";
+import { createCurriculumSection, createCurriculumWriter } from "./curriculum-admin-view.mjs?v=20261007-p3s3";`;
+const I_IMPORT_NEW = `// Library V2 P3-S3/S4: curriculum frameworks and the node editor (Platform Admin). The model gained codeConflictOf in S4, so the page imports it WITH the S4 cache token
+// (curriculum-queries/write-contract still import it by bare URL: pure functions, errors are matched by name + code, never instanceof); every P3-S2 module is injected into the views.
+import * as CURRICULUM_MODEL from "./curriculum-model.mjs?v=20261007-p3s4";
+import { createCurriculumQueries } from "./curriculum-queries.mjs?v=20261007-p3s2";
+import { createCurriculumWriteContract } from "./curriculum-write-contract.mjs?v=20261007-p3s2";
+import { createCurriculumSection, createCurriculumWriter, createCurriculumViewHelpers } from "./curriculum-admin-view.mjs?v=20261007-p3s4";
+import { createCurriculumEditor, createCurriculumNodeWriter } from "./curriculum-editor-view.mjs?v=20261007-p3s4";`;
+const I_DEP_OLD = `    // P3-S3: curriculum framework list + lifecycle above the members section (Platform Admin only). No onOpenFramework hook yet: the node editor is P3-S4.
+    curriculumSection:createCurriculumSection({
+      db, actorUid:STATE.user.uid, isPlatformAdmin:STATE.profile?.role==="admin",
+      esc, fmtDate, toast, mapError, openModal, closeModal, logAudit,
+      model:CURRICULUM_MODEL, queries:CURRICULUM_QUERIES, organizationQueries:ORGANIZATION_QUERIES, contract:CURRICULUM_CONTRACT,
+      writer:createCurriculumWriter({collection,doc,setDoc,updateDoc})
+    }),`;
+const I_DEP_NEW = `    // P3-S3: curriculum framework list + lifecycle above the members section (Platform Admin only). The screen hands the section its MỞ hook when frameworkEditor exists (P3-S4).
+    curriculumSection:createCurriculumSection({
+      db, actorUid:STATE.user.uid, isPlatformAdmin:STATE.profile?.role==="admin",
+      esc, fmtDate, toast, mapError, openModal, closeModal, logAudit,
+      model:CURRICULUM_MODEL, queries:CURRICULUM_QUERIES, organizationQueries:ORGANIZATION_QUERIES, contract:CURRICULUM_CONTRACT,
+      writer:createCurriculumWriter({collection,doc,setDoc,updateDoc})
+    }),
+    // P3-S4: the MÔN -> BÀI node editor (replaces Organization Detail; Platform Admin only). Activation stays in the S3 list.
+    frameworkEditor:createCurriculumEditor({
+      db, actorUid:STATE.user.uid, isPlatformAdmin:STATE.profile?.role==="admin",
+      esc, fmtDate, toast, mapError, openModal, closeModal, logAudit,
+      model:CURRICULUM_MODEL, viewHelpers:createCurriculumViewHelpers({model:CURRICULUM_MODEL}), queries:CURRICULUM_QUERIES, organizationQueries:ORGANIZATION_QUERIES, contract:CURRICULUM_CONTRACT,
+      writer:createCurriculumNodeWriter({collection,doc,setDoc,updateDoc,writeBatch})
+    }),`;
+export const INDEX_EDITS_S4 = [[I_IMPORT_NEW, I_IMPORT_OLD], [I_DEP_NEW, I_DEP_OLD]];
+export const INDEX_ADDED_S4 = { I_IMPORT_NEW, I_DEP_NEW };
+export const reverseS4IndexEdits = (src) => transform(src, INDEX_EDITS_S4, "P3-S4 index.html", "reverse");
+export const applyS4IndexEdits = (src) => transform(src, INDEX_EDITS_S4, "P3-S4 index.html", "forward");

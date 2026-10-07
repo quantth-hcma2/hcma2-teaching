@@ -1,6 +1,7 @@
 // P3-S4 edits to files that earlier slices pinned: the exact edits plus reversals that restore the previously verified (P3-S3 candidate c95595a / P3-S2) bytes, so every older
 // byte-pin keeps its meaning and any OTHER change is still detected. Per-file helpers: model (additive codeConflictOf), the P3-S3 curriculum section view (seam options),
 // organization-admin-view (editor host) and index.html (editor wiring + token bumps).
+import { reverseS5ModelEdits, reverseS5SectionViewEdits, reverseS5IndexEdits } from "../library-v2-p3-s5/s5-edits.mjs";   // P3-S5 aligned: the reversal chain is S5 first, then S4 (then S3)
 const NL = String.fromCharCode(10), CRLF = String.fromCharCode(13, 10);
 export const withNl = (s, crlf) => (crlf ? s.split(NL).join(CRLF) : s);
 
@@ -42,7 +43,7 @@ export function codeInUse(nodes, code, exceptId) {
   return codeConflictOf(nodes, code, exceptId) !== null;
 }`;
 export const MODEL_EDITS = [[CODE_IN_USE_NEW, CODE_IN_USE_OLD]];
-export const reverseS4ModelEdits = (src) => transform(src, MODEL_EDITS, "P3-S4 model", "reverse");
+export const reverseS4ModelEdits = (src) => transform(reverseS5ModelEdits(src), MODEL_EDITS, "P3-S4 model", "reverse");
 export const applyS4ModelEdits = (src) => transform(src, MODEL_EDITS, "P3-S4 model", "forward");
 
 // ---------------------------------------------------------------- curriculum-admin-view.mjs (P3-S3 section): mount options = the seam used by the editor
@@ -78,7 +79,7 @@ export const SECTION_VIEW_EDITS = [
   [S_READY_NEW, S_READY_OLD],
   [S_OPEN_NEW, S_OPEN_OLD]
 ];
-export const reverseS4SectionViewEdits = (src) => transform(src, SECTION_VIEW_EDITS, "P3-S4 section view", "reverse");
+export const reverseS4SectionViewEdits = (src) => transform(reverseS5SectionViewEdits(src), SECTION_VIEW_EDITS, "P3-S4 section view", "reverse");
 export const applyS4SectionViewEdits = (src) => transform(src, SECTION_VIEW_EDITS, "P3-S4 section view", "forward");
 
 // ---------------------------------------------------------------- organization-admin-view.mjs: editor host (frameworkEditor dependency + showFrameworkEditor)
@@ -145,5 +146,5 @@ const I_DEP_NEW = `    // P3-S3: curriculum framework list + lifecycle above the
     }),`;
 export const INDEX_EDITS_S4 = [[I_IMPORT_NEW, I_IMPORT_OLD], [I_DEP_NEW, I_DEP_OLD]];
 export const INDEX_ADDED_S4 = { I_IMPORT_NEW, I_DEP_NEW };
-export const reverseS4IndexEdits = (src) => transform(src, INDEX_EDITS_S4, "P3-S4 index.html", "reverse");
+export const reverseS4IndexEdits = (src) => transform(reverseS5IndexEdits(src), INDEX_EDITS_S4, "P3-S4 index.html", "reverse");
 export const applyS4IndexEdits = (src) => transform(src, INDEX_EDITS_S4, "P3-S4 index.html", "forward");

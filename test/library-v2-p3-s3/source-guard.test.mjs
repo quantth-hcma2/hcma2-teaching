@@ -87,7 +87,7 @@ test("ZERO-INDEX guard and identity: Rules (deployed P3-S1), firestore.indexes.j
   for (const f of ["storage.rules", "firebase.json", "cors.json"]) assert.ok(!existsSync(new URL(f, root)), f + " must not exist at the repository root");
   const manifest = JSON.parse(text("firestore.indexes.json")); assert.equal(manifest.indexes.length, 14);          // untouched, drifted manifest is never deployed
   assert.ok(!code("curriculum-queries.mjs").includes("orderBy")); assert.ok(!view.includes("orderBy"));
-  const rootMjs = readdirSync(new URL("./", root)).filter((f) => f.endsWith(".mjs") && f.startsWith("curriculum-") && f !== "curriculum-editor-view.mjs").sort();   // P3-S4 aligned: the node editor view is guarded by test/library-v2-p3-s4
+  const rootMjs = readdirSync(new URL("./", root)).filter((f) => f.endsWith(".mjs") && f.startsWith("curriculum-") && f !== "curriculum-editor-view.mjs" && f !== "curriculum-clone-delete.mjs").sort();   // P3-S4 aligned: the node editor view is guarded by test/library-v2-p3-s4
   assert.deepEqual(rootMjs, ["curriculum-admin-view.mjs", "curriculum-model.mjs", "curriculum-queries.mjs", "curriculum-write-contract.mjs"]);
 });
 test("harness and e2e fixtures are test-only: nothing under test/ is referenced by index.html or the production modules", () => {

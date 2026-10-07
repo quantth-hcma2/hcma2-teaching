@@ -44,6 +44,7 @@ test("S4.0 edits to organization-admin-view are exactly the approved ones: optio
 
 // ================================================================ S4.1 / S4.2: the editor module, the wiring and the unchanged-everything-else guarantees
 import { reverseS4IndexEdits, INDEX_EDITS_S4, INDEX_ADDED_S4 } from "./s4-edits.mjs";
+import { reverseS5IndexEdits } from "../library-v2-p3-s5/s5-edits.mjs";   // P3-S5 aligned: the S4 wiring assertions describe the S4 candidate bytes, i.e. with the S5 index edits reversed
 import { existsSync, readdirSync } from "node:fs";
 const NL = String.fromCharCode(10);
 const code = (p) => text(p).split(NL).filter((l) => !l.trim().startsWith("//")).join(NL);
@@ -93,7 +94,7 @@ test("S4 edits to released/S3 files are EXACTLY the approved ones: reversal rest
   assert.equal(INDEX_EDITS_S4.length, 2);
 });
 test("index.html wiring: model/view/editor imported with the S4 cache token (queries/contract keep the S2 token), ONE frameworkEditor dependency after curriculumSection, NO construction-time onOpenFramework hook, no new menu entry, no route", () => {
-  const html = text("index.html");
+  const html = reverseS5IndexEdits(text("index.html"));
   for (const block of Object.values(INDEX_ADDED_S4)) assert.equal(count(html, block), 1);
   assert.ok(html.includes("import * as CURRICULUM_MODEL from \"./curriculum-model.mjs?v=20261007-p3s4\";"));
   assert.ok(html.includes("from \"./curriculum-queries.mjs?v=20261007-p3s2\"") && html.includes("from \"./curriculum-write-contract.mjs?v=20261007-p3s2\""));
@@ -129,7 +130,7 @@ test("ZERO-INDEX guard and identity: Rules (deployed P3-S1), firestore.indexes.j
   assert.equal(JSON.parse(text("firestore.indexes.json")).indexes.length, 14);
   assert.ok(!code("curriculum-queries.mjs").includes("orderBy")); assert.ok(!editor.includes("orderBy"));
   const rootMjs = readdirSync(new URL("./", root)).filter((f) => f.endsWith(".mjs") && f.startsWith("curriculum-")).sort();
-  assert.deepEqual(rootMjs, ["curriculum-admin-view.mjs", "curriculum-editor-view.mjs", "curriculum-model.mjs", "curriculum-queries.mjs", "curriculum-write-contract.mjs"]);
+  assert.deepEqual(rootMjs, ["curriculum-admin-view.mjs", "curriculum-clone-delete.mjs", "curriculum-editor-view.mjs", "curriculum-model.mjs", "curriculum-queries.mjs", "curriculum-write-contract.mjs"]);
 });
 test("harness and e2e fixtures are test-only: nothing under test/ is referenced by index.html or the production modules", () => {
   const html = text("index.html");

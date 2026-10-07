@@ -62,9 +62,10 @@ export function createCurriculumViewHelpers({ model } = {}) {
   const truncationNote = () => "Chỉ hiển thị " + FRAMEWORK_LIST_LIMIT + " khung đầu tiên; còn nhiều khung hơn chưa được hiển thị.";
 
   // ---- what the UI offers (mirrors the Rules through model.frameworkAvailability; never an enabled control the Rules would reject)
-  function controlsFor(framework, organization, { canOpen = false } = {}) {
+  // P3-S5: lifecycleTools (clone / delete-draft) is true only when the clone tools are injected; clone needs an ACTIVE organization, delete-draft a never-activated draft.
+  function controlsFor(framework, organization, { canOpen = false, lifecycleTools = false } = {}) {
     const a = frameworkAvailability(framework, organization);
-    return freeze({ open: !!canOpen, openReadOnly: a.readOnly, rename: a.canRename, activate: a.canActivate, archive: a.canArchive, restore: a.canRestore });
+    return freeze({ open: !!canOpen, openReadOnly: a.readOnly, rename: a.canRename, activate: a.canActivate, archive: a.canArchive, restore: a.canRestore, clone: !!lifecycleTools && a.organizationWritable, deleteDraft: !!lifecycleTools && a.canDelete });
   }
   const createDisabledReason = (organization) => (organization && organization.status === "active" ? null : "Đơn vị đã lưu trữ: không thể tạo hoặc thay đổi khung chương trình. Hãy khôi phục đơn vị trước.");
 
@@ -138,8 +139,10 @@ export function createCurriculumViewHelpers({ model } = {}) {
     const buttons = [
       controls.open ? button("open", "", controls.openReadOnly ? "MỞ (CHỈ XEM)" : "MỞ") : "",
       controls.rename ? button("rename", "", "ĐỔI TÊN") : "",
+      controls.clone ? button("clone", "", "NHÂN BẢN") : "",
       controls.activate ? `<button class="btn btn-ok" type="button" data-fw-action="activate" data-fw-id="${id}" aria-label="KÍCH HOẠT — ${name}">KÍCH HOẠT</button>` : "",
       controls.archive ? button("archive", "", "LƯU TRỮ") : "",
+      controls.deleteDraft ? `<button class="btn btn-outline" type="button" style="color:var(--danger);border-color:var(--danger)" data-fw-action="delete-draft" data-fw-id="${id}" aria-label="XÓA BẢN NHÁP — ${name}">XÓA BẢN NHÁP</button>` : "",
       controls.restore ? `<button class="btn btn-ok" type="button" data-fw-action="restore" data-fw-id="${id}" aria-label="KHÔI PHỤC — ${name}">KHÔI PHỤC</button>` : ""
     ].join(" ");
     return `<li data-fw-row="${id}" data-fw-status="${attr(esc, framework.status)}" style="border:1px solid var(--border);border-radius:12px;padding:12px;margin-top:8px${flash ? ";background:#f0fdf4" : ""}">
@@ -150,7 +153,7 @@ export function createCurriculumViewHelpers({ model } = {}) {
   }
 
   // phase: "loading" | "error" | "ready". All variants share the card + header so the create control is always at the same place.
-  function renderSectionHtml({ phase, organization, items = [], truncated = false, errorMessage = "", canOpen = false, esc, fmtDate, flashId = null }) {
+  function renderSectionHtml({ phase, organization, items = [], truncated = false, errorMessage = "", canOpen = false, lifecycleTools = false, esc, fmtDate, flashId = null }) {
     const archived = !!organization && organization.status !== "active";
     const reason = createDisabledReason(organization);
     const summary = phase === "ready" && items.length ? `<div class="small" id="orgCurriculumSummary" style="font-weight:650">${esc(summarizeFrameworks(items, truncated))}</div>` : "";
@@ -162,7 +165,7 @@ export function createCurriculumViewHelpers({ model } = {}) {
     else if (!items.length) body = `<div class="empty-state" id="orgCurriculumEmpty"><div class="ic">📚</div><h3>Chưa có khung chương trình</h3><p>${archived ? "Đơn vị đã lưu trữ: chưa có khung chương trình nào để xem." : "Tạo khung đầu tiên để bắt đầu xây dựng Môn và Bài cho đơn vị này."}</p></div>`;
     else {
       const groups = groupFrameworksByStatus(items).map((group) => `<h4 class="mt-14" style="margin-bottom:0" data-fw-group="${attr(esc, group.status)}">${esc(group.label)} <span class="mut">(${group.items.length})</span></h4>
-        <ul style="list-style:none;padding:0;margin:0">${group.items.map((framework) => renderRowHtml({ framework, organization, controls: controlsFor(framework, organization, { canOpen }), esc, fmtDate, flash: framework.id === flashId })).join("")}</ul>`).join("");
+        <ul style="list-style:none;padding:0;margin:0">${group.items.map((framework) => renderRowHtml({ framework, organization, controls: controlsFor(framework, organization, { canOpen, lifecycleTools }), esc, fmtDate, flash: framework.id === flashId })).join("")}</ul>`).join("");
       body = groups + (truncated ? `<p class="small mut mt-8" id="orgCurriculumTruncated">${esc(truncationNote())}</p>` : "");
     }
     return `<section class="card" id="orgCurriculumCard" aria-labelledby="orgCurriculumTitle" aria-busy="${phase === "loading" ? "true" : "false"}">
@@ -235,7 +238,7 @@ export function createCurriculumWriter({ collection, doc, setDoc, updateDoc }) {
 class FlowAbort extends Error { constructor(kind) { super(kind); this.kind = kind; } }
 
 export function createCurriculumSection(deps) {
-  const { db, actorUid, isPlatformAdmin, esc, fmtDate, toast, mapError, openModal, closeModal, logAudit, model, queries, organizationQueries, contract, writer, onOpenFramework } = deps;
+  const { db, actorUid, isPlatformAdmin, esc, fmtDate, toast, mapError, openModal, closeModal, logAudit, model, queries, organizationQueries, contract, writer, onOpenFramework, cloneTools } = deps;
   const H = createCurriculumViewHelpers({ model });
   const modalRoot = () => document.getElementById("globalModal");
   const modal$ = (selector) => { const root = modalRoot(); return root ? root.querySelector(selector) : null; };
@@ -255,7 +258,7 @@ export function createCurriculumSection(deps) {
 
     // ---------------------------------------------------------- painting / loading
     function paint(phase, extra = {}) {
-      host.innerHTML = H.renderSectionHtml({ phase, organization: org, items, truncated, canOpen, esc, fmtDate, flashId, ...extra });
+      host.innerHTML = H.renderSectionHtml({ phase, organization: org, items, truncated, canOpen, lifecycleTools: !!cloneTools, esc, fmtDate, flashId, ...extra });
       const create = host.querySelector("#orgFwCreateBtn");
       if (create && !create.disabled) create.onclick = () => { trigger = create; openCreate(); };
       const retry = host.querySelector("#orgCurriculumRetry");
@@ -430,6 +433,8 @@ export function createCurriculumSection(deps) {
       if (action === "rename") return openRename(framework);
       if (action === "activate") return openActivation(framework);
       if (action === "archive" || action === "restore") return openConfirm(action, framework);
+      if (action === "clone") return openClone(framework);
+      if (action === "delete-draft") return openDeleteDraft(framework);
     }
 
     function openRename(framework) {
@@ -525,6 +530,102 @@ export function createCurriculumSection(deps) {
           } finally { const c = modal$("#orgFwConfirm"); if (c && document.contains(c) && label) c.textContent = label; }
         });
       }
+    }
+
+    // ---------------------------------------------------------- P3-S5: clone / delete never-activated draft (only when cloneTools is injected; see curriculum-clone-delete.mjs)
+    const X = cloneTools && cloneTools.helpers, CW = cloneTools && cloneTools.writer;
+    class CloneVerifyError extends Error {}
+    const progress = (message) => { const el = modal$("#orgFwProgress"); if (el) { el.textContent = message; el.classList.remove("hidden"); } };
+    const dialogIsOpen = () => !!(modalRoot() && modal$('[role="dialog"]'));
+    // Rollback of a failed clone: delete the nodes, then the never-activated draft framework (children first, never orphans). false = could not finish (the leftover is a
+    // detectably incomplete draft: activation is blocked and it can be deleted with XÓA BẢN NHÁP).
+    async function rollbackClone(destId) {
+      try {
+        const existing = await queries.frameworkById(db, destId, { organizationId: org.id });
+        if (!existing) return true;   // the framework create never reached the server: nothing to undo
+        const result = await queries.nodesOfFramework(db, destId, org.id);
+        for (const ids of X.planDeleteDraft(result.items).chunks) await CW.deleteNodes(db, destId, ids);
+        await CW.deleteFramework(db, destId);
+        return true;
+      } catch { return false; }
+    }
+    function openClone(framework) {
+      if (!X || busy || org.status !== "active") return;
+      dialogOpen(X.renderCloneFormHtml({ framework, defaultName: X.defaultCloneName(framework.name), esc }), "#orgFwName");
+      const form = modal$("#orgFwForm"), input = modal$("#orgFwName");
+      form.onsubmit = (event) => {
+        event.preventDefault();
+        exclusive(async () => {
+          hide(modal$("#orgFwNameErr")); hide(modal$("#orgFwErr")); hide(modal$("#orgFwProgress"));
+          let name;
+          try { name = H.validateName(input.value); } catch { show(modal$("#orgFwNameErr"), H.MESSAGES.name); input.focus(); return; }
+          const submit = modal$("#orgFwSubmit"), label = submit && submit.textContent; if (submit) submit.textContent = "ĐANG NHÂN BẢN…";
+          let destId = null, started = false, plan = null;
+          try {
+            const fresh = await readFresh(framework.id, { withNodes: true });
+            if (H.frameworkChangedSince(framework, fresh.framework, { compareUpdatedAt: true }).changed) throw new FlowAbort("stale");
+            destId = CW.newFrameworkId(db);
+            plan = X.planClone({ nodes: fresh.nodes, organizationId: org.id, newId: () => CW.newNodeId(db, destId) });
+            if (!plan.ok) { show(modal$("#orgFwErr"), plan.message); return; }
+            // everything is validated and built BEFORE the first write (structure, depth, canonical duplicate codes, node cap)
+            const frameworkData = contract.buildFrameworkCreate({ organization: fresh.organization, name, cloneSource: { framework: fresh.framework, nodeCount: plan.total } }, actorUid);
+            const payloads = X.buildClonePayloads({ contract, organization: fresh.organization, destination: { id: destId, organizationId: org.id, status: "draft" }, plan });
+            const itemOf = (item) => ({ id: item.newId, data: payloads.creates.get(item.newId) });
+            started = true;
+            progress("Đang tạo khung…");
+            await CW.createFramework(db, destId, frameworkData);
+            let done = 0;
+            for (const items of plan.createChunks) { await CW.createNodes(db, destId, items.map(itemOf)); done += items.length; progress("Đã sao chép " + done + "/" + plan.total + " nút…"); }
+            for (const ids of plan.retireChunks) await CW.updateNodes(db, destId, ids.map((id) => ({ id, data: payloads.retires.get(id) })));
+            if (plan.finalItems.length) await CW.createNodes(db, destId, plan.finalItems.map(itemOf));   // the LAST node: the count reaches nodeCount only now
+            progress("Đang xác minh…");
+            const check = await queries.nodesOfFramework(db, destId, org.id);
+            if (check.tooLarge || !X.verifyClone(plan, check.items)) throw new CloneVerifyError("verify");
+            await audit("curriculum.framework.clone", destId, { name, sourceFrameworkId: framework.id, nodeCount: plan.total });
+            return succeed("Đã nhân bản khung chương trình.", destId);
+          } catch (error) {
+            if (error instanceof FlowAbort && error.kind === "tooLarge") { show(modal$("#orgFwErr"), X.MESSAGES.tooLarge); return; }
+            if (!started) return onFailure(error, { frameworkId: framework.id, expectStatus: framework.status });   // nothing was written
+            // a lost response does not mean a failed clone: if the destination is complete and verified, finish normally (never roll back a good clone)
+            let good = false;
+            try { const check = await queries.nodesOfFramework(db, destId, org.id); good = !check.tooLarge && X.verifyClone(plan, check.items); } catch { /* unknown: fall through to the rollback */ }
+            if (good) { await audit("curriculum.framework.clone", destId, { name, sourceFrameworkId: framework.id, nodeCount: plan.total }); return succeed("Đã nhân bản khung chương trình.", destId); }
+            const cleaned = await rollbackClone(destId);
+            const contractInfo = H.describeContractError(error);
+            const kind = H.classifyFirebaseError(error, { online: typeof navigator === "undefined" ? true : navigator.onLine });
+            const reason = error instanceof CloneVerifyError ? X.MESSAGES.cloneVerify : contractInfo ? contractInfo.message : kind === "permission-denied" ? H.MESSAGES.permissionWrite : mapError(error);
+            const text = reason + " " + (cleaned ? X.MESSAGES.cloneRolledBack : X.MESSAGES.cloneLeftover);
+            if (dialogIsOpen() && modal$("#orgFwErr")) show(modal$("#orgFwErr"), text); else { toast(text, "err"); live(text); }
+            await load();   // show the TRUE state of the list
+          } finally { if (submit && document.contains(submit) && label) submit.textContent = label; }
+        });
+      };
+    }
+    function openDeleteDraft(framework) {
+      if (!X || busy || org.status !== "active") return;
+      dialogOpen(X.renderDeleteDraftHtml({ framework, esc }), "#orgFwCancel");
+      const ok = modal$("#orgFwConfirm");
+      ok.onclick = () => exclusive(async () => {
+        hide(modal$("#orgFwErr")); hide(modal$("#orgFwProgress"));
+        const label = ok.textContent; ok.textContent = "ĐANG XÓA…";
+        let started = false;
+        try {
+          const fresh = await readFresh(framework.id, { withNodes: true });
+          if (H.frameworkChangedSince(framework, fresh.framework).changed || !model.frameworkAvailability(fresh.framework, fresh.organization).canDelete) throw new FlowAbort("stale");
+          const plan = X.planDeleteDraft(fresh.nodes);
+          started = true;
+          let done = 0;
+          for (const ids of plan.chunks) { await CW.deleteNodes(db, framework.id, ids); done += ids.length; progress("Đã xóa " + done + "/" + plan.total + " nút…"); }
+          await CW.deleteFramework(db, framework.id);   // the framework goes LAST: a failure before this leaves a smaller draft, never orphan nodes
+          await audit("curriculum.framework.deleteDraft", framework.id, { name: framework.name, nodeCount: plan.total });
+          return succeed("Đã xóa bản nháp.", null);
+        } catch (error) {
+          if (error instanceof FlowAbort && error.kind === "tooLarge") { show(modal$("#orgFwErr"), X.MESSAGES.tooLarge); return; }
+          await onFailure(error, { frameworkId: framework.id, expectStatus: "draft" });
+          const line = modal$("#orgFwErr");
+          if (started && line && !line.classList.contains("hidden")) line.textContent += " " + X.MESSAGES.deletePartial;
+        } finally { if (document.contains(ok) && label) ok.textContent = label; }
+      });
     }
 
     await load();

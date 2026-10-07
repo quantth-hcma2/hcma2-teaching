@@ -101,7 +101,9 @@ test("clone marker: fields bounded; the source must belong to the SAME organizat
   const fw = { status: "draft", cloneSource: { frameworkId: "s", nodeCount: 2 } };
   assert.deepEqual({ ...M.cloneCompleteness(fw, [n("a"), n("b")]) }, { isClone: true, complete: true, expected: 2, actual: 2 });
   assert.equal(M.cloneCompleteness(fw, [n("a")]).complete, false);
-  assert.equal(M.cloneCompleteness(fw, [n("a"), n("b", { status: "retired" })]).actual, 1);   // retired nodes are not counted (as P3 Design R1 section 10)
+  // P3-S5 (D1 resolved): every node counts (retired too) and completeness is a monotone LOWER BOUND, so legitimate later edits never make a finished clone look incomplete
+  assert.equal(M.cloneCompleteness(fw, [n("a"), n("b", { status: "retired" })]).actual, 2); assert.equal(M.cloneCompleteness(fw, [n("a"), n("b", { status: "retired" })]).complete, true);
+  assert.equal(M.cloneCompleteness(fw, [n("a"), n("b"), n("c")]).complete, true, "nodes added after the clone");
 });
 
 test("structure: depth <= 4 (at most 3 ancestors), unique string ancestors, no self in ancestors, parent == last ancestor", () => {

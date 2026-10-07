@@ -1,0 +1,119 @@
+<!doctype html>
+<!-- TEST FIXTURE ONLY (never shipped): hosts the P3-S3 section WITH the P3-S5 clone tools (curriculum-admin-view.mjs + curriculum-clone-delete.mjs) in a real browser against an in-memory fake
+     Firestore with batch support and failure injection, so every editor state, race and failure can be provoked deterministically. The REAL P3-S2 modules, the real
+     editor and the real S3 section are used; only Firestore, the Organization lookup, toast, modal, audit and error mapping are faked (copies of the few index.html
+     helpers). Loaded by controller.e2e.mjs. -->
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>P3-S5 clone/delete harness</title>
+<style id="app-css"></style></head>
+<body><div id="app" style="max-width:1000px;margin:0 auto;padding:120px 16px 16px"><div id="host"></div></div><div id="toast-root"></div>
+<script type="module">
+import * as MODEL from "/curriculum-model.mjs";
+import { createCurriculumQueries } from "/curriculum-queries.mjs";
+import { createCurriculumWriteContract } from "/curriculum-write-contract.mjs";
+import { createCurriculumSection, createCurriculumWriter, createCurriculumViewHelpers } from "/curriculum-admin-view.mjs";
+import { createCloneDeleteHelpers, createCurriculumCloneWriter } from "/curriculum-clone-delete.mjs";
+
+const html = await (await fetch("/index.html")).text();
+document.getElementById("app-css").textContent = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n");
+
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtDate = (ts) => (ts && ts.seconds ? new Date(ts.seconds * 1000).toISOString().slice(0, 10) : "—");
+const toast = (msg, type) => { const t = document.createElement("div"); t.className = "toast " + (type || ""); t.textContent = msg; document.getElementById("toast-root").appendChild(t); };
+const mapError = (err) => { const code = String((err && err.code) || ""); const map = { "permission-denied": "Bạn không có quyền thực hiện thao tác này.", unavailable: "Không thể kết nối máy chủ. Đang thử kết nối lại…", "deadline-exceeded": "Kết nối quá chậm. Vui lòng thử lại.", "not-found": "Không tìm thấy dữ liệu yêu cầu." }; return map[code] || "Đã xảy ra lỗi. Vui lòng thử lại. (" + (code || "unknown") + ")"; };
+function openModal(inner) { let host = document.getElementById("globalModal"); if (!host) { host = document.createElement("div"); host.id = "globalModal"; document.body.appendChild(host); } host.innerHTML = `<div class="modal-backdrop" id="modalBackdrop"><div class="modal">${inner}</div></div>`; document.getElementById("modalBackdrop").addEventListener("click", (e) => { if (e.target.id === "modalBackdrop") closeModal(); }); }
+function closeModal() { const h = document.getElementById("globalModal"); if (h) h.innerHTML = ""; }
+
+const FAKE = { store: new Map(), calls: [], audit: [], clock: 1000, autoId: 0, delays: {}, failures: [], beforeWrite: null, beforeRead: null };
+const err = (code) => Object.assign(new Error(code), { code });
+const stamp = (seconds) => ({ seconds, nanoseconds: 0, toMillis: () => seconds * 1000 });
+const resolve = (data) => Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v && v.__serverTimestamp ? stamp(++FAKE.clock) : v]));
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const key = (ref) => ref.path.join("/");
+const fakeApi = {
+  collection: (db, ...path) => ({ kind: "col", path }),
+  doc: (a, ...p) => (a && a.kind === "col" ? { kind: "doc", path: [...a.path, "AUTO" + String(++FAKE.autoId).padStart(3, "0")], id: "AUTO" + String(FAKE.autoId).padStart(3, "0") } : { kind: "doc", path: p, id: p[p.length - 1] }),
+  where: (field, op, value) => ({ type: "where", field, op, value }), limit: (n) => ({ type: "limit", n }),
+  query: (source, ...constraints) => ({ source, constraints }),
+  getDocs: async (q) => {
+    FAKE.calls.push({ op: "getDocs", path: q.source.path.join("/"), constraints: q.constraints.map((c) => c.type + (c.field ? ":" + c.field + c.op + c.value : ":" + c.n)) });
+    if (FAKE.delays.getDocs) await wait(FAKE.delays.getDocs);
+    if (FAKE.beforeRead) await FAKE.beforeRead("getDocs", q.source.path.join("/"));
+    const f = FAKE.failures.findIndex((x) => x.op === "read" && (!x.path || q.source.path.join("/").startsWith(x.path)));
+    if (f >= 0) { const [x] = FAKE.failures.splice(f, 1); throw err(x.code); }
+    const prefix = q.source.path.join("/") + "/", where = q.constraints.find((c) => c.type === "where"), lim = q.constraints.find((c) => c.type === "limit").n;
+    const docs = [...FAKE.store.entries()].filter(([p]) => p.startsWith(prefix) && p.slice(prefix.length).split("/").length === 1 && (!where || FAKE.store.get(p)[where.field] === where.value)).sort(([a], [b]) => (a < b ? -1 : 1)).slice(0, lim).map(([p, d]) => ({ id: p.split("/").pop(), data: () => ({ ...d }) }));
+    return { docs };
+  },
+  getDoc: async (ref) => {
+    FAKE.calls.push({ op: "getDoc", path: key(ref) });
+    if (FAKE.beforeRead) await FAKE.beforeRead("getDoc", key(ref));
+    const f = FAKE.failures.findIndex((x) => x.op === "readDoc" && (!x.path || key(ref).startsWith(x.path)));
+    if (f >= 0) { const [x] = FAKE.failures.splice(f, 1); throw err(x.code); }
+    const d = FAKE.store.get(key(ref));
+    return { id: ref.id, exists: () => !!d, data: () => (d ? { ...d } : undefined) };
+  }
+};
+const takeFailure = () => { const f = FAKE.failures.findIndex((x) => x.op === "write"); return f >= 0 ? FAKE.failures.splice(f, 1)[0] : null; };
+async function write(op, ref, data) {
+  FAKE.calls.push({ op, path: key(ref), data });
+  if (FAKE.delays.write) await wait(FAKE.delays.write);
+  if (FAKE.beforeWrite) await FAKE.beforeWrite(op, key(ref), data);
+  const fail = takeFailure();
+  const apply = () => { if (op === "update") { if (!FAKE.store.has(key(ref))) throw err("not-found"); FAKE.store.set(key(ref), { ...FAKE.store.get(key(ref)), ...resolve(data) }); } else FAKE.store.set(key(ref), resolve(data)); };
+  if (fail && fail.applied) { apply(); throw err(fail.code); }
+  if (fail) throw err(fail.code);
+  apply();
+}
+// atomic batch (set | update | delete): nothing is applied unless every operation can be applied; a failure with applied:true applies all and then reports the lost response
+function writeBatch() {
+  const ops = [];
+  return {
+    set(ref, data) { ops.push({ kind: "set", ref, data }); },
+    update(ref, data) { ops.push({ kind: "update", ref, data }); },
+    delete(ref) { ops.push({ kind: "delete", ref }); },
+    async commit() {
+      FAKE.calls.push({ op: "batch", kinds: [...new Set(ops.map((o) => o.kind))].join(","), size: ops.length, paths: ops.map((o) => key(o.ref)), data: ops.map((o) => o.data) });
+      if (FAKE.delays.write) await wait(FAKE.delays.write);
+      if (FAKE.beforeWrite) await FAKE.beforeWrite("batch", ops.map((o) => key(o.ref)).join(","), ops);
+      const fail = takeFailure();
+      const apply = () => { for (const o of ops) if (o.kind === "update" && !FAKE.store.has(key(o.ref))) throw err("not-found"); for (const o of ops) { if (o.kind === "set") FAKE.store.set(key(o.ref), resolve(o.data)); else if (o.kind === "update") FAKE.store.set(key(o.ref), { ...FAKE.store.get(key(o.ref)), ...resolve(o.data) }); else FAKE.store.delete(key(o.ref)); } };
+      if (fail && fail.applied) { apply(); throw err(fail.code); }
+      if (fail) throw err(fail.code);
+      apply();
+    }
+  };
+}
+async function deleteDocFake(ref) {
+  FAKE.calls.push({ op: "deleteDoc", path: key(ref) });
+  if (FAKE.beforeWrite) await FAKE.beforeWrite("deleteDoc", key(ref), null);
+  const fail = takeFailure(); if (fail) { if (fail.applied) FAKE.store.delete(key(ref)); throw err(fail.code); }
+  FAKE.store.delete(key(ref));
+}
+const sectionWriter = createCurriculumWriter({ collection: fakeApi.collection, doc: fakeApi.doc, setDoc: (ref, data) => write("set", ref, data), updateDoc: (ref, data) => write("update", ref, data) });
+const cloneWriter = createCurriculumCloneWriter({ collection: fakeApi.collection, doc: fakeApi.doc, setDoc: (ref, data) => write("set", ref, data), writeBatch, deleteDoc: deleteDocFake, maxBatch: 400 });
+const organizationQueries = { organizationById: async (db, id) => { FAKE.calls.push({ op: "org", id }); if (FAKE.beforeRead) await FAKE.beforeRead("org", id); const d = FAKE.store.get("organizations/" + id); return d ? { id, ...d } : null; } };
+const queries = createCurriculumQueries({ ...fakeApi });
+const contract = createCurriculumWriteContract({ serverTimestamp: () => ({ __serverTimestamp: true }) });
+const viewHelpers = createCurriculumViewHelpers({ model: MODEL });
+const logAudit = async (action, entityType, entityId, detail) => { FAKE.audit.push({ action, entityType, entityId, detail }); };
+const commonDeps = (isAdmin) => ({ db: {}, actorUid: "pa1", isPlatformAdmin: isAdmin, esc, fmtDate, toast, mapError, openModal, closeModal, logAudit, model: MODEL, queries, organizationQueries, contract });
+const cloneTools = { helpers: createCloneDeleteHelpers({ model: MODEL }), writer: cloneWriter };
+
+window.__h = {
+  FAKE, MODEL, stamp,
+  reset() { FAKE.store.clear(); FAKE.calls.length = 0; FAKE.audit.length = 0; FAKE.delays = {}; FAKE.failures.length = 0; FAKE.beforeWrite = null; FAKE.beforeRead = null; FAKE.clock = 1000; FAKE.autoId = 0; document.getElementById("host").innerHTML = ""; document.getElementById("toast-root").innerHTML = ""; closeModal(); window.__backs = []; window.__flow = []; },
+  seedOrg(org) { const { id, ...rest } = org; FAKE.store.set("organizations/" + id, rest); },
+  seedFramework(fw) { const { id, ...rest } = fw; FAKE.store.set("curriculumFrameworks/" + id, rest); },
+  seedNode(fwId, node) { const { id, ...rest } = node; FAKE.store.set("curriculumFrameworks/" + fwId + "/nodes/" + id, rest); },
+  patch(path, fields) { FAKE.store.set(path, { ...FAKE.store.get(path), ...fields }); },
+  remove(path) { FAKE.store.delete(path); },
+  get(path) { const d = FAKE.store.get(path); return d ? JSON.parse(JSON.stringify(d, (k, v) => (v && v.seconds !== undefined ? { seconds: v.seconds } : v))) : null; },
+  list(prefix) { return [...FAKE.store.keys()].filter((p) => p.startsWith(prefix)); },
+  async mount({ orgId = "orgA", isAdmin = true, tools = true } = {}) {
+    const org = { id: orgId, ...FAKE.store.get("organizations/" + orgId) };
+    const section = createCurriculumSection({ ...commonDeps(isAdmin), writer: sectionWriter, ...(tools ? { cloneTools } : {}) });
+    await section.mount(document.getElementById("host"), org);
+  }
+};
+window.__ready = true;
+</script></body></html>

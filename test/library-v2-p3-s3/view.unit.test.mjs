@@ -48,7 +48,8 @@ test("summary and truncation copy: counts per status; truncation says the FIRST 
 });
 
 test("controls matrix (P3 mini-spec section 5): every framework status x organization status, with and without the Open hook; archived organization = nothing mutable", () => {
-  const C = (status, orgStatus, canOpen) => ({ ...H.controlsFor(fw("f", status), org(orgStatus), { canOpen }) });
+  // P3-S5 aligned: without cloneTools the clone / deleteDraft controls are always false (asserted here); with them they are covered by test/library-v2-p3-s5
+  const C = (status, orgStatus, canOpen) => { const c = { ...H.controlsFor(fw("f", status), org(orgStatus), { canOpen }) }; assert.deepEqual([c.clone, c.deleteDraft], [false, false]); delete c.clone; delete c.deleteDraft; return c; };
   assert.deepEqual(C("draft", "active", true), { open: true, openReadOnly: false, rename: true, activate: true, archive: false, restore: false });
   assert.deepEqual(C("active", "active", true), { open: true, openReadOnly: false, rename: true, activate: false, archive: true, restore: false });
   assert.deepEqual(C("archived", "active", true), { open: true, openReadOnly: true, rename: false, activate: false, archive: false, restore: true });

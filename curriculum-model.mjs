@@ -177,15 +177,16 @@ export function requireSameOrganizationCloneSource(sourceFramework, organization
   if (!organization || sourceFramework.organizationId !== organization.id) fail("cloneSource", "the clone source belongs to another organization (cross-organization clone is not allowed)", "CLONE_SOURCE_ORGANIZATION");
   return sourceFramework;
 }
-// Per P3 Design R1 section 10: a draft whose cloneSource.nodeCount differs from its loaded ACTIVE node count is an incomplete clone.
-// DEFERRED TO P3-S5 (Owner decision, P3-S2 final policy refinement D1): these semantics are kept as designed for now and MUST be revisited in P3-S5 BEFORE
-// clone becomes user-facing - cloneSource.nodeCount must not accidentally become a permanent live checksum that makes a legitimately edited clone
-// (nodes added, deleted or retired after the clone finished) look incomplete. Not a blocker for P3-S3/S4: no clone exists until P3-S5.
+// P3-S5 (D1 RESOLVED): cloneSource.nodeCount is the TOTAL number of source nodes (every status) that the clone operation committed to copy. The Rules make cloneSource
+// immutable and force the framework to exist before its nodes, so it is fixed at creation and can only be PROVENANCE plus a completion LOWER BOUND, never a live checksum:
+// a clone is complete when the destination holds AT LEAST that many nodes. The clone flow creates its last node in a final commit after every retire pass, so the count
+// reaches nodeCount only when the clone is finished; later legitimate edits (rename, reorder, retire, restore, more nodes) can never push the count below it.
+// (Individual node deletion is not offered for frameworks; the only delete is the whole never-activated draft.)
 export function cloneCompleteness(framework, nodes) {
   const marker = framework && framework.cloneSource;
   if (!marker || typeof marker !== "object") return freeze({ isClone: false, complete: true, expected: null, actual: null });
-  const actual = (nodes || []).filter((node) => node && node.status === "active").length;
-  return freeze({ isClone: true, complete: actual === marker.nodeCount, expected: marker.nodeCount, actual });
+  const actual = (nodes || []).filter((node) => node && typeof node === "object").length;
+  return freeze({ isClone: true, complete: actual >= marker.nodeCount, expected: marker.nodeCount, actual });
 }
 
 // ---------------------------------------------------------------- node structure (the shape facts the Rules prove, mirrored)
@@ -391,7 +392,7 @@ export function activationReadiness(framework, nodes, { organization } = {}) {
   for (const issue of tree.issues) add("TREE_" + issue.code, issue.message + (issue.nodeId ? " [" + issue.nodeId + "]" : ""));
   if (!(nodes || []).some((node) => node && node.status === "active" && node.kind === "subject" && (node.parentId === null || node.parentId === undefined))) add("NO_ACTIVE_SUBJECT", "at least one active subject (root node) is required");
   const clone = cloneCompleteness(framework, nodes);
-  if (clone.isClone && !clone.complete) add("INCOMPLETE_CLONE", "the clone is incomplete (expected " + clone.expected + " active nodes, found " + clone.actual + ")");
+  if (clone.isClone && !clone.complete) add("INCOMPLETE_CLONE", "the clone is incomplete (expected at least " + clone.expected + " nodes, found " + clone.actual + ")");
   return freeze({ ready: errors.length === 0, errors, stats: tree.stats });
 }
 

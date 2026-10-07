@@ -40,9 +40,9 @@ test("code canonicalization is ONE policy in ONE place: defined once in the mode
   for (const p of ["curriculum-queries.mjs", "curriculum-write-contract.mjs"]) { const c = code(p); assert.ok(!c.includes(".normalize(") && !c.includes("toLowerCase") && !c.includes("toUpperCase"), p + " must delegate code comparison to the model (codeInUse)"); }
   assert.ok(code("curriculum-write-contract.mjs").includes("codeInUse(")); assert.ok(model.includes("export function codeInUse") && model.includes("canonicalizeNodeCode(node.code)"));
 });
-test("D1 is recorded in the source: clone completeness is DEFERRED TO P3-S5 and must not become a permanent live checksum", () => {
-  const src = text("curriculum-model.mjs");
-  assert.ok(src.includes("DEFERRED TO P3-S5") && src.includes("permanent live checksum") && src.includes("BEFORE"));
+test("D1 is recorded in the source: P3-S5 RESOLVED clone completeness - cloneSource.nodeCount is a fixed provenance / LOWER BOUND, never a live checksum", () => {
+  const src = text("curriculum-model.mjs");   // P3-S5 aligned (was: DEFERRED TO P3-S5)
+  assert.ok(src.includes("D1 RESOLVED") && src.includes("never a live checksum") && src.includes("LOWER BOUND") && !src.includes("DEFERRED TO P3-S5"));
 });
 test("no excluded feature leaked into the modules (UI, clone/delete planning, import, capabilities/Org Admin, context wiring, memberships, indexes, Storage)", () => {
   for (const p of MODULES) {

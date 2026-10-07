@@ -630,10 +630,11 @@ import { createOrganizationAdminScreen, createOrganizationWriter } from "./organ
 import { createOrganizationMembershipSection, createMembershipWriter, createTeacherEmailSearchQuery } from "./organization-membership-view.mjs?v=20261006-o1";
 // Library V2 P3-S3/S4: curriculum frameworks and the node editor (Platform Admin). The model gained codeConflictOf in S4, so the page imports it WITH the S4 cache token
 // (curriculum-queries/write-contract still import it by bare URL: pure functions, errors are matched by name + code, never instanceof); every P3-S2 module is injected into the views.
-import * as CURRICULUM_MODEL from "./curriculum-model.mjs?v=20261007-p3s4";
+import * as CURRICULUM_MODEL from "./curriculum-model.mjs?v=20261007-p3s5";
 import { createCurriculumQueries } from "./curriculum-queries.mjs?v=20261007-p3s2";
 import { createCurriculumWriteContract } from "./curriculum-write-contract.mjs?v=20261007-p3s2";
-import { createCurriculumSection, createCurriculumWriter, createCurriculumViewHelpers } from "./curriculum-admin-view.mjs?v=20261007-p3s4";
+import { createCurriculumSection, createCurriculumWriter, createCurriculumViewHelpers } from "./curriculum-admin-view.mjs?v=20261007-p3s5";
+import { createCloneDeleteHelpers, createCurriculumCloneWriter } from "./curriculum-clone-delete.mjs?v=20261007-p3s5";
 import { createCurriculumEditor, createCurriculumNodeWriter } from "./curriculum-editor-view.mjs?v=20261007-p3s4";
 import { createActiveOrganizationLookup, createTeacherEnrollmentFlow } from "./teacher-organization-enrollment.mjs?v=20261005-o2";
 // GATE 5F.C: Knowledge Co-creation dashboard launch/close control for the Classroom Second Brain
@@ -1769,7 +1770,9 @@ function adminOrganizations(c){
       db, actorUid:STATE.user.uid, isPlatformAdmin:STATE.profile?.role==="admin",
       esc, fmtDate, toast, mapError, openModal, closeModal, logAudit,
       model:CURRICULUM_MODEL, queries:CURRICULUM_QUERIES, organizationQueries:ORGANIZATION_QUERIES, contract:CURRICULUM_CONTRACT,
-      writer:createCurriculumWriter({collection,doc,setDoc,updateDoc})
+      writer:createCurriculumWriter({collection,doc,setDoc,updateDoc}),
+      // P3-S5: NHÂN BẢN (clone, same organization) and XÓA BẢN NHÁP (never-activated draft only); without cloneTools neither control exists.
+      cloneTools:{ helpers:createCloneDeleteHelpers({model:CURRICULUM_MODEL}), writer:createCurriculumCloneWriter({collection,doc,setDoc,writeBatch,deleteDoc}) }
     }),
     // P3-S4: the MÔN -> BÀI node editor (replaces Organization Detail; Platform Admin only). Activation stays in the S3 list.
     frameworkEditor:createCurriculumEditor({

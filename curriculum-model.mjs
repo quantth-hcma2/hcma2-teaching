@@ -363,11 +363,21 @@ export function validateTree(nodes, { organizationId } = {}) {
     stats: freeze({ nodeCount: list.length, activeCount: list.filter((n) => n && n.status === "active").length, rootCount: tree.roots.length, orphanCount: tree.orphans.length, maxDepth })
   });
 }
-// True when another node (not exceptId) already uses a code that is canonically equal to `code` (see canonicalizeNodeCode). Blank codes never conflict.
-export function codeInUse(nodes, code, exceptId) {
+// The FIRST node (array order, which is what validateTree reports as the original) other than exceptId whose code is canonically equal to `code` (see
+// canonicalizeNodeCode), or null. Blank codes never conflict. Retired nodes count: their codes stay reserved until edited. P3-S4 uses it for an actionable duplicate-code
+// message; P4 (imports) must reuse this same policy/API. codeInUse is the boolean form.
+export function codeConflictOf(nodes, code, exceptId) {
   const key = typeof code === "string" ? canonicalizeNodeCode(code) : null;
-  if (key === null) return false;
-  return (nodes || []).some((node) => node.id !== exceptId && typeof node.code === "string" && canonicalizeNodeCode(node.code) === key);
+  if (key === null) return null;
+  for (const node of nodes || []) {
+    if (!node || node.id === exceptId || typeof node.code !== "string") continue;
+    if (canonicalizeNodeCode(node.code) === key) return node;
+  }
+  return null;
+}
+// True when another node (not exceptId) already uses a code that is canonically equal to `code`. Blank codes never conflict.
+export function codeInUse(nodes, code, exceptId) {
+  return codeConflictOf(nodes, code, exceptId) !== null;
 }
 
 // Activation precondition (P3 Design R1 section 9): draft, writable organization, structurally valid tree, at least one active subject,

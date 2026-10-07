@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { reverseS3IndexEdits, reverseS3AdminViewEdits, INDEX_EDITS, ADMIN_VIEW_EDITS, INDEX_ADDED } from "./s3-edits.mjs";
+import { reverseS4SectionViewEdits, reverseS4ModelEdits } from "../library-v2-p3-s4/s4-edits.mjs";   // P3-S4 aligned: every assertion below describes the P3-S3 candidate bytes (c95595a), i.e. with the approved S4 edits reversed first
 
 const root = new URL("../../", import.meta.url);
 const text = (p) => readFileSync(new URL(p, root), "utf8");
@@ -12,7 +13,8 @@ const sha = (p) => createHash("sha256").update(readFileSync(new URL(p, root))).d
 const shaText = (t) => createHash("sha256").update(Buffer.from(t, "utf8")).digest("hex");
 const NL = String.fromCharCode(10);
 const code = (p) => text(p).split(NL).filter((l) => !l.trim().startsWith("//")).join(NL);
-const view = code("curriculum-admin-view.mjs");
+const codeOf = (src) => src.split(NL).filter((l) => !l.trim().startsWith("//")).join(NL);
+const view = codeOf(reverseS4SectionViewEdits(text("curriculum-admin-view.mjs")));
 const count = (src, token) => src.split(token).length - 1;
 
 test("the view imports NOTHING: no import statements, no Firebase, no dynamic import, no direct Firestore reads/writes/ordering (only the transport-only writer touches setDoc/updateDoc)", () => {
@@ -81,7 +83,7 @@ test("ZERO-INDEX guard and identity: Rules (deployed P3-S1), firestore.indexes.j
     "admin-feature-registry.mjs": "4e97434f69907931bdabb5eaf46fe4a765b62e122ba1f938a28adaeb04316413",
     "library-hub-registry.mjs": "37ef4f919d4604b4233b46cd197e2481b5fdf79c8c7f5229f81eb656a33688a0"
   };
-  for (const [f, h] of Object.entries(pinned)) assert.equal(sha(f), h, f);
+  for (const [f, h] of Object.entries(pinned)) assert.equal(f === "curriculum-model.mjs" ? shaText(reverseS4ModelEdits(text(f))) : sha(f), h, f);   // the model: P3-S4 added codeConflictOf only (guarded by test/library-v2-p3-s4)
   for (const f of ["storage.rules", "firebase.json", "cors.json"]) assert.ok(!existsSync(new URL(f, root)), f + " must not exist at the repository root");
   const manifest = JSON.parse(text("firestore.indexes.json")); assert.equal(manifest.indexes.length, 14);          // untouched, drifted manifest is never deployed
   assert.ok(!code("curriculum-queries.mjs").includes("orderBy")); assert.ok(!view.includes("orderBy"));

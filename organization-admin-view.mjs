@@ -128,8 +128,9 @@ export function createOrganizationWriter({ collection, doc, setDoc, updateDoc })
 //         contract: <createOrganizationWriteContract result>, writer: { newId(db), create(db,id,data), update(db,id,data) },
 //         membershipSection?: { mount(host, organization) } (P2-S4) }
 //         curriculumSection?: { mount(host, organization) } (P3-S3: curriculum frameworks, rendered above the members section)
+//         frameworkEditor?: { mount(container, { organization, framework, onBack }) } (P3-S4: the node editor, opened from the curriculum section through onOpenFramework)
 export function createOrganizationAdminScreen(deps) {
-  const { db, actorUid, isPlatformAdmin, esc, fmtDate, toast, mapError, openModal, closeModal, logAudit, queries, platformQueries, contract, writer, membershipSection, curriculumSection } = deps;
+  const { db, actorUid, isPlatformAdmin, esc, fmtDate, toast, mapError, openModal, closeModal, logAudit, queries, platformQueries, contract, writer, membershipSection, curriculumSection, frameworkEditor } = deps;
   const modalRoot = () => document.getElementById("globalModal");
   const modal$ = (selector) => modalRoot().querySelector(selector);
   const show = (el, message) => { el.textContent = message; el.classList.remove("hidden"); };
@@ -195,7 +196,7 @@ export function createOrganizationAdminScreen(deps) {
       };
     }
 
-    async function showDetail(id) {
+    async function showDetail(id, { focusFrameworkId } = {}) {
       container.innerHTML = `<div class="center-screen" style="min-height:160px"><span class="spinner"></span></div>`;
       let organization;
       try { organization = await queries.organizationById(db, id); } catch (error) {
@@ -233,9 +234,15 @@ export function createOrganizationAdminScreen(deps) {
       // P2-S4 / P3-S3: the curriculum section (above) and the ordinary membership section are optional dependencies (absent = S3 behavior). They mount
       // independently and each paints its own loading/error state, so one section failing or being slow never blocks the other.
       const mounts = [];
-      if (curriculumSection) mounts.push(curriculumSection.mount(container.querySelector("#orgCurriculumSection"), organization));
+      if (curriculumSection) mounts.push(curriculumSection.mount(container.querySelector("#orgCurriculumSection"), organization, { focusFrameworkId, ...(frameworkEditor ? { onOpenFramework: (framework, org) => showFrameworkEditor(framework, org || organization) } : {}) }));
       if (membershipSection) mounts.push(membershipSection.mount(container.querySelector("#orgMembersSection"), organization));
       await Promise.allSettled(mounts);
+    }
+
+    // P3-S4: the node editor replaces the Organization Detail in the same slot (like showList/showDetail); "Quay lại đơn vị" rebuilds the detail from fresh reads.
+    function showFrameworkEditor(framework, organization) {
+      container.innerHTML = "";
+      frameworkEditor.mount(container, { organization, framework, onBack: () => showDetail(organization.id, { focusFrameworkId: framework.id }) });
     }
 
     function confirmLifecycle(kind, organization, actionErr) {

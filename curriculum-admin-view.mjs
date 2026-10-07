@@ -237,15 +237,19 @@ class FlowAbort extends Error { constructor(kind) { super(kind); this.kind = kin
 export function createCurriculumSection(deps) {
   const { db, actorUid, isPlatformAdmin, esc, fmtDate, toast, mapError, openModal, closeModal, logAudit, model, queries, organizationQueries, contract, writer, onOpenFramework } = deps;
   const H = createCurriculumViewHelpers({ model });
-  const canOpen = typeof onOpenFramework === "function";
   const modalRoot = () => document.getElementById("globalModal");
   const modal$ = (selector) => { const root = modalRoot(); return root ? root.querySelector(selector) : null; };
   const show = (el, message) => { if (el) { el.textContent = message; el.classList.remove("hidden"); } };
   const hide = (el) => { if (el) { el.textContent = ""; el.classList.add("hidden"); } };
 
-  async function mount(host, organization) {
+  // mount(host, organization, options?): options.onOpenFramework overrides the construction-time hook (P3-S4: the Organization screen supplies it); options.focusFrameworkId
+  // focuses that row's MỞ button after the list loads (returning from the editor). Without options the approved P3-S3 behavior is unchanged.
+  async function mount(host, organization, options = {}) {
     if (!host) return;
     if (!isPlatformAdmin) { host.innerHTML = ""; return; }
+    const openHook = typeof options.onOpenFramework === "function" ? options.onOpenFramework : onOpenFramework;
+    const canOpen = typeof openHook === "function";
+    let pendingFocusId = options.focusFrameworkId || null;
     let org = organization, items = [], truncated = false, generation = 0, busy = false, flashId = null, trigger = null;
     const live = (message) => { const el = host.querySelector("#orgFwLive"); if (el) el.textContent = message; };
 
@@ -269,6 +273,10 @@ export function createCurriculumSection(deps) {
         if (mine !== generation) return;
         items = page.items; truncated = !!page.truncated;
         paint("ready");
+        if (pendingFocusId) {
+          const target = host.querySelector(`[data-fw-id="${pendingFocusId}"][data-fw-action="open"]`) || host.querySelector("#orgCurriculumTitle");
+          pendingFocusId = null; if (target) target.focus();
+        }
       } catch (error) {
         if (mine !== generation) return;
         const kind = H.classifyFirebaseError(error, { online: typeof navigator === "undefined" ? true : navigator.onLine });
@@ -418,7 +426,7 @@ export function createCurriculumSection(deps) {
     // ---------------------------------------------------------- row actions
     function onRowAction(action, framework) {
       if (busy || !framework) return;
-      if (action === "open") { if (canOpen) onOpenFramework(framework, org); return; }
+      if (action === "open") { if (canOpen) openHook(framework, org); return; }
       if (action === "rename") return openRename(framework);
       if (action === "activate") return openActivation(framework);
       if (action === "archive" || action === "restore") return openConfirm(action, framework);

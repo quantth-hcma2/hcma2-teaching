@@ -1,6 +1,7 @@
 // Shared by the P3-S3 guard and the OLDER source guards (P2-S3/S4, O1, O2, P3-S1, P3-S2): the exact P3-S3 edits to index.html and
 // organization-admin-view.mjs and the reversals that restore the previously released baseline (ec67a9c), so every older byte-pin keeps its
 // original meaning and any OTHER change to those two files is still detected.
+import { reverseS4AdminViewEdits } from "../library-v2-p3-s4/s4-edits.mjs";
 const NL = String.fromCharCode(10), CRLF = String.fromCharCode(13, 10);
 export const withNl = (s, crlf) => (crlf ? s.split(NL).join(CRLF) : s);
 
@@ -78,8 +79,9 @@ function forward(source, edits, label) {
   return result;
 }
 // index.html / organization-admin-view.mjs with the P3-S3 edits reversed (the ec67a9c baseline); each edit must be present exactly once.
+// P3-S4 aligned: the reversal chain is S4 first, then S3 (every older byte-pin therefore still describes the ec67a9c bytes in the combined S3+S4 tree).
+export const reverseS3AdminViewEdits = (source) => reverse(reverseS4AdminViewEdits(source), ADMIN_VIEW_EDITS, "P3-S3 organization-admin-view");
 export const reverseS3IndexEdits = (html) => reverse(html, INDEX_EDITS, "P3-S3 index.html");
-export const reverseS3AdminViewEdits = (source) => reverse(source, ADMIN_VIEW_EDITS, "P3-S3 organization-admin-view");
 // Used once to author the candidate (and by tests of the edits themselves).
 export const applyS3IndexEdits = (html) => forward(html, INDEX_EDITS, "P3-S3 index.html");
 export const applyS3AdminViewEdits = (source) => forward(source, ADMIN_VIEW_EDITS, "P3-S3 organization-admin-view");

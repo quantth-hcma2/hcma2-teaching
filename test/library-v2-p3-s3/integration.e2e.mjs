@@ -109,7 +109,8 @@ const count = (sel) => page.locator(sel).count();
 const fws = async (orgId) => (await list("curriculumFrameworks")).filter((f) => f.organizationId === orgId);
 const fwGet = (id) => get(`curriculumFrameworks/${id}`);
 const rows = () => page.evaluate(() => [...document.querySelectorAll("[data-fw-row]")].map((r) => r.dataset.fwRow + ":" + r.dataset.fwStatus));
-const actionsOf = (id) => page.evaluate((i) => [...document.querySelectorAll(`[data-fw-id="${i}"][data-fw-action]`)].map((b) => b.dataset.fwAction), id);
+// P3-S4 aligned: the combined tree offers MO on every row (the editor seam); the S3 lifecycle assertions below compare the REMAINING actions (the MO control is asserted by test/library-v2-p3-s4).
+const actionsOf = (id) => page.evaluate((i) => [...document.querySelectorAll(`[data-fw-id="${i}"][data-fw-action]`)].map((b) => b.dataset.fwAction).filter((a) => a !== "open"), id);
 const toastText = () => page.evaluate(() => [...document.querySelectorAll("#toast-root .toast")].map((t) => t.textContent).join(" | "));
 const waitSection = () => page.waitForFunction(() => document.querySelector("#orgCurriculumCard")?.getAttribute("aria-busy") === "false" && !document.querySelector("#orgCurriculumLoading"), null, { timeout: 30000 });
 const openOrg = async (id) => { await page.click('[data-nav="classes"]'); await openOrgs(); await page.click(`[data-org-open="${id}"]`); await page.waitForSelector("#orgDetailTitle"); await page.waitForSelector("#orgMembersCard", { timeout: 30000 }); await waitSection(); };
@@ -190,7 +191,7 @@ try {
     assert.deepEqual(await rows(), ["fwA2:active", "fwA1:active", "fwD1:draft", "fwD2:draft", "fwZ1:archived"]);
     assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll("[data-fw-group]")].map((g) => g.textContent.replace(/\s+/g, " ").trim())), ["Đang áp dụng (2)", "Bản nháp (2)", "Đã lưu trữ (1)"]);
     assert.equal(await text("#orgCurriculumSummary"), "5 khung · 2 đang áp dụng · 2 bản nháp · 1 đã lưu trữ"); assert.equal(await count('[data-fw-id="fwOther"]'), 0);
-    assert.equal(await count('[data-fw-action="open"]'), 0); assert.equal(await count("#orgCurriculumTruncated"), 0);
+    assert.equal(await count('[data-fw-action="open"]'), 5, "P3-S4: MO on every row"); assert.equal(await count("#orgCurriculumTruncated"), 0);
     await shot(page, "05-populated");
   });
 
@@ -222,7 +223,7 @@ try {
   await step("ARCHIVED organization (seeded): curriculum readable, banner + disabled create with visible reason, NO mutation control on any row; the real Rules would reject every write", async () => {
     await page.reload(); await page.waitForSelector(".navlink"); await openOrg("orgArch");
     assert.equal(await count("#orgCurriculumArchivedNote"), 1); assert.equal(await count("#orgFwCreateBtn[disabled]"), 1); assert.ok((await text("#orgFwCreateHint")).includes("Đơn vị đã lưu trữ"));
-    assert.deepEqual(await rows(), ["fwArchA:active", "fwArchD:draft", "fwArchZ:archived"]); assert.equal(await count("[data-fw-action]"), 0);
+    assert.deepEqual(await rows(), ["fwArchA:active", "fwArchD:draft", "fwArchZ:archived"]); assert.equal(await count("[data-fw-action]:not([data-fw-action=open])"), 0);
     await page.click("#orgFwCreateBtn", { force: true, timeout: 800 }).catch(() => {});
     assert.equal(await page.locator('#globalModal [role="dialog"]').count(), 0);
     await shot(page, "06-archived-org");
@@ -233,7 +234,7 @@ try {
     assert.equal(await count("#orgFwCreateBtn:not([disabled])"), 1);
     await page.click("#orgArchiveBtn"); await page.waitForSelector("#orgConfirmOk"); await page.click("#orgConfirmOk");
     await page.waitForSelector("#orgCurriculumArchivedNote", { timeout: 30000 }); await waitSection();
-    assert.equal(await count("[data-fw-action]"), 0); assert.equal(await count("#orgFwCreateBtn[disabled]"), 1);
+    assert.equal(await count("[data-fw-action]:not([data-fw-action=open])"), 0); assert.equal(await count("#orgFwCreateBtn[disabled]"), 1);
     await page.click("#orgRestoreBtn"); await page.waitForSelector("#orgConfirmOk"); await page.click("#orgConfirmOk");
     await page.waitForSelector("#orgArchiveBtn", { timeout: 30000 }); await waitSection();
     assert.equal(await count("#orgCurriculumArchivedNote"), 0); assert.equal(await count("#orgFwCreateBtn:not([disabled])"), 1); assert.ok((await actionsOf("fwD1")).includes("activate"));

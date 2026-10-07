@@ -158,6 +158,18 @@ test("node update: label / code / order / status only; trimmed; code and order c
   throwsCode(() => C.buildNodeUpdate(a, { name: "X" }, ctx(nodes, { organization: archivedOrg })), "ORGANIZATION_ARCHIVED");
   throwsCode(() => C.buildNodeUpdate(node("a", { organizationId: "orgB" }), { name: "X" }, ctx([node("a", { organizationId: "orgB" })])), "ORGANIZATION_MISMATCH");
 });
+test("code policy through the builders (D2): case/whitespace/Unicode-equivalent duplicates are refused on create and update; the display code is stored as typed (trimmed only)", () => {
+  const viet = "B" + String.fromCharCode(0xe0) + "i 1";
+  const a = node("a", { code: "B01", order: 0 }), b = node("b", { code: viet, order: 1 }), nodes = [a, b];
+  for (const variant of ["b01", " B01 ", "b01\t", viet.normalize("NFD"), viet.toUpperCase(), String.fromCharCode(0xff22, 0xff10, 0xff11)]) {
+    throwsCode(() => C.buildNodeCreate({ kind: "subject", name: "X", code: variant }, ctx(nodes)), "DUPLICATE_CODE");
+  }
+  throwsCode(() => C.buildNodeUpdate(a, { code: "b-x" }, ctx([a, node("c", { code: "B-X", order: 2 })])), "DUPLICATE_CODE");
+  throwsCode(() => C.buildNodeCodeChange(a, viet.normalize("NFD"), ctx(nodes)), "DUPLICATE_CODE");
+  assert.equal(C.buildNodeCodeChange(a, " b01 ", ctx(nodes)).code, "b01");                  // own code in another case: no conflict with itself; stored as typed
+  assert.equal(C.buildNodeCreate({ kind: "subject", name: "X", code: " mixedCase-7 " }, ctx(nodes)).code, "mixedCase-7");   // never upper-cased or normalized for storage
+  assert.equal(C.buildNodeCreate({ kind: "subject", name: "X", code: viet.normalize("NFD") + "9" }, ctx(nodes)).code, viet.normalize("NFD") + "9");
+});
 test("node retire / restore: only active -> retired and retired -> active", () => {
   const a = node("a"), r = node("r", { status: "retired", order: 1 });
   assert.equal(C.buildNodeRetire(a, ctx([a, r])).status, "retired"); assert.equal(C.buildNodeRestore(r, ctx([a, r])).status, "active");

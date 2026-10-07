@@ -31,6 +31,18 @@ test("read adapters: no ordering, cursor, second filter, `in`, array-contains, c
   assert.equal((c.match(/where\("organizationId", "==", /g) || []).length, 2);
   assert.equal((c.match(/getDocs\(/g) || []).length, 2); assert.equal((c.match(/getDoc\(/g) || []).length, 1);
 });
+test("code canonicalization is ONE policy in ONE place: defined once in the model, locale-independent, and no other module re-implements case/Unicode folding (P4 must reuse it)", () => {
+  const model = code("curriculum-model.mjs");
+  assert.equal((model.match(/export function canonicalizeNodeCode/g) || []).length, 1);
+  assert.ok(model.includes("normalize(\"NFKC\")") && model.includes("toUpperCase().toLowerCase()"));
+  for (const p of MODULES) assert.ok(!/toLocale(Lower|Upper)Case/.test(code(p)), p + " must not use locale-dependent case conversion");
+  for (const p of ["curriculum-queries.mjs", "curriculum-write-contract.mjs"]) { const c = code(p); assert.ok(!c.includes(".normalize(") && !c.includes("toLowerCase") && !c.includes("toUpperCase"), p + " must delegate code comparison to the model (codeInUse)"); }
+  assert.ok(code("curriculum-write-contract.mjs").includes("codeInUse(")); assert.ok(model.includes("export function codeInUse") && model.includes("canonicalizeNodeCode(node.code)"));
+});
+test("D1 is recorded in the source: clone completeness is DEFERRED TO P3-S5 and must not become a permanent live checksum", () => {
+  const src = text("curriculum-model.mjs");
+  assert.ok(src.includes("DEFERRED TO P3-S5") && src.includes("permanent live checksum") && src.includes("BEFORE"));
+});
 test("no excluded feature leaked into the modules (UI, clone/delete planning, import, capabilities/Org Admin, context wiring, memberships, indexes, Storage)", () => {
   for (const p of MODULES) {
     const c = code(p);

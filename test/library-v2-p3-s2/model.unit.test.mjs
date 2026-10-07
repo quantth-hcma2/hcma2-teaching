@@ -195,11 +195,46 @@ test("validateTree: a consistent tree is valid; every integrity failure is repor
   assert.equal(M.validateTree(big.slice(0, 5000), { organizationId: "orgA" }).valid, true);          // exactly 5000 is allowed
   assert.equal(M.validateTree([], {}).valid, true); assert.equal(M.validateTree(undefined).valid, true);
 });
-test("codes: unique within a framework by exact match after trim; blank codes never conflict", () => {
-  const nodes = [n("a", { code: "M1" }), n("b", { code: null, order: 1 }), n("c", { code: "m1", order: 2 })];
-  assert.equal(M.codeInUse(nodes, "M1"), true); assert.equal(M.codeInUse(nodes, "M1", "a"), false); assert.equal(M.codeInUse(nodes, "M2"), false);
-  assert.equal(M.codeInUse(nodes, null), false); assert.equal(M.codeInUse(nodes, ""), false);
-  assert.equal(M.validateTree(nodes, { organizationId: "orgA" }).valid, true);   // 'M1' and 'm1' are different codes (no case folding invented)
+test("codes: duplicate detection uses the canonical comparison; blank codes never conflict; the node's own code is excluded", () => {
+  const nodes = [n("a", { code: "M1" }), n("b", { code: null, order: 1 }), n("c", { code: "M2", order: 2 })];
+  assert.equal(M.codeInUse(nodes, "M1"), true); assert.equal(M.codeInUse(nodes, "M1", "a"), false); assert.equal(M.codeInUse(nodes, "M3"), false);
+  assert.equal(M.codeInUse(nodes, null), false); assert.equal(M.codeInUse(nodes, ""), false); assert.equal(M.codeInUse(nodes, "   "), false); assert.equal(M.codeInUse(nodes, 7), false);
+  assert.equal(M.validateTree(nodes, { organizationId: "orgA" }).valid, true);
+});
+
+// ---- P3-S2 policy refinement D2: ONE canonical comparison policy (trim -> NFKC -> case-insensitive fold), display code untouched
+const NFC = (s) => s.normalize("NFC"), NFD = (s) => s.normalize("NFD");
+const viet = "B" + String.fromCharCode(0xe0) + "i 1";                       // precomposed a-grave (NFC)
+const fullWidth = String.fromCharCode(0xff22, 0xff10, 0xff11);              // fullwidth B, 0, 1
+test("canonicalizeNodeCode: trim -> NFKC -> case-insensitive; blank/null -> null; idempotent; locale-independent; version 1", () => {
+  assert.equal(M.CODE_CANONICAL_FORM_VERSION, 1);
+  for (const blank of [undefined, null, "", "   ", String.fromCharCode(9, 10, 32)]) assert.equal(M.canonicalizeNodeCode(blank), null);
+  for (const bad of [5, {}, [], true]) assert.throws(() => M.canonicalizeNodeCode(bad), (e) => e instanceof M.CurriculumContractError && e.code === "CODE");
+  assert.equal(M.canonicalizeNodeCode("B01"), M.canonicalizeNodeCode("b01"));
+  for (const sample of ["  B01  ", "M-1 / a", viet, NFD(viet), fullWidth, "Stra" + String.fromCharCode(0xdf) + "e", String.fromCharCode(0x130) + "x"]) assert.equal(M.canonicalizeNodeCode(M.canonicalizeNodeCode(sample)), M.canonicalizeNodeCode(sample), "idempotent");
+  assert.ok(!M.canonicalizeNodeCode(viet).includes(String.fromCharCode(0x300)));       // composed, not combining
+});
+test("canonical collision: whitespace, upper/lower case and Unicode-normalization-equivalent variants are the SAME code; genuinely different codes are not", () => {
+  const same = (a, b) => assert.equal(M.canonicalizeNodeCode(a), M.canonicalizeNodeCode(b), JSON.stringify([a, b]));
+  const diff = (a, b) => assert.notEqual(M.canonicalizeNodeCode(a), M.canonicalizeNodeCode(b), JSON.stringify([a, b]));
+  same("B01", "  B01  "); same("B01", "b01"); same("B01", " b01\t"); same("Mon-A", "mON-a");                     // whitespace + case
+  same(NFC(viet), NFD(viet)); same(NFC(viet).toUpperCase(), NFD(viet).toLowerCase());                           // Unicode-normalization-equivalent (+ case)
+  assert.notEqual(NFC(viet), NFD(viet)); assert.notEqual(NFC(viet).length, NFD(viet).length);                   // really different code point sequences
+  same(fullWidth, "B01"); same("Stra" + String.fromCharCode(0xdf) + "e", "STRASSE");                            // compatibility forms / full case folding
+  diff("B01", "B02"); diff("B01", "B 01"); diff("B01", "B-01"); diff("A", "A" + String.fromCharCode(0x301)); diff("A", String.fromCharCode(0xc1)); // no diacritic stripping, no inner-space collapsing
+  diff("M1", "M1" + String.fromCharCode(0x200b));                                                                // a zero-width space is NOT silently dropped
+});
+test("uniqueness policy: codeInUse and validateTree collide on every equivalent variant; the stored display code is never altered", () => {
+  const stored = [n("a", { code: NFC(viet) }), n("b", { code: "m-1", order: 1 })];
+  for (const variant of ["  " + NFC(viet) + "  ", NFD(viet), NFC(viet).toUpperCase(), NFD(viet).toLowerCase(), "M-1", " M-1", "m-1 "]) assert.equal(M.codeInUse(stored, variant), true, JSON.stringify(variant));
+  assert.equal(M.codeInUse(stored, NFD(viet), "a"), false); assert.equal(M.codeInUse(stored, "M-2"), false);
+  for (const [x, y] of [["B01", "b01"], ["B01", " B01 "], [NFC(viet), NFD(viet)], [fullWidth, "B01"]]) {
+    const r = M.validateTree([n("p", { code: x }), n("q", { code: y, order: 1 })], { organizationId: "orgA" });
+    assert.deepEqual(r.issues.map((i) => i.code), ["DUPLICATE_CODE"], JSON.stringify([x, y]));
+    assert.deepEqual(r.issues[0], { code: "DUPLICATE_CODE", nodeId: "q", message: r.issues[0].message }); assert.ok(r.issues[0].message.includes("node p"));
+  }
+  assert.equal(M.validateTree([n("p", { code: "B01" }), n("q", { code: "B02", order: 1 }), n("r", { code: null, order: 2 }), n("s", { code: null, order: 3 })], { organizationId: "orgA" }).valid, true);
+  assert.equal(M.normalizeNodeCode("  b01 "), "b01"); assert.equal(M.normalizeNodeCode(NFD(viet)), NFD(viet));   // display/stored code: trim only (no upper-casing, no normalization)
 });
 
 test("activationReadiness: draft + writable organization + valid tree + at least one active subject + complete clone", () => {

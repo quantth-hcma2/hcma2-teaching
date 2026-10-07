@@ -181,6 +181,19 @@ test("framework transitions: only the three lifecycle transitions are accepted (
   await ok(updateDoc(fwRef(db, fwId), C.buildFrameworkRestore(ctx.framework, "pa", { organization: orgA })));
 });
 
+test("HONEST LIMIT: the Rules do NOT enforce code uniqueness - the client policy (canonical comparison) is the only guard; a raw write with a canonically duplicate code is accepted and then detected by validateTree", async () => {
+  const db = as("pa"); const fwId = await createFramework(db, "pa"); let ctx = await ctxOf(db, fwId);
+  const first = nodeNew(db, fwId); await ok(setDoc(first, C.buildNodeCreate({ kind: "subject", name: "Mon 1", code: "B01" }, ctx)));
+  ctx = await ctxOf(db, fwId);
+  assert.throws(() => C.buildNodeCreate({ kind: "subject", name: "Mon 2", code: " b01 " }, ctx), (e) => e.code === "DUPLICATE_CODE");        // the builder refuses
+  const forged = { ...C.buildNodeCreate({ kind: "subject", name: "Mon 2", code: "B02" }, ctx), code: " b01 " };                               // raw payload, same Rules-valid shape
+  await ok(setDoc(nodeNew(db, fwId), { ...forged, code: "b01" }));                                                                             // two concurrent clients could do exactly this: Rules accept it
+  ctx = await ctxOf(db, fwId);
+  const tree = validateTree(ctx.nodes, { organizationId: "orgA" });
+  assert.deepEqual(tree.issues.map((i) => i.code), ["DUPLICATE_CODE"]);                                                                       // ...and the client domain check flags it
+  assert.equal(activationReadiness(ctx.framework, ctx.nodes, { organization: orgA }).ready, false);
+  assert.throws(() => C.buildFrameworkActivate(ctx.framework, "pa", { organization: orgA, nodes: ctx.nodes }), (e) => e.code === "NOT_READY");
+});
 test("real read adapters under the Rules: frameworks and nodes load for the Platform Admin, Organization Admin and capability holder; every other principal is denied; results validate", async () => {
   const pa = as("pa"); const fwId = await createFramework(pa, "pa"); let ctx = await ctxOf(pa, fwId);
   await ok(setDoc(nodeNew(pa, fwId), C.buildNodeCreate({ kind: "subject", name: "Mon" }, ctx)));

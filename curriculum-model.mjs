@@ -80,6 +80,20 @@ export function normalizeNodeCode(code) {
   if (value.length < NODE_CODE_MIN || value.length > NODE_CODE_MAX) fail("code", "code must be " + NODE_CODE_MIN + "-" + NODE_CODE_MAX + " characters", "CODE");
   return value;
 }
+// ---- node code CANONICALIZATION (P3-S2 policy refinement D2) - the ONE reusable comparison policy for code uniqueness.
+// canonical form v1 = trim -> Unicode NFKC normalization -> case-insensitive fold (toUpperCase then toLowerCase: locale-INDEPENDENT, never the toLocale* variants)
+// -> NFKC again -> trim. So surrounding whitespace, upper/lower case and Unicode-normalization-equivalent strings (precomposed vs combining Vietnamese letters,
+// full-width vs ASCII forms) collide. NOT done on purpose: no diacritic stripping (Vietnamese letters are distinct), no inner-whitespace collapsing, no
+// punctuation rewriting. The result is for COMPARISON/VALIDATION only: the stored and displayed code is the user's own text (normalizeNodeCode: trim only,
+// never forced to upper case). This is client/domain DUPLICATE PREVENTION, NOT authoritative uniqueness: the Firestore Rules do not enforce it and two
+// concurrent clients may still race. P4 (imports) MUST reuse this helper, not invent an import-specific policy.
+export const CODE_CANONICAL_FORM_VERSION = 1;
+export function canonicalizeNodeCode(code) {
+  if (code === undefined || code === null) return null;
+  if (typeof code !== "string") fail("code", "code must be a string or null", "CODE");
+  const canonical = code.trim().normalize("NFKC").toUpperCase().toLowerCase().normalize("NFKC").trim();
+  return canonical === "" ? null : canonical;
+}
 export function validateNodeOrder(order) {
   if (!Number.isInteger(order) || order < NODE_ORDER_MIN || order > NODE_ORDER_MAX) fail("order", "order must be an integer " + NODE_ORDER_MIN + "-" + NODE_ORDER_MAX, "ORDER");
   return order;
@@ -164,6 +178,9 @@ export function requireSameOrganizationCloneSource(sourceFramework, organization
   return sourceFramework;
 }
 // Per P3 Design R1 section 10: a draft whose cloneSource.nodeCount differs from its loaded ACTIVE node count is an incomplete clone.
+// DEFERRED TO P3-S5 (Owner decision, P3-S2 final policy refinement D1): these semantics are kept as designed for now and MUST be revisited in P3-S5 BEFORE
+// clone becomes user-facing - cloneSource.nodeCount must not accidentally become a permanent live checksum that makes a legitimately edited clone
+// (nodes added, deleted or retired after the clone finished) look incomplete. Not a blocker for P3-S3/S4: no clone exists until P3-S5.
 export function cloneCompleteness(framework, nodes) {
   const marker = framework && framework.cloneSource;
   if (!marker || typeof marker !== "object") return freeze({ isClone: false, complete: true, expected: null, actual: null });
@@ -328,12 +345,15 @@ export function validateTree(nodes, { organizationId } = {}) {
     if (orderSeen.has(key)) add("DUPLICATE_ORDER", node.id, "two siblings share order " + node.order);
     else orderSeen.set(key, node.id);
   }
-  // framework-wide uniqueness of non-empty codes (exact match after trim; the Rules cannot prove this)
+  // framework-wide uniqueness of non-empty codes under the canonical comparison (trim, NFKC, case-insensitive); the Rules cannot prove this and
+  // concurrent clients may still race: this is client/domain duplicate prevention only
   const codeSeen = new Map();
   for (const node of list) {
-    if (!node || typeof node.code !== "string" || node.code === "") continue;
-    if (codeSeen.has(node.code)) add("DUPLICATE_CODE", node.id, "code '" + node.code + "' is used more than once");
-    else codeSeen.set(node.code, node.id);
+    if (!node || typeof node.code !== "string") continue;
+    const key = canonicalizeNodeCode(node.code);
+    if (key === null) continue;
+    if (codeSeen.has(key)) add("DUPLICATE_CODE", node.id, "code '" + node.code + "' duplicates the code of node " + codeSeen.get(key) + " (case/whitespace/Unicode-insensitive)");
+    else codeSeen.set(key, node.id);
   }
   const tree = buildTree(list.filter((node) => node && typeof node === "object" && isValidId(node.id)));
   const maxDepth = Math.max(0, ...[...tree.index.values()].map((entry) => entry.depth));
@@ -343,7 +363,12 @@ export function validateTree(nodes, { organizationId } = {}) {
     stats: freeze({ nodeCount: list.length, activeCount: list.filter((n) => n && n.status === "active").length, rootCount: tree.roots.length, orphanCount: tree.orphans.length, maxDepth })
   });
 }
-export const codeInUse = (nodes, code, exceptId) => typeof code === "string" && code !== "" && (nodes || []).some((node) => node.id !== exceptId && node.code === code);
+// True when another node (not exceptId) already uses a code that is canonically equal to `code` (see canonicalizeNodeCode). Blank codes never conflict.
+export function codeInUse(nodes, code, exceptId) {
+  const key = typeof code === "string" ? canonicalizeNodeCode(code) : null;
+  if (key === null) return false;
+  return (nodes || []).some((node) => node.id !== exceptId && typeof node.code === "string" && canonicalizeNodeCode(node.code) === key);
+}
 
 // Activation precondition (P3 Design R1 section 9): draft, writable organization, structurally valid tree, at least one active subject,
 // not an incomplete clone. Never throws; the UI shows `errors` in plain language.

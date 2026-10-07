@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { reverseO1Edits, IMPORT_NEW, CONST_NEW, DEP_NEW } from "./o1-edits.mjs";
+import { reverseS3IndexEdits, reverseS3AdminViewEdits } from "../library-v2-p3-s3/s3-edits.mjs";   // P3-S3 aligned: older byte-pins keep their meaning by reversing the P3-S3 edits first
 
 const root = new URL("../../", import.meta.url);
 const text = (p) => readFileSync(new URL(p, root), "utf8");
@@ -16,7 +17,7 @@ const code = (src) => src.split(NL).filter((l) => !l.trim().startsWith("//")).jo
 const src = code(view);
 
 test("index.html delta versus the released O2 baseline is EXACTLY the three O1 edits (reverse them and the released hash d5aa6c45... returns)", () => {
-  assert.equal(shaOf(reverseO1Edits(html)), "d5aa6c454793a523e8827cbd62bf80f3393b611d1f27db5ca3211f3f1cefec3a");
+  assert.equal(shaOf(reverseO1Edits(reverseS3IndexEdits(html))), "d5aa6c454793a523e8827cbd62bf80f3393b611d1f27db5ca3211f3f1cefec3a");
 });
 
 test("old paged / multi-select picker is completely removed from the module and from index.html", () => {
@@ -84,7 +85,7 @@ test("O1 does not touch O2, approveTeacher, the member list/ordering/lifecycle, 
     "package-lock.json": "507fee2f7652fa8ac0b1e73ce34622b49f5ac8959895ad0aa7d69d4c34e6f9ac",
     "vendor/xlsx.full.min.js": "c9506197caf809a075b6dee1da0d36fb19da7158ffe8a88e7b0c96c5d8623c99"
   };
-  for (const [file, hash] of Object.entries(pinned)) assert.equal(sha(file), hash, file);
+  for (const [file, hash] of Object.entries(pinned)) assert.equal(file === "organization-admin-view.mjs" ? shaOf(reverseS3AdminViewEdits(text(file))) : sha(file), hash, file);
   for (const f of ["storage.rules", "firebase.json", "cors.json"]) assert.ok(!existsSync(new URL(f, root)), f + " must not exist at the repository root");
   // the member list, newest-first query, lifecycle actions and archived handling are still present, unchanged in behaviour (S4 guards/e2e re-prove them)
   for (const token of ["export function renderMembersSectionHtml", "export function availableMemberActions", "export function summarizeMembers", "export function renderAddTeacherActionHtml", "function confirmAction(", "async function reload()", "queries.membersOfOrganization("]) assert.ok(view.includes(token), token);

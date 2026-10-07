@@ -628,6 +628,12 @@ import { createOrganizationWriteContract } from "./organization-write-contract.m
 import { getAdminFeature } from "./admin-feature-registry.mjs?v=20261003-p2s3";
 import { createOrganizationAdminScreen, createOrganizationWriter } from "./organization-admin-view.mjs?v=20261004-p2s4";
 import { createOrganizationMembershipSection, createMembershipWriter, createTeacherEmailSearchQuery } from "./organization-membership-view.mjs?v=20261006-o1";
+// Library V2 P3-S3: curriculum frameworks (Platform Admin). The model is imported WITHOUT a token on purpose: curriculum-queries/write-contract import it by bare URL,
+// so this keeps ONE model instance per page; the view receives every P3-S2 module by injection.
+import * as CURRICULUM_MODEL from "./curriculum-model.mjs";
+import { createCurriculumQueries } from "./curriculum-queries.mjs?v=20261007-p3s2";
+import { createCurriculumWriteContract } from "./curriculum-write-contract.mjs?v=20261007-p3s2";
+import { createCurriculumSection, createCurriculumWriter } from "./curriculum-admin-view.mjs?v=20261007-p3s3";
 import { createActiveOrganizationLookup, createTeacherEnrollmentFlow } from "./teacher-organization-enrollment.mjs?v=20261005-o2";
 // GATE 5F.C: Knowledge Co-creation dashboard launch/close control for the Classroom Second Brain
 // (V2) projection. Talks only to the accepted, frozen Gate 5C HTTP contract — never touches
@@ -1730,6 +1736,9 @@ function adminRoute(key){
 const ORGANIZATION_QUERIES=createOrganizationQueries({collection,doc,query,where,orderBy,limit,startAfter,documentId,getDocs,getDoc});
 const ORGANIZATION_PLATFORM_QUERIES=createPlatformAdminOrganizationQueries({collection,query,orderBy,limit,getDocs});
 const ORGANIZATION_CONTRACT=createOrganizationWriteContract({serverTimestamp});
+// P3-S3: curriculum read adapters (organizationId equality + limit only, no orderBy, no composite index) and write contract.
+const CURRICULUM_QUERIES=createCurriculumQueries({collection,doc,query,where,limit,getDocs,getDoc});
+const CURRICULUM_CONTRACT=createCurriculumWriteContract({serverTimestamp});
 // O1: explicit bounded email-prefix search for the Add-Teacher exception dialog (replaces the old paged teacher picker).
 const ORGANIZATION_TEACHER_SEARCH=createTeacherEmailSearchQuery({collection,query,where,orderBy,limit,getDocs});
 const readUserForMembership=async(database,userId)=>{const snap=await getDoc(doc(database,"users",userId));return snap.exists()?{id:snap.id,...snap.data()}:null;};
@@ -1754,6 +1763,13 @@ function adminOrganizations(c){
     esc, fmtDate, toast, mapError, openModal, closeModal, logAudit,
     queries:ORGANIZATION_QUERIES, platformQueries:ORGANIZATION_PLATFORM_QUERIES, contract:ORGANIZATION_CONTRACT,
     writer:createOrganizationWriter({collection,doc,setDoc,updateDoc}),
+    // P3-S3: curriculum framework list + lifecycle above the members section (Platform Admin only). No onOpenFramework hook yet: the node editor is P3-S4.
+    curriculumSection:createCurriculumSection({
+      db, actorUid:STATE.user.uid, isPlatformAdmin:STATE.profile?.role==="admin",
+      esc, fmtDate, toast, mapError, openModal, closeModal, logAudit,
+      model:CURRICULUM_MODEL, queries:CURRICULUM_QUERIES, organizationQueries:ORGANIZATION_QUERIES, contract:CURRICULUM_CONTRACT,
+      writer:createCurriculumWriter({collection,doc,setDoc,updateDoc})
+    }),
     // P2-S4: ordinary membership management inside Organization Detail (Platform Admin only; no Organization Admin / capability work).
     membershipSection:createOrganizationMembershipSection({
       db, actorUid:STATE.user.uid, isPlatformAdmin:STATE.profile?.role==="admin",

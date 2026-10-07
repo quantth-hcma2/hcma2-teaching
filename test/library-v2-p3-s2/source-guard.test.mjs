@@ -6,6 +6,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createCurriculumWriteContract } from "../../curriculum-write-contract.mjs";
 import * as M from "../../curriculum-model.mjs";
+import { reverseS3IndexEdits, reverseS3AdminViewEdits } from "../library-v2-p3-s3/s3-edits.mjs";   // P3-S3 aligned: older byte-pins keep their meaning by reversing the P3-S3 edits first
 
 const root = new URL("../../", import.meta.url);
 const text = (p) => readFileSync(new URL(p, root), "utf8");
@@ -98,10 +99,12 @@ test("nothing else changed: Rules (deployed P3-S1), indexes, Storage, index.html
     "organization-context.mjs": "406490f2338dd6fd645b0a1329bb1e5d8b00c02cfb0e36b8f075e0fa79f6ed30",
     "admin-feature-registry.mjs": "4e97434f69907931bdabb5eaf46fe4a765b62e122ba1f938a28adaeb04316413"
   };
-  for (const [f, h] of Object.entries(pinned)) assert.equal(sha(f), h, f);
+  const shaText = (t) => createHash("sha256").update(Buffer.from(t, "utf8")).digest("hex");
+  const pinnedActual = (f) => (f === "index.html" ? shaText(reverseS3IndexEdits(text(f))) : f === "organization-admin-view.mjs" ? shaText(reverseS3AdminViewEdits(text(f))) : sha(f));   // P3-S3 aligned: S3 edits reversed
+  for (const [f, h] of Object.entries(pinned)) assert.equal(pinnedActual(f), h, f);
   for (const f of ["storage.rules", "firebase.json", "cors.json"]) assert.ok(!existsSync(new URL(f, root)), f + " must not exist at the repository root");
-  const html = text("index.html");
+  const html = reverseS3IndexEdits(text("index.html"));   // the P3-S3 wiring is the only curriculum reference and is guarded by test/library-v2-p3-s3
   for (const p of [...MODULES, "curriculum"]) assert.ok(!html.includes(p), "index.html must not reference " + p + " (P3-S3 will wire the UI)");
-  for (const p of ["curriculum-admin-view.mjs"]) assert.ok(!existsSync(new URL(p, root)), p + " must not exist (UI is P3-S3/S4)");
+  // P3-S3 aligned: curriculum-admin-view.mjs now exists (UI section); its boundaries are guarded by test/library-v2-p3-s3/source-guard.test.mjs
   for (const f of ["organization-context.mjs", "admin-feature-registry.mjs", "organization-admin-view.mjs", "organization-membership-view.mjs", "organization-queries.mjs", "organization-write-contract.mjs", "teacher-organization-enrollment.mjs", "library-hub-registry.mjs"]) assert.ok(!text(f).includes("curriculum-"), f + " does not consume the curriculum modules");
 });

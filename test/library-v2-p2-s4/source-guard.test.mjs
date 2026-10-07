@@ -3,13 +3,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { reverseS3IndexEdits, reverseS3AdminViewEdits } from "../library-v2-p3-s3/s3-edits.mjs";   // P3-S3 aligned: older byte-pins keep their meaning by reversing the P3-S3 edits first
 
 const root = new URL("../../", import.meta.url);
 const text = (p) => readFileSync(new URL(p, root), "utf8");
 const sha = (p) => createHash("sha256").update(readFileSync(new URL(p, root))).digest("hex");
 const html = text("index.html");
 const view = text("organization-membership-view.mjs");
-const adminView = text("organization-admin-view.mjs");
+const adminViewNow = text("organization-admin-view.mjs");
+const adminView = reverseS3AdminViewEdits(adminViewNow);   // P3-S3 aligned: the S4 assertions below describe the S4 admin view (P3-S3 edits reversed)
 const code = (src) => src.split(String.fromCharCode(10)).filter((l) => !l.trim().startsWith("//")).join(String.fromCharCode(10));
 
 test("membership view module: only the S2 write contract is imported; no Firebase import, no hand-built membership payload, no fields of its own", () => {

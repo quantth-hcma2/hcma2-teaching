@@ -88,6 +88,7 @@ export function renderOrganizationDetailHtml({ organization, esc, fmtDate }) {
       <details class="mt-14"><summary class="small mut">Thông tin chẩn đoán</summary><div class="small mut mt-8">Mã nội bộ: <code>${esc(organization.id)}</code></div></details></div>
     ${lifecycle}
     <div id="orgActionErr" class="error-text hidden mt-8"></div>
+    <div id="orgCurriculumSection" class="mt-14"></div>
     <div id="orgMembersSection" class="mt-14"></div>`;
 }
 
@@ -126,8 +127,9 @@ export function createOrganizationWriter({ collection, doc, setDoc, updateDoc })
 //         queries: { organizationById(db,id) }, platformQueries: { listAllOrganizationsAsPlatformAdminOnly(db) },
 //         contract: <createOrganizationWriteContract result>, writer: { newId(db), create(db,id,data), update(db,id,data) },
 //         membershipSection?: { mount(host, organization) } (P2-S4) }
+//         curriculumSection?: { mount(host, organization) } (P3-S3: curriculum frameworks, rendered above the members section)
 export function createOrganizationAdminScreen(deps) {
-  const { db, actorUid, isPlatformAdmin, esc, fmtDate, toast, mapError, openModal, closeModal, logAudit, queries, platformQueries, contract, writer, membershipSection } = deps;
+  const { db, actorUid, isPlatformAdmin, esc, fmtDate, toast, mapError, openModal, closeModal, logAudit, queries, platformQueries, contract, writer, membershipSection, curriculumSection } = deps;
   const modalRoot = () => document.getElementById("globalModal");
   const modal$ = (selector) => modalRoot().querySelector(selector);
   const show = (el, message) => { el.textContent = message; el.classList.remove("hidden"); };
@@ -228,8 +230,12 @@ export function createOrganizationAdminScreen(deps) {
       };
       const lifecycleButton = container.querySelector("#orgArchiveBtn") || container.querySelector("#orgRestoreBtn");
       lifecycleButton.onclick = () => confirmLifecycle(organization.status === "archived" ? "restore" : "archive", organization, actionErr);
-      // P2-S4: ordinary membership management is mounted below the lifecycle controls (optional dependency; absent = S3 behavior).
-      if (membershipSection) await membershipSection.mount(container.querySelector("#orgMembersSection"), organization);
+      // P2-S4 / P3-S3: the curriculum section (above) and the ordinary membership section are optional dependencies (absent = S3 behavior). They mount
+      // independently and each paints its own loading/error state, so one section failing or being slow never blocks the other.
+      const mounts = [];
+      if (curriculumSection) mounts.push(curriculumSection.mount(container.querySelector("#orgCurriculumSection"), organization));
+      if (membershipSection) mounts.push(membershipSection.mount(container.querySelector("#orgMembersSection"), organization));
+      await Promise.allSettled(mounts);
     }
 
     function confirmLifecycle(kind, organization, actionErr) {

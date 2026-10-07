@@ -1,0 +1,24 @@
+# Library V2 - P3-S3 (curriculum framework UI / lifecycle) - candidate test results
+
+Candidate branch `candidate/library-v2-p3-s3-framework-ui`, based on source baseline `origin/main` `ec67a9cb692f942c0eb0a26f00e056f94e706334` (P3-S2 closed; production Rules ruleset 5945fbe7-d5db-4e23-b355-a7b17793c7a8, SHA-256 A0B206FC...921D).
+**Release grouping (Owner decision D2): P3-S3 is NOT released on its own; it is intended to ship together with P3-S4 as one functional checkpoint. This candidate must not be pushed to `main` or deployed.** No Rules, index, Storage, data or package change; the three P3-S2 modules are byte-identical.
+
+Production-relevant files: new `curriculum-admin-view.mjs`; `organization-admin-view.mjs` (host div + optional `curriculumSection` dependency + independent section mounts); `index.html` (4 imports, 2 constants, 1 dependency). Test-only: `test/library-v2-p3-s3/*` and alignment of seven older guards.
+
+Run (Edge + Playwright; Java 21 on PATH for the emulator suite):
+- pure: `node --test test/library-v2-p3-s3/view.unit.test.mjs test/library-v2-p3-s3/source-guard.test.mjs`
+- controller state machine (real browser, fake Firestore, no emulator): `node test/library-v2-p3-s3/controller.e2e.mjs`
+- integration (real `index.html` + Auth/Firestore emulators + the deployed P3-S1 Rules): `node test/library-v2-p3-s3/integration.e2e.mjs` (optional `P3S3_SHOTS=<dir>`)
+
+New tests (62, all pass):
+- `view.unit.test.mjs` 18 - status views, grouping/ordering/summary, truncation copy ("100 khung đầu tiên", never "mới nhất"), controls matrix (3 framework statuses x 2 organization statuses, with/without the Open hook), stale detection, contract/Firebase error classification (permission-denied never merged with not-found), readiness reasons from real P3-S2 results, all markup states, XSS escaping, dialog ARIA, transport-only writer.
+- `source-guard.test.mjs` 7 - the view imports nothing and calls no Firestore function except through the writer; no duplicated domain logic or payload keys; exactly the approved P3-S2 APIs consumed; the edits to `index.html` and `organization-admin-view.mjs` are exactly the approved ones (reversal restores the ec67a9c bytes); versioned imports; no `onOpenFramework` hook wired (S4 boundary); zero-index guard and byte identity of Rules, indexes, package and every other file.
+- `controller.e2e.mjs` 23 - loading/empty/populated/truncated/read-failure/permission-denied-read; create (validation, exact payload, audit, toast, live region, focus, no optimistic UI, re-read), pending-id retry (applied vs not-applied uncertain outcomes, no duplicate, new id per modal session), organization archived after load; rename (validation, unchanged, stale by updatedAt and status), not-found, write permission-denied diagnosis (consistent -> permission message; organization archived; framework changed; framework gone); activation blocked / ready / races / too large / archived organization; archive and restore; archived organization read-only; Open hook boundary (no button without hook; hook call performs no read or write); busy double-click guard; dialog focus/Escape/return focus; non-admin; responsive 375/768/1280 (no overflow, >= 44px targets); zero console errors.
+- `integration.e2e.mjs` 14 - Organization Detail with the curriculum card above members, no new top-level menu, empty -> create/rename/blocked activation/ready activation/archive/restore through the REAL Rules with exact fields and audit entries, grouped ordering, other-organization isolation, stale and deleted-elsewhere protection, organization archived while the create dialog is open (no write), seeded archived organization (no mutation control), lifecycle integration through the existing archive/restore screen, members section regression (including a member action), phone width, final collections/audit/user-data invariants.
+
+Existing suites on the P3-S3 tree:
+- P3-S2 62/62 (pure 52 + emulator contract suite 10); P3-S1 28/28; historical Rules 60/60 (P2-S1, S2, S4, O1, O2).
+- Released Organization browser flows against the S3 wiring: P2-S3 16/16, P2-S4 23/23, O2 13/13, O1 16/16 = 68/68.
+- All pure suites (P1, S2, S3, S4, O1, O2, P3) pass.
+- A/B of ALL 105 existing `*.test.mjs` files run individually, baseline tree (ec67a9c) vs this tree: identical counts for every file (1455 tests, 885 pass, 566 pre-existing environment/emulator-dependent failures on both sides).
+Older guards aligned (necessarily stale because P3-S3 edits `index.html` / `organization-admin-view.mjs` / adds a root module; every historical assertion keeps its meaning by reversing the P3-S3 edits first via `test/library-v2-p3-s3/s3-edits.mjs`): `library-v2-p2-s2`, `p2-s3`, `p2-s4`, `o1-search`, `onboarding-o2` source guards, `library-v2-p3-s1/regression.test.mjs`, `library-v2-p3-s2/source-guard.test.mjs`.

@@ -11,13 +11,14 @@ const shaOf = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 const NL = String.fromCharCode(10), CRLF = String.fromCharCode(13, 10);
 import { reverseO2Edits, IMPORT_ADDED, BLOCK_ADDED, APPROVE_O2 } from "./o2-edits.mjs";
 import { reverseO1Edits } from "../o1-search/o1-edits.mjs";
+import { reverseS3IndexEdits, reverseS3AdminViewEdits } from "../library-v2-p3-s3/s3-edits.mjs";   // P3-S3 aligned: older byte-pins keep their meaning by reversing the P3-S3 edits first
 const html = text("index.html");
 const mod = text("teacher-organization-enrollment.mjs");
 const code = (src) => src.split(NL).filter((l) => !l.trim().startsWith("//")).join(NL);
 
 test("index.html delta versus the released baseline is EXACTLY the three O2 edits (reverse them and the baseline hash returns)", () => {
   // O1 (Add-Teacher exception search) adds its own delta after O2: reverse it first, then the O2 edits must restore the released S4 index.html
-  assert.equal(shaOf(reverseO2Edits(reverseO1Edits(html))), "eb043d94d150babd1312e97378dc903a153bba7624ae2d0318e8487cd3cff079");
+  assert.equal(shaOf(reverseO2Edits(reverseO1Edits(reverseS3IndexEdits(html)))), "eb043d94d150babd1312e97378dc903a153bba7624ae2d0318e8487cd3cff079");
 });
 
 test("V1 approval semantics: the write, toast, callback position and error path are byte-identical; the continuation is additive, after the try/catch, not awaited, never throws", () => {
@@ -113,6 +114,6 @@ test("Rules, indexes, Storage, package, vendor and every released organization m
     "vendor/xlsx.full.min.js": "c9506197caf809a075b6dee1da0d36fb19da7158ffe8a88e7b0c96c5d8623c99",
     "vendor/pdf/SHA256SUMS.txt": "90c84e1b2eb22f0544e161d5a8fa34421051a34b486a725086484edeab812c88"
   };
-  for (const [file, hash] of Object.entries(pinned)) assert.equal(sha(file), hash, file);
+  for (const [file, hash] of Object.entries(pinned)) assert.equal(file === "organization-admin-view.mjs" ? shaOf(reverseS3AdminViewEdits(text(file))) : sha(file), hash, file);
   for (const f of ["storage.rules", "firebase.json", "cors.json"]) assert.ok(!existsSync(new URL(f, root)), f + " must not exist at the repository root");
 });

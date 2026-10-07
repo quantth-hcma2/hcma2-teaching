@@ -13,6 +13,8 @@ import {
   doc, setDoc, updateDoc, getDoc, getDocs, deleteDoc, collection, query, where, limit, serverTimestamp, assertFails
 } from "./helpers.mjs";
 import { seedV1, v1Ops } from "./v1-corpus.mjs";
+import { createHash } from "node:crypto";
+import { reverseS3IndexEdits, reverseS3AdminViewEdits } from "../library-v2-p3-s3/s3-edits.mjs";   // P3-S3 aligned: older byte-pins keep their meaning by reversing the P3-S3 edits first
 
 const rules = candidateRules();
 const baseline = baselineRules(rules);
@@ -71,12 +73,13 @@ test("no index, Storage, UI, dependency or data-model change (byte-pinned)", () 
     "organization-context.mjs": "406490f2338dd6fd645b0a1329bb1e5d8b00c02cfb0e36b8f075e0fa79f6ed30",
     "admin-feature-registry.mjs": "4e97434f69907931bdabb5eaf46fe4a765b62e122ba1f938a28adaeb04316413"
   };
-  for (const [f, h] of Object.entries(pinned)) assert.equal(shaFile(f), h, f);
+  const shaOfText = (t) => createHash("sha256").update(Buffer.from(t, "utf8")).digest("hex");
+  const actualOf = (f) => (f === "index.html" ? shaOfText(reverseS3IndexEdits(read(f).toString("utf8"))) : f === "organization-admin-view.mjs" ? shaOfText(reverseS3AdminViewEdits(read(f).toString("utf8"))) : shaFile(f));   // P3-S3 aligned: S3 edits reversed
+  for (const [f, h] of Object.entries(pinned)) assert.equal(actualOf(f), h, f);
   for (const f of ["storage.rules", "firebase.json", "cors.json"]) assert.ok(!existsSync(new URL(f, root)), f + " must not exist at the repository root");
-  const html = read("index.html").toString("utf8");
+  const html = reverseS3IndexEdits(read("index.html").toString("utf8"));   // P3-S3 aligned: the S3 wiring is guarded by test/library-v2-p3-s3
   for (const n of ["curriculumFrameworks", "curriculum-model", "curriculum-queries", "importBatches", "libraryResources"]) assert.ok(!html.includes(n), "index.html must not reference " + n);
   // P3-S2 aligned: the pure modules curriculum-model/queries/write-contract now exist (pinned and guarded by test/library-v2-p3-s2/source-guard.test.mjs); the UI module must still not exist (P3-S3/S4).
-  for (const f of ["curriculum-admin-view.mjs"]) assert.ok(!existsSync(new URL(f, root)), f + " must not exist (UI is not part of P3-S2)");
 });
 
 // ---------- behavior proof ----------

@@ -5,6 +5,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { reverseO2Edits } from "../onboarding-o2/o2-edits.mjs";
 import { reverseO1Edits } from "../o1-search/o1-edits.mjs";
+import { reverseS3IndexEdits, reverseS3AdminViewEdits } from "../library-v2-p3-s3/s3-edits.mjs";   // P3-S3 aligned: older byte-pins keep their meaning by reversing the P3-S3 edits first
 
 const root = new URL("../../", import.meta.url);
 const text = (p) => readFileSync(new URL(p, root), "utf8");
@@ -58,7 +59,7 @@ function adminOrganizations(c){
 `, ""]
   ];
   // onboarding O2 (post-approval organization step) adds its own delta after S4: reverse it first and require the released S4 index.html
-  let restored = reverseO2Edits(reverseO1Edits(html));
+  let restored = reverseO2Edits(reverseO1Edits(reverseS3IndexEdits(html)));
   assert.equal(createHash("sha256").update(restored, "utf8").digest("hex"), "eb043d94d150babd1312e97378dc903a153bba7624ae2d0318e8487cd3cff079", "S4 index.html restored");
   for (const [added, original] of S4_EDITS) {
     let hit = restored.split(added).length - 1, a = added, o = original;

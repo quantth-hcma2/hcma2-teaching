@@ -1,5 +1,5 @@
 // Library V2 P2-S2 - EMULATOR CONTRACT PROOF: the client builders/queries match the EXACT deployed P2-S1 Firestore Rules.
-// Rules under test = firestore.rules.production-candidate (SHA-256 7EA5D7A5..., production ruleset 7e4333e7-a927-47aa-b20d-74c58f778e7b).
+// Rules under test = firestore.rules.production-candidate (SHA-256 A0B206FC... = P3-S1 candidate; the deployed ruleset 7e4333e7-a927-47aa-b20d-74c58f778e7b / 7EA5D7A5... is exactly this file minus the P3 region).
 // Run: firebase emulators:exec --only firestore --project demo-p2s2 --config test/library-v2-p2-s1/firebase.json "node --test test/library-v2-p2-s2/contract.rules.test.mjs"
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -12,7 +12,7 @@ import { createOrganizationQueries, createPlatformAdminOrganizationQueries } fro
 import { resolveOrganizationContext } from "../../organization-context.mjs";
 
 const rules = candidateRules();
-assert.equal(sha(rules).toUpperCase(), "7EA5D7A5EBAC9DF18E995C9A1644B2648E4143FA4FE3046C0DE7F8737FCC1DDD", "contract is proven against the deployed Rules artifact");
+assert.equal(sha(rules).toUpperCase(), "A0B206FCDDA3843DB2E08EEEEB00A9704B5A1415B97B9E488477D8F21AA4921D", "contract is proven against the approved P3-S1 Rules artifact");
 const env = await makeEnv("demo-p2s2-contract", rules);
 await seedWorld(env);
 // 24 extra ordinary members (no capability documents) and 120 members for paging in orgA

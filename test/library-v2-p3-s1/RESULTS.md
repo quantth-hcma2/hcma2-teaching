@@ -13,8 +13,11 @@ Compile check: same command with `"node test/library-v2-p3-s1/compile-check.mjs"
 
 Total new: 28 tests PASS + compile check.
 
-Existing suites, A/B (base tree `bb1a0ae` vs candidate tree):
-- 20 legacy `run-emulator-tests.mjs` suites: 444 tests; base 425 pass / 19 fail, candidate 425 pass / 19 fail; exit codes, per-suite counts and failing test names identical (pre-existing failures).
-- P2-S1 `rules` 14/14 and `budget` 6/6 pass on the candidate (incl. the existing archived-organization Platform Admin governance assertions). P2-S1 `regression`: 2 assertions fail by construction (production-hash text proof; default-deny list containing curriculumFrameworks) - successors are in this directory.
-- S2 `contract.rules`, S4 `membership.rules`, O1 `search.rules`, O2 `enrollment.rules` (36 tests): 36/36 on the base tree; on the candidate they stop at their whole-file artifact-hash pin by design; with only that line neutralized in a scratch copy: 36/36.
-No existing test file was modified.
+Existing suites after the test-pin alignment (second commit; Rules file byte-identical to the first commit, SHA-256 a0b206fc...921d):
+- Aligned pins (no neutralizing, exact hash): 6 pure source guards (library-v2-p1, p2-s2, p2-s3, p2-s4, o1-search, onboarding-o2) now pin the P3-S1 Rules SHA; the 4 Rules suites (p2-s2 contract, p2-s4 membership, o1 search, o2 enrollment) pin the exact candidate SHA. library-v2-p2-s1 regression: the pre-P2 baseline now also strips the P3 region (same 218BFF3B... proof unchanged) and the "later-phase collections stay denied" list no longer blanket-denies curriculumFrameworks - replaced by preserved denial coverage (pre-P2 baseline; anonymous, ordinary teacher and malformed Platform Admin writes under the candidate). Every other historical assertion is unchanged.
+- P2-S1 rules 14, budget 6, regression 4 + S2 contract 11 + S4 membership 11 + O1 search + O2 enrollment (14 together) = 60/60 on the candidate Rules, including the existing archived-organization Platform Admin governance assertions.
+- Pure suites P1/S2/S3/S4/O1/O2 (registry, unit, source guard): all pass (12 files); on the pre-alignment candidate exactly six source-guard tests failed, all on the Rules hash entry.
+- New P3-S1 suites: 28/28.
+- 20 legacy run-emulator-tests suites (established Rules regression set), re-run on the final candidate tree vs the base tree bb1a0ae: 444 tests, 425 pass / 19 fail on both; per-suite counts and the 17 unique failing test names identical (pre-existing failures); no changed outcome.
+- Browser flow suites against the candidate Rules (real index.html, Edge, Auth+Firestore emulators): S3 16/16, S4 23/23, O2 13/13, O1 16/16 = 68/68.
+- Production-service compile (Rules-only dry run, nothing deployed): 0 errors, 5 warnings, all in the pre-existing P2 region; none in the P3 region.

@@ -12,7 +12,17 @@ import {
 } from "./helpers.mjs";
 
 const rules = candidateRules();
-const baseline = baselineRules(rules);
+// P3-S1 aligned: the historical baseline is production BEFORE P2-S1. The candidate now also carries the additive P3-S1 curriculum region
+// (inserted after the P2-S1 region), so the pre-P2 baseline strips both regions; "added" still measures the P2-S1 region alone.
+const P3_BEGIN = "    // ===== LIBRARY V2 P3-S1 (CURRICULUM) - BEGIN =====";
+const P3_END = "    // ===== LIBRARY V2 P3-S1 (CURRICULUM) - END =====";
+function stripP3Region(text) {
+  const a = text.indexOf(P3_BEGIN), e = text.indexOf(P3_END);
+  if (a < 0 || e < a) return text;
+  return text.slice(0, a) + text.slice(text.indexOf(NL, e) + 2);
+}
+const p2Stripped = baselineRules(rules);
+const baseline = stripP3Region(p2Stripped);
 const root = new URL("../../", import.meta.url);
 const read = (p) => readFileSync(new URL(p, root));
 const shaFile = (p) => sha(read(p));
@@ -22,7 +32,7 @@ test("text proof: removing the single additive region restores production Rules 
   assert.equal(rules.split(BEGIN).length - 1, 1); assert.equal(rules.split(END).length - 1, 1);
   const region = regionOf(rules);
   assert.ok(rules.indexOf(region) < rules.lastIndexOf("match /{document=**}"), "region precedes the default-deny match");
-  const added = rules.split(NL).length - baseline.split(NL).length;
+  const added = rules.split(NL).length - p2Stripped.split(NL).length;
   assert.ok(added > 100 && added < 200, "pure insertion of the region, " + added + " lines");
 });
 
@@ -201,8 +211,19 @@ test("default-deny proof: the three new collections are denied by the baseline (
     await assertFails(getDoc(doc(a("pa"), p)));
     await assertFails(setDoc(doc(a("pa"), p), { x: 1 }));
   }
-  for (const col of ["libraryResources", "curriculumFrameworks", "curriculumMappings", "importBatches", "libraryUsageEvents", "organizationInvites", "libraryAssets"]) {
+  for (const col of ["libraryResources", "curriculumMappings", "importBatches", "libraryUsageEvents", "organizationInvites", "libraryAssets"]) {
     await assertFails(setDoc(doc(c("pa"), col, "x"), { x: 1 }));
     await assertFails(getDoc(doc(c("pa"), col, "x")));
   }
+  // P3-S1 aligned: curriculumFrameworks is no longer a blanket-denied later-phase collection (P3 opens it to governance principals
+  // of the owning organization only). The security coverage is preserved: it is still denied by the pre-P2 baseline, and under the
+  // candidate it stays denied to anonymous, ordinary teachers and malformed Platform Admin writes (the complete P3 matrix lives in test/library-v2-p3-s1).
+  await assertFails(getDoc(doc(a("pa"), "curriculumFrameworks", "x")));
+  await assertFails(setDoc(doc(a("pa"), "curriculumFrameworks", "x"), { x: 1 }));
+  await assertFails(getDoc(doc(c("pa", "anonymous"), "curriculumFrameworks", "x")));
+  await assertFails(setDoc(doc(c("pa", "anonymous"), "curriculumFrameworks", "x"), { x: 1 }));
+  await assertFails(getDoc(doc(c("t1"), "curriculumFrameworks", "x")));
+  await assertFails(setDoc(doc(c("t1"), "curriculumFrameworks", "x"), { x: 1 }));
+  await assertFails(getDoc(doc(c("t1"), "curriculumFrameworks", "x/nodes/n")));
+  await assertFails(setDoc(doc(c("pa"), "curriculumFrameworks", "x"), { x: 1 }));
 });

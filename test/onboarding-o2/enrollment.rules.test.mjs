@@ -1,5 +1,5 @@
 // Onboarding O2 - EMULATOR compatibility proof against the EXACT deployed Firestore Rules (firestore.rules.production-candidate,
-// SHA-256 7EA5D7A5..., production ruleset 7e4333e7-a927-47aa-b20d-74c58f778e7b). Synthetic data only.
+// SHA-256 A0B206FC... = P3-S1 candidate = the deployed ruleset 7e4333e7-a927-47aa-b20d-74c58f778e7b / 7EA5D7A5... plus the P3 region). Synthetic data only.
 // Run: firebase emulators:exec --only firestore --project demo-o2 --config test/library-v2-p2-s1/firebase.json "node --test test/onboarding-o2/enrollment.rules.test.mjs"
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -14,7 +14,7 @@ import { createMembershipWriter } from "../../organization-membership-view.mjs";
 import { createActiveOrganizationLookup, enrollTeacherInOrganizations } from "../../teacher-organization-enrollment.mjs";
 
 const rules = candidateRules();
-assert.equal(sha(rules).toUpperCase(), "7EA5D7A5EBAC9DF18E995C9A1644B2648E4143FA4FE3046C0DE7F8737FCC1DDD", "proven against the deployed Rules artifact");
+assert.equal(sha(rules).toUpperCase(), "A0B206FCDDA3843DB2E08EEEEB00A9704B5A1415B97B9E488477D8F21AA4921D", "proven against the approved P3-S1 Rules artifact");
 const env = await makeEnv("demo-o2-enrollment", rules);
 await seedWorld(env);
 await env.withSecurityRulesDisabled(async (ctx) => {

@@ -10,6 +10,7 @@ import { IMPORT_LIMITS } from "./import-template.mjs";
 import { diag } from "./import-diagnostics.mjs";
 import { checkFileEnvelope } from "./import-xlsx-container.mjs";
 import { sha256Hex } from "./import-sha256.mjs";
+import { unsupportedBrowserDiagnostic } from "./import-capabilities.mjs";
 
 const LIM = IMPORT_LIMITS;
 
@@ -24,9 +25,18 @@ async function digest(bytes) {
   if (subtle) { try { return Array.from(new Uint8Array(await subtle.digest("SHA-256", bytes)), (b) => (b < 16 ? "0" : "") + b.toString(16)).join(""); } catch (error) { /* fall through to the pure implementation */ } }
   return sha256Hex(bytes);
 }
-export function browserWorkerFactory() {
-  if (typeof Worker === "undefined") throw new Error("Web Worker is not available in this environment");
-  return new Worker(new URL("./import-xlsx-worker.mjs", import.meta.url), { type: "module" });
+// Thrown by a worker factory when the environment lacks a capability: the reader turns it into the machine-readable BROWSER_UNSUPPORTED diagnostic.
+export class UnsupportedBrowserError extends Error {
+  constructor(missing) { super("unsupported browser: " + missing.join(", ")); this.name = "UnsupportedBrowserError"; this.missing = missing; }
+}
+export function browserWorkerFactory(scope = globalThis) {
+  if (typeof scope.Worker !== "function") throw new UnsupportedBrowserError(["worker"]);
+  // Module-worker detection without loading anything extra: a browser that supports { type: "module" } READS the option, one that does not never touches it.
+  let typeRead = false;
+  const options = { get type() { typeRead = true; return "module"; } };
+  const worker = new scope.Worker(new URL("./import-xlsx-worker.mjs", import.meta.url), options);
+  if (!typeRead) { try { worker.terminate(); } catch (error) { /* ignore */ } throw new UnsupportedBrowserError(["module-worker"]); }
+  return worker;
 }
 
 export function createXlsxReader({ createWorker = browserWorkerFactory, timeoutMs = LIM.parseTimeoutMs, setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = (id) => clearTimeout(id) } = {}) {
@@ -43,7 +53,10 @@ export function createXlsxReader({ createWorker = browserWorkerFactory, timeoutM
     file.sha256 = await digest(bytes);
     const id = ++counter;
     let worker;
-    try { worker = createWorker(); } catch (error) { return { ok: false, diagnostics: [diag("PARSE_EXCEPTION")], raw: null, file, timedOut: false }; }
+    try { worker = createWorker(); } catch (error) {
+      if (error && Array.isArray(error.missing)) return { ok: false, diagnostics: [unsupportedBrowserDiagnostic(error.missing)], raw: null, file, timedOut: false, unsupportedBrowser: true };
+      return { ok: false, diagnostics: [diag("PARSE_EXCEPTION")], raw: null, file, timedOut: false };
+    }
     return await new Promise((resolve) => {
       let finished = false, timer = null;
       const finish = (body) => {
@@ -58,7 +71,10 @@ export function createXlsxReader({ createWorker = browserWorkerFactory, timeoutM
         const message = event && event.data;
         if (!message || message.type !== "result" || message.id !== id) return;
         if (message.ok && message.raw && typeof message.raw === "object") finish({ ok: true, diagnostics: Array.isArray(message.diagnostics) ? message.diagnostics : [], raw: message.raw });
-        else finish({ ok: false, diagnostics: Array.isArray(message.diagnostics) && message.diagnostics.length ? message.diagnostics : [diag("PARSE_EXCEPTION")], raw: null });
+        else {
+          const diagnostics = Array.isArray(message.diagnostics) && message.diagnostics.length ? message.diagnostics : [diag("PARSE_EXCEPTION")];
+          finish({ ok: false, diagnostics, raw: null, unsupportedBrowser: diagnostics.some((d) => d.code === "BROWSER_UNSUPPORTED") });
+        }
       };
       const onError = () => finish({ ok: false, diagnostics: [diag("PARSE_EXCEPTION")], raw: null });
       worker.addEventListener("message", onMessage);

@@ -40,6 +40,19 @@ export const SHEET_COLUMNS = deepFreeze({
 });
 export const META_KEYS = freeze(["templateId", "schemaVersion", "generator", "headerChecksum"]);
 
+// ---------------------------------------------------------------- strictness policy (Architect-approved, P4-S2 review)
+// Deliberately STRICTER than the R2 s9 table: these are ERRORS, not warnings. A literal value is required wherever data is read, and the template is exactly the
+// frozen sheet set. Pinned by test/library-v2-p4-s2 (strictness) - relaxing any entry is an Architect decision.
+export const TEMPLATE_STRICTNESS = deepFreeze({
+  unexpectedWorksheets: "error",      // R2 tolerated up to 3 as a warning
+  formulaCells: "error",              // R2: warning with the cached value; the cached value is never trusted or used
+  malformedStylesPart: "error",       // xl/styles.xml is optional, but when present it must be well-formed SpreadsheetML
+  booleanDateErrorCells: "error",
+  numericTextFields: "error",         // numbers are accepted only in code columns (warning) and in Thứ tự
+  unicode: "preserve-after-trim",     // stored/display text is never normalized; canonical equivalence is for comparisons only (P3)
+  unsupportedBrowser: "fail-closed"   // BROWSER_UNSUPPORTED, no unsafe fallback
+});
+
 // ---------------------------------------------------------------- limits (R1 s17 / R2 s9; business limits come from curriculum-model.mjs)
 export const IMPORT_LIMITS = deepFreeze({
   maxFileBytes: 5 * 1024 * 1024,                 // frozen: source file <= 5 MiB
@@ -52,7 +65,8 @@ export const IMPORT_LIMITS = deepFreeze({
     ratioMinEntryBytes: 1024 * 1024,
     maxSharedStrings: 50000,
     maxNameBytes: 255,
-    maxContentTypesBytes: 262144
+    maxContentTypesBytes: 262144,
+    maxStylesBytes: 4 * 1024 * 1024
   },
   sheet: {
     maxRows: 5105,                                // 5000 nodes + header + slack (R1 s17)

@@ -1,5 +1,6 @@
 // Library V2 P4-S2 - structured Vietnamese diagnostics for the XLSX import pipeline (pure, inert).
-// A diagnostic is { severity: "error"|"warning", code, stage (1-10), sheet, row, column, field, message, hint, refs:[{sheet,row}], value }.
+// A diagnostic is { severity: "error"|"warning", code, stage (1-10), sheet, row, column, field, message, hint, refs:[{sheet,row}], value, data }.
+//   - `data` is an optional machine-readable payload (null when unused); BROWSER_UNSUPPORTED carries { missing: [capability ids] } so the UI can react to the code, not to text;
 //   - `sheet`/`row` are the worksheet name and the EXCEL row number (1-based); `column` is the header text; `field` is the stable field key;
 //   - `code` is a stable machine-readable identifier (the catalog below); `message` is plain Vietnamese and already contains the location;
 //   - `value` is a short, bounded excerpt of the offending cell (never the whole cell), `refs` the other rows involved (e.g. the first duplicate).
@@ -53,6 +54,8 @@ const C = {
   SHEET_TOO_LARGE: { severity: "error", stage: 1, text: (d) => "Một sheet vượt giới hạn " + d.what + " (" + n(d.count) + " > " + n(d.max) + ")" + (d.name ? " ở " + q(excerpt(d.name)) : "") + "." },
   PARSE_EXCEPTION: { severity: "error", stage: 1, text: () => "Tệp không đọc được hoặc không đúng mẫu.", hint: () => "Hãy tải lại tệp mẫu và nhập dữ liệu vào đó." },
   PARSE_TIMEOUT: { severity: "error", stage: 1, text: (d) => "Đọc tệp quá lâu (hơn " + n(d.seconds) + " giây) nên đã bị dừng.", hint: () => "Tệp có thể quá phức tạp hoặc bị hỏng. Hãy dùng tệp mẫu." },
+  BROWSER_UNSUPPORTED: { severity: "error", stage: 1, text: (d) => "Trình duyệt này chưa hỗ trợ đọc tệp Excel một cách an toàn" + (d.data && d.data.missing && d.data.missing.length ? " (thiếu: " + d.data.missing.join(", ") + ")" : "") + ".", hint: () => "Hãy dùng phiên bản mới của Chrome, Edge, Firefox hoặc Safari. Hệ thống không đọc tệp bằng cách kém an toàn hơn." },
+  STYLES_INVALID: { severity: "error", stage: 1, text: (d) => "Phần định dạng ô (xl/styles.xml) của sổ làm việc bị hỏng hoặc không hợp lệ" + (d.detail ? " (" + excerpt(d.detail) + ")" : "") + ".", hint: () => "Mở tệp bằng Excel rồi lưu lại dưới dạng .xlsx, hoặc dùng tệp mẫu." },
   PARSE_NO_SHEETS: { severity: "error", stage: 1, text: () => "Sổ làm việc không có sheet nào." },
   // ---- stage 2: workbook / template
   SHEET_MISSING: { severity: "error", stage: 2, text: (d) => "Thiếu sheet " + q(d.sheet) + ".", hint: () => "Hãy dùng tệp mẫu và không xóa hoặc đổi tên sheet." },
@@ -91,6 +94,7 @@ const C = {
   ORDER_RANGE: { severity: "error", stage: 4, text: (d) => "Thứ tự " + q(excerpt(d.value)) + " ngoài khoảng 0 đến 100000." },
   ORDER_FROM_TEXT: { severity: "warning", stage: 4, text: (d) => "Thứ tự " + q(excerpt(d.value)) + " được đọc từ ô văn bản thành số." },
   // ---- stage 5: relations / order
+  LESSONS_OF_INVALID_SUBJECT: { severity: "warning", stage: 5, text: (d) => d.count + " bài tham chiếu mã môn " + q(excerpt(d.value)) + " của dòng " + d.subjectRow + " (sheet MÔN), dòng đó đang lỗi; các bài này sẽ được kiểm tra lại sau khi sửa dòng " + d.subjectRow + "." },
   LESSON_ORPHAN: { severity: "error", stage: 5, text: (d) => "Mã môn " + q(excerpt(d.value)) + " không có trong sheet MÔN.", hint: () => "Thêm môn vào sheet MÔN hoặc sửa mã môn của bài." },
   SUBJECT_EMPTY: { severity: "warning", stage: 5, text: (d) => "Môn " + q(excerpt(d.value)) + " chưa có bài nào." },
   ORDER_MIXED: { severity: "error", stage: 5, text: (d) => "Ô Thứ tự chỉ điền cho một số dòng của " + d.group + ".", hint: () => "Điền đủ Thứ tự cho tất cả dòng của nhóm hoặc để trống toàn bộ." },
@@ -123,6 +127,7 @@ export function columnLetter(index) { // 0 -> A
 }
 
 // diag("CODE_DUPLICATE", { sheet, row, column, field, value, refs, otherRow, ... }) -> frozen diagnostic. Unknown codes throw (programming error).
+const freezeData = (value) => JSON.parse(JSON.stringify(value), (key, v) => (v && typeof v === "object" ? freeze(v) : v));
 export function diag(code, d = {}) {
   const spec = C[code];
   if (!spec) throw new Error("unknown diagnostic code " + code);
@@ -133,7 +138,8 @@ export function diag(code, d = {}) {
   return freeze({
     severity: spec.severity, code, stage: spec.stage, sheet, row, column: d.column === undefined ? null : d.column, field: d.field === undefined ? null : d.field,
     message: where + body, hint: spec.hint ? spec.hint(d) : null,
-    refs: freeze((d.refs || []).map((ref) => freeze({ sheet: ref.sheet, row: ref.row }))), value: excerpt(d.value)
+    refs: freeze((d.refs || []).map((ref) => freeze({ sheet: ref.sheet, row: ref.row }))), value: excerpt(d.value),
+    data: d.data === undefined ? null : freezeData(d.data)
   });
 }
 

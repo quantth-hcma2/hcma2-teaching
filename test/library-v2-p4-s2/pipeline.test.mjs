@@ -234,17 +234,6 @@ test("CHARACTERS: control characters, bidirectional overrides and CR are errors;
   assert.deepEqual(scanCharacters("a" + bidi), { control: false, bidi: true, invisible: false });
   assert.deepEqual(scanCharacters("ok tên"), { control: false, bidi: false, invisible: false });
 });
-test("UNICODE: text is stored in NFC (canonical composition only); the original NFD value is kept for the preview; NFKC/case folding never rewrite stored text", async () => {
-  const nfd = "Số học".normalize("NFD"), code = "Ｔ01-Đ";                                 // full-width T must NOT be rewritten in storage
-  const result = await run({ framework: ["Chương trình".normalize("NFD")], subjects: [[code, nfd, null]], lessons: [[code, "bài-à".normalize("NFD"), "tập hợp".normalize("NFD"), null]] });
-  assert.equal(result.ok, true, JSON.stringify(result.errors));
-  const [subject, lesson] = result.model.nodes;
-  assert.equal(subject.name, "Số học".normalize("NFC")); assert.equal(subject.original.name, nfd); assert.ok(subject.notes.includes("name:nfc"));
-  assert.equal(subject.code, code, "NFKC is a comparison key only: the stored code keeps the full-width character");
-  assert.equal(lesson.code, "bài-à".normalize("NFC")); assert.equal(result.model.framework.name, "Chương trình".normalize("NFC"));
-  assert.equal(result.model.framework.original, "Chương trình".normalize("NFD"));
-  assert.equal(subject.code, subject.code.trim());
-});
 test("VISIBILITY: hidden rows/columns and merged cells are warnings; the data is still read as written", async () => {
   const result = await run({ mutate: (wb) => {
     const ws = wb.Sheets[SHEET_SUBJECTS]; ws["!rows"] = [{}, { hidden: true }]; ws["!cols"] = [{}, { hidden: true }]; ws["!merges"] = [{ s: { r: 2, c: 0 }, e: { r: 2, c: 1 } }];
@@ -309,8 +298,11 @@ test("DETERMINISM: the same logical workbook gives a byte-identical model regard
   const c = validateImport({ ok: true, diagnostics: [], raw: shuffled, file: a.result.file });
   assert.equal(canonicalJson(c.model), canonicalJson(a.result.model), "cell order inside the RawWorkbook is irrelevant");
   const nfd = await run({ framework: ["Chương trình Toán 6".normalize("NFD")], subjects: DEFAULT_SUBJECTS.map(([c1, n, o]) => [c1, n.normalize("NFD"), o]), lessons: DEFAULT_LESSONS.map(([s, c1, n, o]) => [s, c1, n.normalize("NFD"), o]) });
-  const strip = (m) => m.nodes.map((n) => [n.key, n.kind, n.parentKey, n.code, n.name, n.order]);
-  assert.deepEqual(strip(nfd.model), strip(a.result.model), "NFD and NFC input normalize to the same model");
+  const nfdAgain = await run({ framework: ["Chương trình Toán 6".normalize("NFD")], subjects: DEFAULT_SUBJECTS.map(([c1, n, o]) => [c1, n.normalize("NFD"), o]), lessons: DEFAULT_LESSONS.map(([s, c1, n, o]) => [s, c1, n.normalize("NFD"), o]) });
+  assert.equal(canonicalJson(nfd.model), canonicalJson(nfdAgain.model), "NFD input is deterministic too");
+  const strip = (m) => m.nodes.map((n) => [n.key, n.kind, n.parentKey, n.code, n.order]);
+  assert.deepEqual(strip(nfd.model), strip(a.result.model), "structure, codes and orders are identical; only the preserved Unicode sequence of names differs");
+  assert.notEqual(nfd.model.nodes[0].name, a.result.model.nodes[0].name); assert.equal(nfd.model.nodes[0].name, DEFAULT_SUBJECTS[0][1].normalize("NFD"));
   // a different parser only has to emit the same RawWorkbook: hand-built raw data validates identically
   const handmade = { parser: "parser.xlsx.v1", library: "handmade", sheetNames: ["HƯỚNG DẪN", "KHUNG", "MÔN", "BÀI", "_meta"], sheets: [
     { name: "HƯỚNG DẪN", state: "visible", cells: [], merges: [], hiddenRows: [], hiddenColumns: [], notRead: true },

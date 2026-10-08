@@ -37,7 +37,7 @@ const columnOf = (field) => {
 // ---------------------------------------------------------------- candidate (what stages 5-9 operate on)
 export function candidateFromRows(interp, file) {
   const nodes = [];
-  for (const s of interp.subjects) nodes.push({ key: "MON:" + s.row, kind: "subject", parentKey: null, subjectCodeRef: null, code: s.code, name: s.name, explicitOrder: s.explicitOrder, orderFailed: !!s.orderFailed, order: null, orderSource: null, sourceRef: { sheet: SHEET_SUBJECTS, row: s.row }, notes: s.notes, original: pickOriginal(s), failed: s.failed });
+  for (const s of interp.subjects) nodes.push({ key: "MON:" + s.row, kind: "subject", parentKey: null, subjectCodeRef: null, code: s.code, codeAttempt: s.codeAttempt ?? null, name: s.name, explicitOrder: s.explicitOrder, orderFailed: !!s.orderFailed, order: null, orderSource: null, sourceRef: { sheet: SHEET_SUBJECTS, row: s.row }, notes: s.notes, original: pickOriginal(s), failed: s.failed });
   for (const l of interp.lessons) nodes.push({ key: "BAI:" + l.row, kind: "lesson", parentKey: null, subjectCodeRef: l.subjectCodeRef, code: l.code, name: l.name, explicitOrder: l.explicitOrder, orderFailed: !!l.orderFailed, order: null, orderSource: null, sourceRef: { sheet: SHEET_LESSONS, row: l.row }, notes: l.notes, original: pickOriginal(l), failed: l.failed });
   return { template: interp.template, file, framework: interp.framework, nodes };
 }
@@ -66,14 +66,29 @@ export function stage5(candidate, report) {
     const key = canonicalizeNodeCode(subject.code);
     if (key !== null && !bySubjectCode.has(key)) bySubjectCode.set(key, subject);
   }
+  // Root-cause tracking: a subject whose CODE CELL was rejected in stage 4 (formula, control character, ...) still has a readable text for explanation; a lesson that
+  // points at exactly that text is a DERIVATIVE of the subject's own error, so it is grouped into one warning instead of one LESSON_ORPHAN error each.
+  const invalidByText = new Map();
+  for (const subject of subjects) {
+    if (typeof subject.code === "string" || typeof subject.codeAttempt !== "string" || subject.codeAttempt === "") continue;
+    const key = canonicalizeNodeCode(subject.codeAttempt);
+    if (key !== null && !bySubjectCode.has(key) && !invalidByText.has(key)) invalidByText.set(key, { subject, lessons: [] });
+  }
   const lessonCount = new Map();
   for (const lesson of lessons) {
     lesson.parentKey = null;
     if (typeof lesson.subjectCodeRef !== "string") continue;
-    const parent = bySubjectCode.get(canonicalizeNodeCode(lesson.subjectCodeRef));
+    const refKey = canonicalizeNodeCode(lesson.subjectCodeRef);
+    const parent = bySubjectCode.get(refKey);
+    if (!parent && invalidByText.has(refKey)) { invalidByText.get(refKey).lessons.push(lesson); continue; }
     if (!parent) { report(diag("LESSON_ORPHAN", { sheet: SHEET_LESSONS, row: lesson.sourceRef.row, column: columnOf("subjectCode") || SHEET_COLUMNS[SHEET_LESSONS][0].header, field: "subjectCode", value: lesson.subjectCodeRef })); continue; }
     lesson.parentKey = parent.key;
     lessonCount.set(parent.key, (lessonCount.get(parent.key) || 0) + 1);
+  }
+  for (const { subject, lessons: derived } of invalidByText.values()) {
+    if (derived.length === 0) continue;
+    report(diag("LESSONS_OF_INVALID_SUBJECT", { sheet: SHEET_LESSONS, row: derived[0].sourceRef.row, column: SHEET_COLUMNS[SHEET_LESSONS][0].header, field: "subjectCode", value: subject.codeAttempt, count: derived.length, subjectRow: subject.sourceRef.row,
+      refs: [{ sheet: SHEET_SUBJECTS, row: subject.sourceRef.row }, ...derived.slice(0, 20).map((lesson) => ({ sheet: SHEET_LESSONS, row: lesson.sourceRef.row }))] }));
   }
   for (const subject of subjects) if (!subject.failed && !lessonCount.has(subject.key)) report(diag("SUBJECT_EMPTY", { sheet: SHEET_SUBJECTS, row: subject.sourceRef.row, value: subject.code }));
   // order consistency per sibling group (all MÔN rows form one group; BÀI rows form one group per subject): ALL explicit and unique, or NONE explicit
@@ -176,12 +191,11 @@ export function stage9(candidate, report) {
   for (const error of readiness.errors) if (!error.code.startsWith("TREE_")) report(diag("NOT_READY", { detail: error.code }));
 }
 
-// Runs stages 5-9 on a candidate. Stage 9 only runs when 5-8 found no error (it is a defence-in-depth re-check of the same facts).
+// Runs stages 5-9 on a candidate. Stage 9 only runs when no earlier stage found an error (it is a defence-in-depth re-check of the same facts).
 export function runDomainStages(candidate, collector) {
-  const before = collector.errorCount;
   const report = (item) => collector.add(item);
   stage5(candidate, report); stage6(candidate, report); stage7(candidate, report); stage8(candidate, report);
-  if (collector.errorCount === before) stage9(candidate, report);
+  if (collector.errorCount === 0) stage9(candidate, report);          // defence in depth: only when NOTHING (stages 1-8) was rejected
 }
 
 // ---------------------------------------------------------------- orchestrator
@@ -209,7 +223,11 @@ export function validateImport(reading) {
     const diagnostics = sortDiagnostics(collector.items());
     const errors = errorsOf(diagnostics), warnings = warningsOf(diagnostics);
     const stages = Object.keys(STAGES).map(Number).map((stage) => ({ stage, name: STAGES[stage], errors: errors.filter((d) => d.stage === stage).length, warnings: warnings.filter((d) => d.stage === stage).length }));
-    return { ok: errors.length === 0, ready: errors.length === 0 && model !== null, model: errors.length === 0 ? model : null, diagnostics, errors, warnings, stages, counts: counts || { subjects: 0, lessons: 0, total: 0 }, file: reading ? reading.file || null : null };
+    const unsupported = errors.find((d) => d.code === "BROWSER_UNSUPPORTED");
+    return {
+      ok: errors.length === 0, ready: errors.length === 0 && model !== null, model: errors.length === 0 ? model : null, diagnostics, errors, warnings, stages, counts: counts || { subjects: 0, lessons: 0, total: 0 }, file: reading ? reading.file || null : null,
+      unsupportedBrowser: !!unsupported, missingCapabilities: unsupported && unsupported.data ? unsupported.data.missing : []        // machine-readable: the UI shows its own Vietnamese text for this state
+    };
   };
   if (!reading || typeof reading !== "object") { collector.add(diag("PARSE_EXCEPTION")); return finish(null); }
   collector.addAll(Array.isArray(reading.diagnostics) ? reading.diagnostics : []);               // stage 1 (container, parse) diagnostics from the Worker

@@ -1,14 +1,14 @@
 // Library V2 P4-S2 - template INTERPRETATION and cell NORMALIZATION (validation stages 2, 3 and 4). Parser-independent: the input is the plain RawWorkbook
 // produced by import-xlsx-extract.mjs (or any future parser that emits the same shape); no SheetJS object, DOM, network or clock is involved.
 //
-// Allowed, visible normalization of TEXT (R1 s6 "No silent repair"; the Architect asked for Unicode normalization and whitespace handling):
-//   - trim leading/trailing whitespace (note `trim`);
-//   - Unicode NFC (canonical composition ONLY - never NFKC, never case folding, never inner-whitespace collapsing; note `nfc`). NFKC/case folding exist only
-//     inside the P3 comparison key canonicalizeNodeCode, which is used for duplicate detection and never rewrites the stored text;
+// Allowed, visible normalization of TEXT (R1 s6 "No silent repair"; Architect correction of the P4-S2 review: UNICODE IS PRESERVED):
+//   - trim leading/trailing whitespace (note `trim`) - the ONLY change to a text value; the user's own Unicode sequence (NFC, NFD, full-width, case) is stored
+//     and displayed exactly as typed. Canonical equivalence (trim -> NFKC -> case-insensitive fold) is applied only when two values are COMPARED, by the P3
+//     canonicalizeNodeCode policy (duplicate codes, subject references); template identity (sheet names, headers, _meta keys) is compared after NFC but never stored;
 //   - a numeric cell that is a code candidate becomes text (note `numeric`, warning CELL_NUMERIC_CODE; the displayed text is kept when the number format
 //     preserves leading zeros); a text cell in an order column becomes an integer (note `order-text`, warning ORDER_FROM_TEXT); blank -> null.
 // Everything else is rejected with a diagnostic: formulas, booleans, dates, error cells, numbers in text fields, control characters, bidirectional
-// override/embedding/isolate characters, over-long cells. The original user-visible value is kept in `original` whenever it differs from the normalized one.
+// override/embedding/isolate characters, over-long cells. The original user-visible value is kept in `original` whenever it differs from the stored one (untrimmed text, numeric code display).
 import {
   TEMPLATE_ID, SUPPORTED_TEMPLATE_VERSIONS, TEMPLATE_SHEET_NAMES, SHEET_FRAMEWORK, SHEET_SUBJECTS, SHEET_LESSONS, SHEET_META, SHEET_COLUMNS, META_KEYS,
   TEMPLATE_HEADER_CHECKSUM, headerChecksumOf, IMPORT_LIMITS
@@ -46,30 +46,33 @@ const isBlankCell = (cell) => !cell || (cell.t === "s" && !cell.f && cell.v.trim
 // kind: "text" (names, framework name) | "code" (codes and the subject reference)
 function readTextCell(cell, ctx, { kind, column, field }) {
   const here = { sheet: ctx.sheet, row: cell ? cell.r : ctx.row, column, field };
-  if (isBlankCell(cell) && !(cell && cell.f)) return { blank: true, text: null, original: null, notes: [], failed: false };
-  if (cell.f) { ctx.report(diag("CELL_FORMULA", here)); return { blank: false, text: null, original: null, notes: [], failed: true }; }
-  if (cell.t === "b") { ctx.report(diag("CELL_TYPE_BOOLEAN", here)); return { blank: false, text: null, original: null, notes: [], failed: true }; }
-  if (cell.t === "d") { ctx.report(diag("CELL_TYPE_DATE", here)); return { blank: false, text: null, original: null, notes: [], failed: true }; }
-  if (cell.t === "e") { ctx.report(diag("CELL_TYPE_ERROR", { ...here, value: cell.w })); return { blank: false, text: null, original: null, notes: [], failed: true }; }
+  const failure = (attempt = null) => ({ blank: false, text: null, original: null, notes: [], failed: true, attempt });   // attempt: readable text of a rejected cell (only used to explain derivative errors)
+  if (isBlankCell(cell) && !(cell && cell.f)) return { blank: true, text: null, original: null, notes: [], failed: false, attempt: null };
+  if (cell.f) {
+    ctx.report(diag("CELL_FORMULA", here));
+    return failure(cell.t === "s" && typeof cell.v === "string" && !cell.long ? cell.v.trim() : cell.t === "n" ? String(cell.w ?? cell.v) : null);
+  }
+  if (cell.t === "b") { ctx.report(diag("CELL_TYPE_BOOLEAN", here)); return failure(); }
+  if (cell.t === "d") { ctx.report(diag("CELL_TYPE_DATE", here)); return failure(); }
+  if (cell.t === "e") { ctx.report(diag("CELL_TYPE_ERROR", { ...here, value: cell.w })); return failure(); }
   if (cell.t === "n") {
-    if (kind !== "code") { ctx.report(diag("CELL_TYPE_NOT_TEXT", { ...here, value: cell.w ?? cell.v })); return { blank: false, text: null, original: null, notes: [], failed: true }; }
+    if (kind !== "code") { ctx.report(diag("CELL_TYPE_NOT_TEXT", { ...here, value: cell.w ?? cell.v })); return failure(); }
     const v = cell.v;
     const shown = Number.isSafeInteger(v) && typeof cell.w === "string" && /^[0-9]+$/.test(cell.w) && Number(cell.w) === v ? cell.w : String(v);
     ctx.report(diag("CELL_NUMERIC_CODE", { ...here, value: shown }));
-    return { blank: false, text: shown, original: cell.w ?? String(v), notes: ["numeric"], failed: false };
+    return { blank: false, text: shown, original: cell.w ?? String(v), notes: ["numeric"], failed: false, attempt: null };
   }
   // string
-  if (cell.long) { ctx.report(diag("CELL_TOO_LONG", { ...here, max: LIM.sheet.maxCellChars })); return { blank: false, text: null, original: null, notes: [], failed: true }; }
+  if (cell.long) { ctx.report(diag("CELL_TOO_LONG", { ...here, max: LIM.sheet.maxCellChars })); return failure(); }
   const chars = scanCharacters(cell.v);
-  if (chars.control) { ctx.report(diag("CHAR_CONTROL", { ...here, value: cell.v })); return { blank: false, text: null, original: null, notes: [], failed: true }; }
-  if (chars.bidi) { ctx.report(diag("CHAR_BIDI", { ...here, value: cell.v })); return { blank: false, text: null, original: null, notes: [], failed: true }; }
+  if (chars.control) { ctx.report(diag("CHAR_CONTROL", { ...here, value: cell.v })); return failure(cell.v.trim()); }
+  if (chars.bidi) { ctx.report(diag("CHAR_BIDI", { ...here, value: cell.v })); return failure(cell.v.trim()); }
   if (chars.invisible) ctx.report(diag("CHAR_INVISIBLE", { ...here, value: cell.v }));
-  const composed = cell.v.normalize("NFC");
-  const text = composed.trim();
-  const notes = [];
-  if (composed !== cell.v) notes.push("nfc");
-  if (text !== composed) notes.push("trim");
-  return { blank: false, text, original: notes.length ? cell.v : null, notes, failed: false };
+  // UNICODE PRESERVATION (Architect correction): the stored/display value is the user's own character sequence minus surrounding whitespace. No NFC, NFKC or
+  // case rewriting here; canonical equivalence is applied only when VALUES ARE COMPARED (P3 canonicalizeNodeCode for codes).
+  const text = cell.v.trim();
+  const notes = text !== cell.v ? ["trim"] : [];
+  return { blank: false, text, original: notes.length ? cell.v : null, notes, failed: false, attempt: null };
 }
 
 function readOrderCell(cell, ctx, column) {
@@ -128,7 +131,7 @@ function readMeta(indexed, report) {
     seen.add(key);
     if (valueCell && valueCell.f) { report(diag("CELL_FORMULA", { sheet: SHEET_META, row, field: key })); continue; }
     if (valueCell && (valueCell.t === "b" || valueCell.t === "d" || valueCell.t === "e")) { report(diag("CELL_TYPE_NOT_TEXT", { sheet: SHEET_META, row, field: key })); continue; }
-    values.set(key, valueCell && !isBlankCell(valueCell) ? (valueCell.t === "n" ? valueCell.v : nfc(valueCell.v).trim()) : null);
+    values.set(key, valueCell && !isBlankCell(valueCell) ? (valueCell.t === "n" ? valueCell.v : key === "generator" ? valueCell.v.trim() : nfc(valueCell.v).trim()) : null);
   }
   for (const key of META_KEYS) if (!values.has(key) || values.get(key) === null) report(diag("META_MISSING_KEY", { sheet: SHEET_META, key }));
   return values;
@@ -240,7 +243,7 @@ export function interpretWorkbook(raw, report) {
     const okCode = requireField(code, subjectColumns[0].header, SHEET_SUBJECTS, row, "subjectCode", report);
     const okName = requireField(name, subjectColumns[1].header, SHEET_SUBJECTS, row, "subjectName", report);
     if (subjectSheet.sheet.hiddenRows.includes(row)) report(diag("ROW_HIDDEN", { sheet: SHEET_SUBJECTS, row }));
-    out.subjects.push({ row, code: okCode ? code.text : null, codeOriginal: code.original, name: okName ? name.text : null, nameOriginal: name.original, explicitOrder: order.value, orderFailed: order.failed, notes: [...code.notes.map((n) => "code:" + n), ...name.notes.map((n) => "name:" + n), ...order.notes.map((n) => "order:" + n)], failed: !(okCode && okName) || order.failed });
+    out.subjects.push({ row, code: okCode ? code.text : null, codeAttempt: code.failed ? code.attempt : null, codeOriginal: code.original, name: okName ? name.text : null, nameOriginal: name.original, explicitOrder: order.value, orderFailed: order.failed, notes: [...code.notes.map((n) => "code:" + n), ...name.notes.map((n) => "name:" + n), ...order.notes.map((n) => "order:" + n)], failed: !(okCode && okName) || order.failed });
   }
   // ---- stage 4: BÀI
   const lessonSheet = indexed[SHEET_LESSONS];

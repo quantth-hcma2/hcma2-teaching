@@ -13,6 +13,7 @@
 // data connections, no embedded objects, no DTDs, and sheet row/cell/shared-string counts inside the limits. Only then is it handed to the reader.
 import { IMPORT_LIMITS } from "./import-template.mjs";
 import { diag } from "./import-diagnostics.mjs";
+import { checkWellFormedXml } from "./import-xml-wellformed.mjs";
 
 const LIM = IMPORT_LIMITS;
 const SIG_LOCAL = 0x04034b50, SIG_CENTRAL = 0x02014b50, SIG_EOCD = 0x06054b50, SIG_EOCD64_LOCATOR = 0x07064b50;
@@ -177,6 +178,8 @@ export function contentTypesAreMacroEnabled(text) {
 
 // ---------------------------------------------------------------- 4. bounded streaming inflation + tag counting
 const isXmlName = (name) => /\.(xml|rels|vml)$/i.test(name);
+const STYLES_PART = /^xl\/styles\.xml$/i;
+const STYLES_NAMESPACE = /schemas\.openxmlformats\.org\/spreadsheetml\/2006\/main|purl\.oclc\.org\/ooxml\/spreadsheetml\/main/;
 const isSheetXml = (name) => /^xl\/worksheets\/[^/]+\.xml$/i.test(name);
 const TOKENS_SHEET = [["<row ", "rows"], ["<row>", "rows"], ["<c ", "cells"], ["<c>", "cells"]];
 const TOKENS_SST = [["<si>", "strings"], ["<si ", "strings"]];
@@ -202,6 +205,10 @@ function containsToken(text, carryLength, tokens) {
 async function scanEntry(bytes, entry, { limitBytes, makeInflater, capture }) {
   const counts = { rows: 0, cells: 0, strings: 0 };
   let dtd = false, captured = "";
+  // xl/styles.xml is tolerated silently by the spreadsheet library, so its bytes are kept (bounded) for the well-formedness check
+  const kept = STYLES_PART.test(entry.name) ? { chunks: [], size: 0, overflow: false } : null;
+  const keep = (chunk) => { if (!kept || kept.overflow) return; kept.size += chunk.length; if (kept.size > LIM.zip.maxStylesBytes) { kept.overflow = true; kept.chunks = []; } else kept.chunks.push(chunk.slice()); };
+  const stylesBytes = () => { if (!kept) return null; if (kept.overflow) return { overflow: true }; const out = new Uint8Array(kept.size); let at = 0; for (const c of kept.chunks) { out.set(c, at); at += c.length; } return { bytes: out }; };
   const xml = isXmlName(entry.name);
   const sheet = isSheetXml(entry.name);
   const sst = /^xl\/sharedStrings\.xml$/i.test(entry.name);
@@ -221,9 +228,9 @@ async function scanEntry(bytes, entry, { limitBytes, makeInflater, capture }) {
   if (entry.method === 0) {
     actual = raw.length;
     if (actual > limitBytes) return { error: "size", bytes: actual };
-    for (let offset = 0; offset < raw.length; offset += 65536) feed(raw.subarray(offset, Math.min(raw.length, offset + 65536)), false);
+    for (let offset = 0; offset < raw.length; offset += 65536) { const part = raw.subarray(offset, Math.min(raw.length, offset + 65536)); keep(part); feed(part, false); }
     feed(new Uint8Array(0), true);
-    return { bytes: actual, ...counts, dtd, text: captured };
+    return { bytes: actual, ...counts, dtd, text: captured, styles: stylesBytes() };
   }
   const reader = makeInflater(raw).getReader();
   try {
@@ -232,6 +239,7 @@ async function scanEntry(bytes, entry, { limitBytes, makeInflater, capture }) {
       if (done) break;
       actual += value.length;
       if (actual > limitBytes) { await reader.cancel().catch(() => {}); return { error: "size", bytes: actual }; }
+      keep(value);
       feed(value, false);
       if (dtd) { aborted = true; await reader.cancel().catch(() => {}); break; }
       if (sheet && (counts.rows > LIM.sheet.maxRows || counts.cells > LIM.sheet.maxCellsPerSheet)) { aborted = true; await reader.cancel().catch(() => {}); break; }
@@ -241,7 +249,7 @@ async function scanEntry(bytes, entry, { limitBytes, makeInflater, capture }) {
   } catch (error) {
     return { error: "inflate" };
   }
-  return { bytes: actual, aborted, ...counts, dtd, text: captured };
+  return { bytes: actual, aborted, ...counts, dtd, text: captured, styles: stylesBytes() };
 }
 
 function defaultInflater(raw) {
@@ -264,6 +272,15 @@ export async function scanEntries(bytes, entries, { makeInflater = defaultInflat
     total += result.bytes;
     if (total > LIM.zip.maxTotalBytes) { diagnostics.push(diag("ZIP_TOTAL_TOO_LARGE", { size: total, max: LIM.zip.maxTotalBytes })); break; }
     if (result.dtd) diagnostics.push(diag("XML_DTD_FORBIDDEN", { name: entry.name }));
+    else if (result.styles) {
+      // Optional part (a workbook without styles is valid OOXML); when present it must be well-formed XML with a styleSheet root in the SpreadsheetML namespace.
+      if (result.styles.overflow) diagnostics.push(diag("STYLES_INVALID", { detail: "tệp quá lớn" }));
+      else {
+        const verdict = checkWellFormedXml(result.styles.bytes, { rootName: "styleSheet" });
+        if (!verdict.ok) diagnostics.push(diag("STYLES_INVALID", { detail: verdict.detail }));
+        else if (!STYLES_NAMESPACE.test(verdict.head)) diagnostics.push(diag("STYLES_INVALID", { detail: "sai không gian tên SpreadsheetML" }));
+      }
+    }
     if (isSheetXml(entry.name)) {
       stats.sheets[entry.name] = { rows: result.rows, cells: result.cells };
       stats.totalCells += result.cells;

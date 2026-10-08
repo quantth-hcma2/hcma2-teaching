@@ -10,6 +10,7 @@
 import { DATA_SHEET_NAMES, IMPORT_LIMITS, PARSER_ADAPTER_ID } from "./import-template.mjs";
 import { diag } from "./import-diagnostics.mjs";
 import { inspectContainer } from "./import-xlsx-container.mjs";
+import { detectWorkerSideCapabilities, unsupportedBrowserDiagnostic } from "./import-capabilities.mjs";
 
 const LIM = IMPORT_LIMITS;
 const nfc = (text) => String(text).normalize("NFC");
@@ -63,6 +64,10 @@ function extractSheet(XLSX, ws, name, state) {
 
 // bytes: Uint8Array. Returns { ok, diagnostics, raw }. Never throws; hostile input yields diagnostics and `raw: null`.
 export async function extractRawWorkbook(XLSX, bytes, { fileName, size, makeInflater } = {}) {
+  if (!makeInflater) {                                                 // the production gate needs DecompressionStream inside THIS (Worker) scope
+    const capability = detectWorkerSideCapabilities();
+    if (!capability.supported) return { ok: false, diagnostics: [unsupportedBrowserDiagnostic(capability.missing)], raw: null, unsupportedBrowser: true };   // fail CLOSED
+  }
   let gate;
   try { gate = await inspectContainer(bytes, { fileName, size, makeInflater }); }
   catch (error) { return { ok: false, diagnostics: [diag("PARSE_EXCEPTION")], raw: null }; }   // e.g. no DecompressionStream in this browser: fail CLOSED, never parse unchecked

@@ -303,7 +303,8 @@ test("Rules do not read or write the platform users collection for curriculum, a
   // behavior: an Organization Admin / capability holder still cannot read users documents of others (unchanged V1 behavior)
   await no(getDoc(doc(as("oaA"), "users", "mA"))); await no(getDoc(doc(as("capA"), "users", "mB")));
   // new collections of later phases stay denied by the default-deny block
-  for (const p of ["curriculumMappings/x", "importBatches/x", "libraryResources/x", "libraryUsageEvents/x"]) await no(getDoc(doc(as("pa"), p)));
+  // P4-S1 aligned: importBatches is opened by P4-S1 on purpose (see test/library-v2-p4-s1); the others stay denied.
+  for (const p of ["curriculumMappings/x", "libraryResources/x", "libraryUsageEvents/x"]) await no(getDoc(doc(as("pa"), p)));
   await no(getDoc(doc(as("pa"), "curriculumFrameworks/fwA_active/mappingSuggestions/x")));
   await no(getDoc(doc(as("pa"), "curriculumFrameworks/fwA_active/nodes/s1/children/x")));
 });

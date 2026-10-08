@@ -12,7 +12,7 @@ import { createOrganizationQueries, createPlatformAdminOrganizationQueries } fro
 import { resolveOrganizationContext } from "../../organization-context.mjs";
 
 const rules = candidateRules();
-assert.equal(sha(rules).toUpperCase(), "A0B206FCDDA3843DB2E08EEEEB00A9704B5A1415B97B9E488477D8F21AA4921D", "contract is proven against the approved P3-S1 Rules artifact");
+assert.equal(sha(rules).toUpperCase(), "7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485", "contract is proven against the approved P3-S1 Rules artifact");
 const env = await makeEnv("demo-p2s2-contract", rules);
 await seedWorld(env);
 // 24 extra ordinary members (no capability documents) and 120 members for paging in orgA

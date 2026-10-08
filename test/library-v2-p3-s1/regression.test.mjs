@@ -8,7 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import {
-  makeEnv, actors, candidateRules, baselineRules, p3Region, p2Region, sha, seedWorld, NL, BEGIN, END, DEPLOYED_SHA, D,
+  makeEnv, actors, candidateRules, baselineRules, p3Region, p4Region, p2Region, sha, seedWorld, NL, BEGIN, END, DEPLOYED_SHA, D,
   newMemberPayload, statusChange, newCapPayload, capUpdate, newOrgPayload,
   doc, setDoc, updateDoc, getDoc, getDocs, deleteDoc, collection, query, where, limit, serverTimestamp, assertFails
 } from "./helpers.mjs";
@@ -30,10 +30,13 @@ test("text proof: removing the single additive P3 region restores the DEPLOYED R
   const region = p3Region(rules);
   assert.ok(rules.indexOf(region) > rules.indexOf("LIBRARY V2 P2-S1 (ORGANIZATION FOUNDATION) - END"), "P3 region follows the P2 region");
   assert.ok(rules.indexOf(region) < rules.lastIndexOf("match /{document=**}"), "P3 region precedes the default-deny match");
-  const added = rules.split(NL).length - baseline.split(NL).length;
+  // P4-S1 aligned: the additive P4-S1 region (a SEPARATE insertion after the P3 region, proven by test/library-v2-p4-s1/regression.test.mjs) is excluded here, so this proof still
+  // describes the P3 insertion exactly (the two single-clause P4-S1 edits live INSIDE the P3 region, which is why the region is now two lines longer).
+  const rulesNoP4 = rules.includes("LIBRARY V2 P4-S1 (IMPORT BATCHES) - BEGIN") ? rules.replace(p4Region(rules), "") : rules;
+  const added = rulesNoP4.split(NL).length - baseline.split(NL).length;
   assert.ok(added > 100 && added < 180, "pure insertion of the region, " + added + " lines");
   // pure insertion: no baseline line removed or reordered
-  const bl = baseline.split(NL), cl = rules.split(NL);
+  const bl = baseline.split(NL), cl = rulesNoP4.split(NL);
   const start = cl.indexOf(BEGIN);
   assert.deepEqual(cl.slice(0, start), bl.slice(0, start)); assert.deepEqual(cl.slice(start + added), bl.slice(start));
 });
@@ -179,7 +182,8 @@ test("default-deny proof: curriculum collections are denied by the baseline (eve
     await assertFails(getDoc(doc(a("pa"), p)));
     await assertFails(setDoc(doc(a("pa"), p), { x: 1 }));
   }
-  for (const col of ["libraryResources", "curriculumMappings", "importBatches", "libraryUsageEvents", "organizationInvites", "libraryAssets"]) {
+  // P4-S1 aligned: importBatches is INTENTIONALLY opened by P4-S1 (proven by test/library-v2-p4-s1); the remaining later-phase collections stay default-denied.
+  for (const col of ["libraryResources", "curriculumMappings", "libraryUsageEvents", "organizationInvites", "libraryAssets"]) {
     await assertFails(setDoc(doc(c("pa"), col, "x"), { x: 1 }));
     await assertFails(getDoc(doc(c("pa"), col, "x")));
   }

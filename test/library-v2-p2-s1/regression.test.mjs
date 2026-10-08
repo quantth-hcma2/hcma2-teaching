@@ -21,8 +21,17 @@ function stripP3Region(text) {
   if (a < 0 || e < a) return text;
   return text.slice(0, a) + text.slice(text.indexOf(NL, e) + 2);
 }
+// P4-S1 aligned: the candidate also carries the additive P4-S1 import-batch region (after the P3 region); the pre-P2 baseline strips it as well (the two single-clause P4-S1 edits
+// sit INSIDE the P3 region, so they disappear with it).
+const P4_BEGIN = "    // ===== LIBRARY V2 P4-S1 (IMPORT BATCHES) - BEGIN =====";
+const P4_END = "    // ===== LIBRARY V2 P4-S1 (IMPORT BATCHES) - END =====";
+function stripP4Region(text) {
+  const a = text.indexOf(P4_BEGIN), e = text.indexOf(P4_END);
+  if (a < 0 || e < a) return text;
+  return text.slice(0, a) + text.slice(text.indexOf(NL, e) + 2);
+}
 const p2Stripped = baselineRules(rules);
-const baseline = stripP3Region(p2Stripped);
+const baseline = stripP4Region(stripP3Region(p2Stripped));
 const root = new URL("../../", import.meta.url);
 const read = (p) => readFileSync(new URL(p, root));
 const shaFile = (p) => sha(read(p));
@@ -211,7 +220,8 @@ test("default-deny proof: the three new collections are denied by the baseline (
     await assertFails(getDoc(doc(a("pa"), p)));
     await assertFails(setDoc(doc(a("pa"), p), { x: 1 }));
   }
-  for (const col of ["libraryResources", "curriculumMappings", "importBatches", "libraryUsageEvents", "organizationInvites", "libraryAssets"]) {
+  // P4-S1 aligned: importBatches is INTENTIONALLY opened by P4-S1 (proven by test/library-v2-p4-s1); the remaining later-phase collections stay default-denied.
+  for (const col of ["libraryResources", "curriculumMappings", "libraryUsageEvents", "organizationInvites", "libraryAssets"]) {
     await assertFails(setDoc(doc(c("pa"), col, "x"), { x: 1 }));
     await assertFails(getDoc(doc(c("pa"), col, "x")));
   }

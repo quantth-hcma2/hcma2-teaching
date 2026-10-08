@@ -12,7 +12,7 @@ import { createCurriculumQueries } from "../../curriculum-queries.mjs";
 import { createCloneDeleteHelpers, createCurriculumCloneWriter } from "../../curriculum-clone-delete.mjs";
 
 const rules = candidateRules();
-assert.equal(sha(rules).toUpperCase(), "A0B206FCDDA3843DB2E08EEEEB00A9704B5A1415B97B9E488477D8F21AA4921D", "proven against the deployed P3-S1 Rules artifact");
+assert.equal(sha(rules).toUpperCase(), "7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485", "proven against the deployed P3-S1 Rules artifact");
 const env = await makeEnv("demo-p3s5-clone", rules);
 const as = actors(env);
 test.after(async () => env.cleanup());

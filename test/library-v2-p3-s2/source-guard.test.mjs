@@ -86,7 +86,7 @@ test("key sets and constants in the modules equal the deployed Rules (framework 
 
 test("nothing else changed: Rules (deployed P3-S1), indexes, Storage, index.html, package, existing organization modules are byte-pinned; the modules are not wired anywhere", () => {
   const pinned = {
-    "firestore.rules.production-candidate": "a0b206fcdda3843db2e08eeeeb00a9704b5a1415b97b9e488477d8f21aa4921d",
+    "firestore.rules.production-candidate": "7f7c790e403762800dc27879ff851cb875064d8a02076b2a4f7f3c7163510485",
     "firestore.indexes.json": "a27b5a20c63e1b446f63221a6c1fa93b31ac95a6556c6009e44a45f4ca354d51",
     "firestore.rules": "a033e20c0d6c7eeb23cc1e76d98e5a4d246bead5becfcc14574c4f98b9fed538",
     "index.html": "b7a46dc0a222c5c64ceb6b72c8de42652b80e3b8663391772366042be40be63e",

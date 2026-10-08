@@ -29,9 +29,14 @@ export function regionBetween(rules, begin, end) {
   return rules.slice(a, endLine + 1);
 }
 export const p3Region = (rules) => regionBetween(rules, BEGIN, END);
+// P4-S1 aligned: the additive P4-S1 import-batch region (a second, separate insertion after the P3 region).
+export const P4_BEGIN = "    // ===== LIBRARY V2 P4-S1 (IMPORT BATCHES) - BEGIN =====";
+export const P4_END = "    // ===== LIBRARY V2 P4-S1 (IMPORT BATCHES) - END =====";
+export const p4Region = (rules) => regionBetween(rules, P4_BEGIN, P4_END);
 export const p2Region = (rules) => regionBetween(rules, P2_BEGIN, P2_END);
-// The deployed baseline = candidate minus the single P3 region.
-export const baselineRules = (rules = candidateRules()) => rules.replace(p3Region(rules), "");
+// The deployed baseline = candidate minus the single P3 region (P4-S1 aligned: and minus the additive P4-S1 region when present). NOTE: the two P4-S1 single-clause edits INSIDE the
+// P3 region are not removed here; the P4-S1 text proof (test/library-v2-p4-s1/regression.test.mjs) reverses them exactly and proves the P3-S1 deployed artifact byte for byte.
+export const baselineRules = (rules = candidateRules()) => { const noP3 = rules.replace(p3Region(rules), ""); return noP3.includes(P4_BEGIN) ? noP3.replace(p4Region(noP3), "") : noP3; };
 
 // Test-only probes appended to the candidate Rules (NEVER part of the production file).
 export function withProbes(rules, extra = "") {

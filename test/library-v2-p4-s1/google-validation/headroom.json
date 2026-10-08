@@ -1,0 +1,66 @@
+{
+ "summary": {
+  "progress/pa": 16,
+  "completed/pa": 12,
+  "partial/pa": 12,
+  "rolled_back/pa": 12,
+  "progress/oaA": 8,
+  "completed/oaA": 4,
+  "partial/oaA": 8,
+  "rolled_back/oaA": 8,
+  "progress/capA": 8,
+  "completed/capA": 3,
+  "partial/capA": 6,
+  "rolled_back/capA": 6
+ },
+ "firstFail": {
+  "completed/capA": {
+   "n": 4,
+   "note": "Error: firestore.rules line [2262], column [11]. Unable to evaluate the expression as the maximum of 1000 expressions to evaluate has been reached."
+  },
+  "completed/oaA": {
+   "n": 6,
+   "note": "Error: firestore.rules line [2268], column [16]. Unable to evaluate the expression as the maximum of 1000 expressions to evaluate has been reached."
+  },
+  "partial/capA": {
+   "n": 8,
+   "note": "Error: firestore.rules line [2270], column [109]. Unable to evaluate the expression as the maximum of 1000 expressions to evaluate has been reached."
+  },
+  "rolled_back/capA": {
+   "n": 8,
+   "note": "Error: firestore.rules line [2273], column [87]. Unable to evaluate the expression as the maximum of 1000 expressions to evaluate has been reached."
+  },
+  "progress/oaA": {
+   "n": 12,
+   "note": "Error: firestore.rules line [1948], column [14]. Unable to evaluate the expression as the maximum of 1000 expressions to evaluate has been reached."
+  },
+  "partial/oaA": {
+   "n": 12,
+   "note": "Error: firestore.rules line [1942], column [43]. Unable to evaluate the expression as the maximum of 1000 expressions to evaluate has been reached."
+  },
+  "rolled_back/oaA": {
+   "n": 12,
+   "note": "Error: firestore.rules line [1942], column [43]. Unable to evaluate the expression as the maximum of 1000 expressions to evaluate has been reached."
+  },
+  "progress/capA": {
+   "n": 12,
+   "note": "Error: firestore.rules line [1950], column [36]. Unable to evaluate the expression as the maximum of 1000 expressions to evaluate has been reached."
+  },
+  "completed/pa": {
+   "n": 16,
+   "note": "Error: firestore.rules line [2270], column [112]. Unable to evaluate the expression as the maximum of 1000 expressions to evaluate has been reached."
+  },
+  "partial/pa": {
+   "n": 16,
+   "note": "Error: firestore.rules line [2269], column [19]. Unable to evaluate the expression as the maximum of 1000 expressions to evaluate has been reached."
+  },
+  "rolled_back/pa": {
+   "n": 16,
+   "note": "Error: firestore.rules line [2079], column [49]. Unable to evaluate the expression as the maximum of 1000 expressions to evaluate has been reached."
+  },
+  "progress/pa": {
+   "n": 24,
+   "note": "Error: firestore.rules line [2289], column [9]. Unable to evaluate the expression as the maximum of 1000 expressions to evaluate has been reached."
+  }
+ }
+}

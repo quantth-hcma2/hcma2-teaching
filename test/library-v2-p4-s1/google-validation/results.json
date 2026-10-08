@@ -1,0 +1,798 @@
+{
+ "sha": "7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485",
+ "issues": [
+  {
+   "sourcePosition": {
+    "fileName": "firestore.rules",
+    "line": 1953,
+    "column": 14,
+    "currentOffset": 129407,
+    "endOffset": 129419
+   },
+   "description": "Unused function: canContribute.",
+   "severity": "WARNING"
+  },
+  {
+   "sourcePosition": {
+    "fileName": "firestore.rules",
+    "line": 1955,
+    "column": 11,
+    "currentOffset": 129501,
+    "endOffset": 129506
+   },
+   "description": "Invalid function name: exists.",
+   "severity": "WARNING"
+  },
+  {
+   "sourcePosition": {
+    "fileName": "firestore.rules",
+    "line": 1955,
+    "column": 33,
+    "currentOffset": 129523,
+    "endOffset": 129529
+   },
+   "description": "Invalid variable name: request.",
+   "severity": "WARNING"
+  },
+  {
+   "sourcePosition": {
+    "fileName": "firestore.rules",
+    "line": 1955,
+    "column": 79,
+    "currentOffset": 129569,
+    "endOffset": 129571
+   },
+   "description": "Invalid function name: get.",
+   "severity": "WARNING"
+  },
+  {
+   "sourcePosition": {
+    "fileName": "firestore.rules",
+    "line": 1955,
+    "column": 98,
+    "currentOffset": 129588,
+    "endOffset": 129594
+   },
+   "description": "Invalid variable name: request.",
+   "severity": "WARNING"
+  }
+ ],
+ "rows": [
+  {
+   "i": 0,
+   "label": "T1 progress committing->committing / pa",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 3,
+   "debug": ""
+  },
+  {
+   "i": 1,
+   "label": "T2 committing->completed (witness present) / pa",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": ""
+  },
+  {
+   "i": 2,
+   "label": "T3 committing->partial / pa",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 3,
+   "debug": ""
+  },
+  {
+   "i": 3,
+   "label": "T4 partial->rolled_back (framework+witness absent) / pa",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": ""
+  },
+  {
+   "i": 4,
+   "label": "T5 committing->rolled_back (framework+witness absent) / pa",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": ""
+  },
+  {
+   "i": 5,
+   "label": "T1 progress committing->committing / oaA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 4,
+   "debug": ""
+  },
+  {
+   "i": 6,
+   "label": "T2 committing->completed (witness present) / oaA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": ""
+  },
+  {
+   "i": 7,
+   "label": "T3 committing->partial / oaA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 4,
+   "debug": ""
+  },
+  {
+   "i": 8,
+   "label": "T4 partial->rolled_back (framework+witness absent) / oaA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": ""
+  },
+  {
+   "i": 9,
+   "label": "T5 committing->rolled_back (framework+witness absent) / oaA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": ""
+  },
+  {
+   "i": 10,
+   "label": "T1 progress committing->committing / capA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": ""
+  },
+  {
+   "i": 11,
+   "label": "T2 committing->completed (witness present) / capA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": ""
+  },
+  {
+   "i": 12,
+   "label": "T3 committing->partial / capA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": ""
+  },
+  {
+   "i": 13,
+   "label": "T4 partial->rolled_back (framework+witness absent) / capA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": ""
+  },
+  {
+   "i": 14,
+   "label": "T5 committing->rolled_back (framework+witness absent) / capA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": ""
+  },
+  {
+   "i": 15,
+   "label": "T1 progress committing->committing / mA",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": "Error: firestore.rules line [1950], column [17]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"u"
+  },
+  {
+   "i": 16,
+   "label": "T2 committing->completed (witness present) / mA",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": "Error: firestore.rules line [1950], column [17]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"u"
+  },
+  {
+   "i": 17,
+   "label": "T3 committing->partial / mA",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": "Error: firestore.rules line [1950], column [17]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"u"
+  },
+  {
+   "i": 18,
+   "label": "T4 partial->rolled_back (framework+witness absent) / mA",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": "Error: firestore.rules line [1950], column [17]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"u"
+  },
+  {
+   "i": 19,
+   "label": "T5 committing->rolled_back (framework+witness absent) / mA",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": "Error: firestore.rules line [1950], column [17]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"u"
+  },
+  {
+   "i": 20,
+   "label": "T1 progress committing->committing / oaB",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 21,
+   "label": "T2 committing->completed (witness present) / oaB",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 22,
+   "label": "T3 committing->partial / oaB",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 23,
+   "label": "T4 partial->rolled_back (framework+witness absent) / oaB",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 24,
+   "label": "T5 committing->rolled_back (framework+witness absent) / oaB",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 25,
+   "label": "T1 progress committing->committing / noMember",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 26,
+   "label": "T2 committing->completed (witness present) / noMember",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 27,
+   "label": "T3 committing->partial / noMember",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 28,
+   "label": "T4 partial->rolled_back (framework+witness absent) / noMember",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 29,
+   "label": "T5 committing->rolled_back (framework+witness absent) / noMember",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 30,
+   "label": "T1 progress committing->committing / anon",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 1,
+   "debug": "Error: firestore.rules line [30], column [14]. Property auth is undefined on object."
+  },
+  {
+   "i": 31,
+   "label": "T2 committing->completed (witness present) / anon",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 3,
+   "debug": "Error: firestore.rules line [30], column [14]. Property auth is undefined on object."
+  },
+  {
+   "i": 32,
+   "label": "T3 committing->partial / anon",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 1,
+   "debug": "Error: firestore.rules line [30], column [14]. Property auth is undefined on object."
+  },
+  {
+   "i": 33,
+   "label": "T4 partial->rolled_back (framework+witness absent) / anon",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 3,
+   "debug": "Error: firestore.rules line [30], column [14]. Property auth is undefined on object."
+  },
+  {
+   "i": 34,
+   "label": "T5 committing->rolled_back (framework+witness absent) / anon",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 3,
+   "debug": "Error: firestore.rules line [30], column [14]. Property auth is undefined on object."
+  },
+  {
+   "i": 35,
+   "label": "N completed but witness node missing / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": "Error: firestore.rules line [2262], column [11]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"c"
+  },
+  {
+   "i": 36,
+   "label": "N completed but framework missing / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": "Error: firestore.rules line [2259], column [16]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"c"
+  },
+  {
+   "i": 37,
+   "label": "N completed but framework already active / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 4,
+   "debug": ""
+  },
+  {
+   "i": 38,
+   "label": "N completed but framework of another organization / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 4,
+   "debug": ""
+  },
+  {
+   "i": 39,
+   "label": "N completed but chunksDone != chunksTotal / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 3,
+   "debug": ""
+  },
+  {
+   "i": 40,
+   "label": "N rolled_back but framework still exists / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 4,
+   "debug": ""
+  },
+  {
+   "i": 41,
+   "label": "N rolled_back but witness node still exists / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": ""
+  },
+  {
+   "i": 42,
+   "label": "N completed is terminal (completed->rolled_back) / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 3,
+   "debug": ""
+  },
+  {
+   "i": 43,
+   "label": "N immutable identity (organizationId rewritten) / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 0,
+   "debug": ""
+  },
+  {
+   "i": 44,
+   "label": "N finishedAt not equal to request.time / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 3,
+   "debug": ""
+  },
+  {
+   "i": 45,
+   "label": "N delete batch / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 0,
+   "debug": ""
+  },
+  {
+   "i": 46,
+   "label": "C1 batch create (no framework with that id) / pa",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 4,
+   "debug": ""
+  },
+  {
+   "i": 47,
+   "label": "C1 batch create (no framework with that id) / oaA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": ""
+  },
+  {
+   "i": 48,
+   "label": "C1 batch create (no framework with that id) / capA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": ""
+  },
+  {
+   "i": 49,
+   "label": "C1 batch create (no framework with that id) / mA",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": "Error: firestore.rules line [1950], column [17]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"u"
+  },
+  {
+   "i": 50,
+   "label": "C1 batch create (no framework with that id) / oaB",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 51,
+   "label": "C1 batch create (no framework with that id) / noMember",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 52,
+   "label": "C1 batch create (no framework with that id) / anon",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 2,
+   "debug": "Error: firestore.rules line [2282], column [43]. Property auth is undefined on object."
+  },
+  {
+   "i": 53,
+   "label": "C2 batch create DENIED when the framework id already exists / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 4,
+   "debug": ""
+  },
+  {
+   "i": 54,
+   "label": "C3 batch create DENIED with forged importer / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 0,
+   "debug": ""
+  },
+  {
+   "i": 55,
+   "label": "C4 batch create DENIED with status completed / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 0,
+   "debug": ""
+  },
+  {
+   "i": 56,
+   "label": "A1 draft->active, import COMPLETED / pa",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": ""
+  },
+  {
+   "i": 57,
+   "label": "A1 draft->active, import COMPLETED / oaA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": ""
+  },
+  {
+   "i": 58,
+   "label": "A1 draft->active, import COMPLETED / capA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": ""
+  },
+  {
+   "i": 59,
+   "label": "A1 draft->active, import COMPLETED / mA",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": "Error: firestore.rules line [1950], column [17]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"u"
+  },
+  {
+   "i": 60,
+   "label": "A1 draft->active, import COMPLETED / oaB",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 61,
+   "label": "A1 draft->active, import COMPLETED / noMember",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 62,
+   "label": "A1 draft->active, import COMPLETED / anon",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 3,
+   "debug": "Error: firestore.rules line [2120], column [72]. Property auth is undefined on object."
+  },
+  {
+   "i": 63,
+   "label": "A2 draft->active, import COMMITTING (must be denied) / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": ""
+  },
+  {
+   "i": 64,
+   "label": "A2 draft->active, import PARTIAL (must be denied) / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": ""
+  },
+  {
+   "i": 65,
+   "label": "A2 draft->active, import ROLLED_BACK (must be denied) / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": ""
+  },
+  {
+   "i": 66,
+   "label": "A3 draft->active, import completed but batch of ANOTHER organization (denied) / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": ""
+  },
+  {
+   "i": 67,
+   "label": "A4 draft->active, MANUAL framework (no batch) / pa",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 4,
+   "debug": ""
+  },
+  {
+   "i": 68,
+   "label": "A4 draft->active, MANUAL framework (no batch) / oaA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": ""
+  },
+  {
+   "i": 69,
+   "label": "A4 draft->active, MANUAL framework (no batch) / capA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": ""
+  },
+  {
+   "i": 70,
+   "label": "A4 draft->active, MANUAL framework (no batch) / mA",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": "Error: firestore.rules line [1950], column [17]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"u"
+  },
+  {
+   "i": 71,
+   "label": "A4 draft->active, MANUAL framework (no batch) / oaB",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 72,
+   "label": "A4 draft->active, MANUAL framework (no batch) / noMember",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 73,
+   "label": "A4 draft->active, MANUAL framework (no batch) / anon",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 2,
+   "debug": "Error: firestore.rules line [2120], column [72]. Property auth is undefined on object."
+  },
+  {
+   "i": 74,
+   "label": "K1 clone of a COMPLETED import / pa",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": ""
+  },
+  {
+   "i": 75,
+   "label": "K1 clone of a COMPLETED import / oaA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": ""
+  },
+  {
+   "i": 76,
+   "label": "K1 clone of a COMPLETED import / capA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 8,
+   "debug": ""
+  },
+  {
+   "i": 77,
+   "label": "K1 clone of a COMPLETED import / mA",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 8,
+   "debug": "Error: firestore.rules line [1950], column [17]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"u"
+  },
+  {
+   "i": 78,
+   "label": "K1 clone of a COMPLETED import / oaB",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 8,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 79,
+   "label": "K1 clone of a COMPLETED import / noMember",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 8,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 80,
+   "label": "K1 clone of a COMPLETED import / anon",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 4,
+   "debug": "Error: firestore.rules line [2134], column [44]. Property auth is undefined on object."
+  },
+  {
+   "i": 81,
+   "label": "K2 clone of an import in state COMMITTING (must be denied) / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": ""
+  },
+  {
+   "i": 82,
+   "label": "K2 clone of an import in state PARTIAL (must be denied) / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": ""
+  },
+  {
+   "i": 83,
+   "label": "K2 clone of an import in state ROLLED_BACK (must be denied) / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": ""
+  },
+  {
+   "i": 84,
+   "label": "K3 clone of a MANUAL framework (no batch) / pa",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 5,
+   "debug": ""
+  },
+  {
+   "i": 85,
+   "label": "K3 clone of a MANUAL framework (no batch) / oaA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": ""
+  },
+  {
+   "i": 86,
+   "label": "K3 clone of a MANUAL framework (no batch) / capA",
+   "expect": "ALLOW",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": ""
+  },
+  {
+   "i": 87,
+   "label": "K3 clone of a MANUAL framework (no batch) / mA",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": "Error: firestore.rules line [1950], column [17]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"u"
+  },
+  {
+   "i": 88,
+   "label": "K3 clone of a MANUAL framework (no batch) / oaB",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 89,
+   "label": "K3 clone of a MANUAL framework (no batch) / noMember",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 7,
+   "debug": "Error: firestore.rules line [1942], column [43]. Service call error. Function: [get], Argument: [path_value {\n  segments {\n    simple: \"databases\"\n  }\n  segments {\n    simple: \"(default)\"\n  }\n  segments {\n    simple: \"documents\"\n  }\n  segments {\n    simple: \"o"
+  },
+  {
+   "i": 90,
+   "label": "K3 clone of a MANUAL framework (no batch) / anon",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 3,
+   "debug": "Error: firestore.rules line [2134], column [44]. Property auth is undefined on object."
+  },
+  {
+   "i": 91,
+   "label": "K4 clone of a completed import of ANOTHER organization (denied) / pa",
+   "expect": "DENY",
+   "state": "SUCCESS",
+   "distinctCalls": 6,
+   "debug": ""
+  }
+ ]
+}

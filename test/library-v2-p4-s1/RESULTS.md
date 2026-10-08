@@ -37,3 +37,8 @@ P3-S1 rules+budget+regression 28/28, P3-S2 contract 10/10, P3-S5 clone/delete Ru
 
 ## Not claimed (Rules vs controller boundary)
 Rules guarantee: pairing, batch shape/identity/transitions, active-organization writes, no delete, the activation and clone protections, completed/rolled_back witnesses. **Controller read-back verification (P4-S4), NOT Rules:** all planned nodes exist, node counts, canonical code uniqueness, hierarchy completeness, sibling order, equality with the import plan. `finalNodeId` is a finite witness, not proof of completeness.
+
+## Addendum - Final security gate, Google validation and production release (2026-10-08)
+- Atomic-write security gate (`atomic.rules.test.mjs`, 10 tests, all pass): no ordering inside one atomic batch bypasses paired-ID governance (exists()/get() read pre-commit state; the candidate uses no existsAfter()/getAfter() in the curriculum/import region). Accepted trust-boundary limitation: an authorized writer can complete a batch with only the witness node present - complete node verification is the P4-S4 controller's duty.
+- Google `projects.test` validation (`google-validation/`): 92/92 as expected; no expression-limit error; capability-holder `completed` is the thinnest path (headroom 3 minimal predicates; Platform Admin 12, Org Admin 4) - emulator and Google agree. MANDATORY retest of the headroom on any future change to the relevant Rules (see `google-validation/README.md`).
+- Production release: ruleset `0b6910c3-c2d0-428e-8e88-8b7b3846ac96` = SHA `7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485`, deployed 2026-10-08T03:50Z (Rules-only); Storage, indexes, web and data unchanged.

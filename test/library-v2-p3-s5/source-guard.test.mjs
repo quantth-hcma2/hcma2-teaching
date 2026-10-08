@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { reverseS5ModelEdits, reverseS5SectionViewEdits, reverseS5IndexEdits, MODEL_EDITS_S5, SECTION_VIEW_EDITS_S5, INDEX_EDITS_S5, INDEX_ADDED_S5 } from "./s5-edits.mjs";
 import { reverseS4ModelEdits, reverseS4SectionViewEdits, reverseS4IndexEdits } from "../library-v2-p3-s4/s4-edits.mjs";
 import { reverseS3IndexEdits, reverseS3AdminViewEdits } from "../library-v2-p3-s3/s3-edits.mjs";
+import { reverseP4S3IndexEdits, reverseP4S3OrgViewEdits } from "../library-v2-p4-s3/p4s3-edits.mjs";   // P4-S3 aligned: S5 assertions describe the S5 bytes, i.e. with the P4-S3 edits reversed
 
 const root = new URL("../../", import.meta.url);
 const text = (p) => readFileSync(new URL(p, root), "utf8");
@@ -70,7 +71,7 @@ test("S5 edits to earlier files are EXACTLY the approved ones: reversing them re
   assert.ok(text("curriculum-model.mjs").includes("D1 RESOLVED") && !text("curriculum-model.mjs").includes("DEFERRED TO P3-S5"));
 });
 test("index.html wiring: model/section view/clone module imported with the S5 cache token, ONE cloneTools dependency inside curriculumSection, nothing else new (no menu entry, no route)", () => {
-  const html = text("index.html");
+  const html = reverseP4S3IndexEdits(text("index.html"));
   for (const block of Object.values(INDEX_ADDED_S5)) assert.equal(count(html, block), 1);
   assert.ok(html.includes("import * as CURRICULUM_MODEL from \"./curriculum-model.mjs?v=20261007-p3s5\";") && html.includes("from \"./curriculum-admin-view.mjs?v=20261007-p3s5\"") && html.includes("from \"./curriculum-clone-delete.mjs?v=20261007-p3s5\""));
   assert.ok(html.includes("from \"./curriculum-editor-view.mjs?v=20261007-p3s4\"") && html.includes("from \"./curriculum-queries.mjs?v=20261007-p3s2\""), "unchanged modules keep their tokens");
@@ -95,7 +96,7 @@ test("ZERO-INDEX guard and identity: Rules (deployed P3-S1), firestore.indexes.j
     "organization-queries.mjs": "a0c64c8f4105d9b83dd5672df4b6c9a7e809b75e1b9517820fbca2571e50c0f2",
     "organization-write-contract.mjs": "b26cc200d1e918998a780d81221810e85249ca57f80b080623cfeeb016d58713"
   };
-  for (const [f, h] of Object.entries(pinned)) assert.equal(sha(f), h, f);
+  for (const [f, h] of Object.entries(pinned)) assert.equal(f === "organization-admin-view.mjs" ? shaText(reverseP4S3OrgViewEdits(text(f))) : sha(f), h, f);   // P4-S3 aligned: the Organization screen is pinned with the P4-S3 edit reversed
   for (const f of ["storage.rules", "firebase.json", "cors.json"]) assert.ok(!existsSync(new URL(f, root)), f + " must not exist at the repository root");
   assert.equal(JSON.parse(text("firestore.indexes.json")).indexes.length, 14);
   assert.ok(!mod.includes("orderBy") && !view.includes("orderBy"));

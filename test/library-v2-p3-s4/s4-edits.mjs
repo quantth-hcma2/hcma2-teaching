@@ -1,6 +1,7 @@
 // P3-S4 edits to files that earlier slices pinned: the exact edits plus reversals that restore the previously verified (P3-S3 candidate c95595a / P3-S2) bytes, so every older
 // byte-pin keeps its meaning and any OTHER change is still detected. Per-file helpers: model (additive codeConflictOf), the P3-S3 curriculum section view (seam options),
 // organization-admin-view (editor host) and index.html (editor wiring + token bumps).
+import { reverseP4S3OrgViewEdits } from "../library-v2-p4-s3/p4s3-edits.mjs";   // P4-S3 aligned: the organization-admin-view chain starts with the P4-S3 edits
 import { reverseS5ModelEdits, reverseS5SectionViewEdits, reverseS5IndexEdits } from "../library-v2-p3-s5/s5-edits.mjs";   // P3-S5 aligned: the reversal chain is S5 first, then S4 (then S3)
 const NL = String.fromCharCode(10), CRLF = String.fromCharCode(13, 10);
 export const withNl = (s, crlf) => (crlf ? s.split(NL).join(CRLF) : s);
@@ -106,7 +107,7 @@ export const ADMIN_VIEW_EDITS_S4 = [
   [A_MOUNT_NEW, A_MOUNT_OLD],
   [A_FN_BLOCK + A_FN_ANCHOR, A_FN_ANCHOR]
 ];
-export const reverseS4AdminViewEdits = (src) => transform(src, ADMIN_VIEW_EDITS_S4, "P3-S4 organization-admin-view", "reverse");
+export const reverseS4AdminViewEdits = (src) => transform(reverseP4S3OrgViewEdits(src), ADMIN_VIEW_EDITS_S4, "P3-S4 organization-admin-view", "reverse");
 export const applyS4AdminViewEdits = (src) => transform(src, ADMIN_VIEW_EDITS_S4, "P3-S4 organization-admin-view", "forward");
 
 // ---------------------------------------------------------------- index.html: editor wiring (+ cache tokens bumped for the files that changed after the S3 candidate)

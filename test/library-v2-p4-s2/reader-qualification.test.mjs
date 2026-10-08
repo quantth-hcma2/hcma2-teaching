@@ -34,7 +34,7 @@ test("PROVENANCE: SheetJS CE 0.20.3 is vendored as a SEPARATE hash-pinned file w
   assert.ok(!/^\s*import\s/m.test(readFileSync(new URL("vendor/sheetjs-0.20.3/xlsx.mjs", root), "utf8")), "the vendored build has no import statement (no dependencies)");
 });
 test("ISOLATION: no runtime module references a CDN or any network API; exactly one module imports the vendored reader (the Worker); index.html does not load it", () => {
-  const modules = ["import-xlsx-worker.mjs", "import-xlsx-extract.mjs", "import-xlsx-container.mjs", "import-xlsx-reader.mjs", "import-normalize.mjs", "import-validate.mjs", "import-plan.mjs", "import-template.mjs", "import-diagnostics.mjs", "import-sha256.mjs"];
+  const modules = ["import-template-writer.mjs", "import-xlsx-worker.mjs", "import-xlsx-extract.mjs", "import-xlsx-container.mjs", "import-xlsx-reader.mjs", "import-normalize.mjs", "import-validate.mjs", "import-plan.mjs", "import-template.mjs", "import-diagnostics.mjs", "import-sha256.mjs"];
   const importers = [];
   for (const file of modules) {
     const text = readFileSync(new URL(file, root), "utf8");
@@ -42,7 +42,7 @@ test("ISOLATION: no runtime module references a CDN or any network API; exactly 
     assert.ok(!/\b(fetch|XMLHttpRequest|WebSocket|importScripts|localStorage|indexedDB|firebase)\b/.test(text.replace(/\/\/.*$/gm, "")), file + " touches a network/storage API");
     if (/vendor\/sheetjs-0\.20\.3\/xlsx\.mjs/.test(text.replace(/\/\/.*$/gm, ""))) importers.push(file);
   }
-  assert.deepEqual(importers, ["import-xlsx-worker.mjs"]);
+  assert.deepEqual(importers.sort(), ["import-template-writer.mjs", "import-xlsx-worker.mjs"], "P4-S3 aligned: the parsing Worker and the lazy Template Center writer (it only builds our own template) are the two importers");
   const index = readFileSync(new URL("index.html", root), "utf8");
   assert.ok(!index.includes("sheetjs-0.20.3") && !index.includes("import-xlsx"), "index.html does not load the new reader (not wired in P4-S2)");
 });

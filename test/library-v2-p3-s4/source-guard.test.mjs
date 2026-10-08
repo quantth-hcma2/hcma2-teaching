@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { reverseS4ModelEdits, reverseS4SectionViewEdits, reverseS4AdminViewEdits, MODEL_EDITS, SECTION_VIEW_EDITS, ADMIN_VIEW_EDITS_S4 } from "./s4-edits.mjs";
+import { reverseP4S3OrgViewEdits } from "../library-v2-p4-s3/p4s3-edits.mjs";   // P4-S3 aligned: the S4 organization-admin-view assertions describe the S4 bytes, i.e. with the P4-S3 edits reversed
 
 const root = new URL("../../", import.meta.url);
 const text = (p) => readFileSync(new URL(p, root), "utf8");
@@ -32,9 +33,10 @@ test("S4.0 seam edits to the P3-S3 section view are exactly the approved ones (r
   assert.equal(count(view, "\nimport "), 0); assert.equal(count(view, "function restoreFocus()"), 1);
 });
 test("S4.0 edits to organization-admin-view are exactly the approved ones: optional frameworkEditor dependency, showDetail focus option, curriculum mount options, showFrameworkEditor", () => {
-  const admin = text("organization-admin-view.mjs");
+  const current = text("organization-admin-view.mjs");
+  const admin = reverseP4S3OrgViewEdits(current);   // the S4 bytes
   assert.equal(ADMIN_VIEW_EDITS_S4.length, 5);
-  assert.notEqual(reverseS4AdminViewEdits(admin), admin);
+  assert.notEqual(reverseS4AdminViewEdits(current), admin);
   assert.equal(count(admin, "function showFrameworkEditor(framework, organization) {"), 1);
   assert.equal(count(admin, "frameworkEditor.mount(container, { organization, framework, onBack:"), 1);
   assert.ok(admin.includes("async function showDetail(id, { focusFrameworkId } = {}) {"));

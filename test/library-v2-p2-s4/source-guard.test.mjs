@@ -57,7 +57,7 @@ test("safety: the admin view only gained the optional membershipSection hook (S3
 });
 
 test("no new dynamic import(), no new collection in index.html; Rules, indexes, Storage, package, vendor, S2 modules byte-pinned", () => {
-  assert.equal(html.split("import(").length - 1, 1);
+  assert.equal(html.split("import(").length - 1, 2);   // P4-S3 aligned: +1 = the lazy import() of the Import Center engine (Platform Admin, on demand)
   const names = new Set();
   for (const m of html.matchAll(/(?:collection|doc|collectionGroup)\((?:db|publicDb)\s*,\s*"([A-Za-z]+)"/g)) names.add(m[1]);
   for (const m of html.matchAll(/(?:collection|doc)\((?:db|publicDb)\s*,\s*(GROUP_COLLECTION|GROUP_JOIN_COLLECTION)/g)) names.add(m[1]);

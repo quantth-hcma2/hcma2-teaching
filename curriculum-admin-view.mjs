@@ -153,11 +153,14 @@ export function createCurriculumViewHelpers({ model } = {}) {
   }
 
   // phase: "loading" | "error" | "ready". All variants share the card + header so the create control is always at the same place.
-  function renderSectionHtml({ phase, organization, items = [], truncated = false, errorMessage = "", canOpen = false, lifecycleTools = false, esc, fmtDate, flashId = null }) {
+  function renderSectionHtml({ phase, organization, items = [], truncated = false, errorMessage = "", canOpen = false, lifecycleTools = false, canImport = false, esc, fmtDate, flashId = null }) {
     const archived = !!organization && organization.status !== "active";
     const reason = createDisabledReason(organization);
     const summary = phase === "ready" && items.length ? `<div class="small" id="orgCurriculumSummary" style="font-weight:650">${esc(summarizeFrameworks(items, truncated))}</div>` : "";
     const createButton = `<button class="btn" type="button" id="orgFwCreateBtn"${archived ? ` disabled aria-describedby="orgFwCreateHint" title="${attr(esc, reason)}"` : ""}>+ Tạo khung chương trình</button>${archived ? `<div class="hint" id="orgFwCreateHint">${esc(reason)}</div>` : ""}`;
+    // P4-S3: NHẬP TỪ EXCEL opens the Import Center (preview only). Absent unless the screen supplies the hook; disabled with a reason in an archived organization.
+    const importReason = "Đơn vị đã lưu trữ: không thể nhập tệp mới. Hãy khôi phục đơn vị trước.";
+    const importButton = canImport ? ` <button class="btn btn-outline" type="button" id="orgImportBtn" style="margin-left:8px"${archived ? ` disabled aria-describedby="orgImportHint" title="${attr(esc, importReason)}"` : ""}>⬆ NHẬP TỪ EXCEL</button>${archived ? `<div class="hint" id="orgImportHint">${esc(importReason)}</div>` : ""}` : "";
     const banner = archived ? `<div class="card mt-8" id="orgCurriculumArchivedNote" style="border-color:#94a3b8"><b>📦 Đơn vị đã lưu trữ.</b> Bạn có thể xem chương trình nhưng không thể tạo hoặc thay đổi. Khôi phục đơn vị để chỉnh sửa.</div>` : "";
     let body = "";
     if (phase === "loading") body = `<div class="center-screen" style="min-height:80px" id="orgCurriculumLoading"><span class="spinner" role="status" aria-label="Đang tải chương trình"></span></div>`;
@@ -169,7 +172,7 @@ export function createCurriculumViewHelpers({ model } = {}) {
       body = groups + (truncated ? `<p class="small mut mt-8" id="orgCurriculumTruncated">${esc(truncationNote())}</p>` : "");
     }
     return `<section class="card" id="orgCurriculumCard" aria-labelledby="orgCurriculumTitle" aria-busy="${phase === "loading" ? "true" : "false"}">
-      <div class="flex-between" style="flex-wrap:wrap;gap:10px;align-items:flex-start"><div><h3 id="orgCurriculumTitle" tabindex="-1" style="margin:0;outline:none">📚 Chương trình</h3><div class="small mut">Các khung chương trình (Môn → Bài) của đơn vị này.</div>${summary}</div><div>${createButton}</div></div>
+      <div class="flex-between" style="flex-wrap:wrap;gap:10px;align-items:flex-start"><div><h3 id="orgCurriculumTitle" tabindex="-1" style="margin:0;outline:none">📚 Chương trình</h3><div class="small mut">Các khung chương trình (Môn → Bài) của đơn vị này.</div>${summary}</div><div>${createButton}${importButton}</div></div>
       ${banner}<div id="orgFwLive" class="sr-only" role="status" aria-live="polite"></div><div id="orgFwBody">${body}</div></section>`;
   }
 
@@ -252,13 +255,17 @@ export function createCurriculumSection(deps) {
     if (!isPlatformAdmin) { host.innerHTML = ""; return; }
     const openHook = typeof options.onOpenFramework === "function" ? options.onOpenFramework : onOpenFramework;
     const canOpen = typeof openHook === "function";
+    const openImport = typeof options.onOpenImport === "function" ? options.onOpenImport : null;   // P4-S3: Import Center entry (supplied by the Organization screen)
+    let pendingFocusImport = !!options.focusImport;
     let pendingFocusId = options.focusFrameworkId || null;
     let org = organization, items = [], truncated = false, generation = 0, busy = false, flashId = null, trigger = null;
     const live = (message) => { const el = host.querySelector("#orgFwLive"); if (el) el.textContent = message; };
 
     // ---------------------------------------------------------- painting / loading
     function paint(phase, extra = {}) {
-      host.innerHTML = H.renderSectionHtml({ phase, organization: org, items, truncated, canOpen, lifecycleTools: !!cloneTools, esc, fmtDate, flashId, ...extra });
+      host.innerHTML = H.renderSectionHtml({ phase, organization: org, items, truncated, canOpen, lifecycleTools: !!cloneTools, canImport: !!openImport, esc, fmtDate, flashId, ...extra });
+      const importBtn = host.querySelector("#orgImportBtn");
+      if (importBtn && !importBtn.disabled) importBtn.onclick = () => { if (!busy) openImport(org); };
       const create = host.querySelector("#orgFwCreateBtn");
       if (create && !create.disabled) create.onclick = () => { trigger = create; openCreate(); };
       const retry = host.querySelector("#orgCurriculumRetry");
@@ -276,6 +283,7 @@ export function createCurriculumSection(deps) {
         if (mine !== generation) return;
         items = page.items; truncated = !!page.truncated;
         paint("ready");
+        if (pendingFocusImport) { pendingFocusImport = false; const importBtn = host.querySelector("#orgImportBtn"); if (importBtn && !importBtn.disabled) { importBtn.focus(); pendingFocusId = null; } }
         if (pendingFocusId) {
           const target = host.querySelector(`[data-fw-id="${pendingFocusId}"][data-fw-action="open"]`) || host.querySelector("#orgCurriculumTitle");
           pendingFocusId = null; if (target) target.focus();

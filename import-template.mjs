@@ -118,13 +118,31 @@ const GUIDE_LINES = freeze([
   ["BÀI: T01 | T01-B01 | Tập hợp các số tự nhiên | 1"]
 ].map((row) => freeze(row)));
 
-export function buildTemplateSheets({ generator = TEMPLATE_GENERATOR } = {}) {
+// OPTIONAL worked example (P4-S3 Template Center: "TẢI FILE MẪU CÓ VÍ DỤ"). It lives ONLY in the second download; the blank template keeps the data sheets
+// header-only exactly as frozen (R1 s4.2). The example is valid template data (it passes every validation stage) and says so in its framework name.
+export const TEMPLATE_EXAMPLE = deepFreeze({
+  framework: "Khung ví dụ: Nghiệp vụ văn phòng (hãy xóa ví dụ trước khi nhập thật)",
+  subjects: [["VP01", "Soạn thảo văn bản hành chính", 1], ["VP02", "Quản lý hồ sơ và lưu trữ", 2], ["VP03", "Giao tiếp công sở", 3]],
+  lessons: [
+    ["VP01", "VP01-B01", "Thể thức và kỹ thuật trình bày văn bản", 1], ["VP01", "VP01-B02", "Soạn thảo công văn, thông báo", 2], ["VP01", "VP01-B03", "Soạn thảo báo cáo và kế hoạch", 3],
+    ["VP02", "VP02-B01", "Lập hồ sơ công việc", 1], ["VP02", "VP02-B02", "Bảo quản và tra cứu tài liệu", 2],
+    ["VP03", "VP03-B01", "Giao tiếp qua điện thoại và thư điện tử", 1], ["VP03", null, "Ứng xử với khách đến làm việc (bài này không có mã)", 2]
+  ]
+});
+export const TEMPLATE_FILE_NAMES = freeze({ blank: "HCMA2_mau_khung_chuong_trinh_v1.xlsx", example: "HCMA2_mau_khung_chuong_trinh_v1_co_vi_du.xlsx" });
+const EXAMPLE_NOTE = freeze(["LƯU Ý: tệp này có DỮ LIỆU VÍ DỤ trong các sheet KHUNG, MÔN, BÀI. Hãy xóa hoặc thay bằng dữ liệu của bạn trước khi nhập. Dòng tiêu đề (dòng 1) giữ nguyên."]);
+
+// withExample=false (default): the frozen blank template. withExample=true: the same workbook plus the worked example rows and a note at the top of the guide.
+export function buildTemplateSheets({ generator = TEMPLATE_GENERATOR, withExample = false } = {}) {
   const meta = [["templateId", TEMPLATE_ID], ["schemaVersion", TEMPLATE_SCHEMA_VERSION], ["generator", generator], ["headerChecksum", TEMPLATE_HEADER_CHECKSUM]];
+  const guide = GUIDE_LINES.map((row) => row.slice());
+  if (withExample) guide.splice(2, 0, EXAMPLE_NOTE.slice());
+  const example = (rows) => (withExample ? rows.map((row) => row.slice()) : []);
   return deepFreeze({
-    [SHEET_GUIDE]: GUIDE_LINES.map((row) => row.slice()),
-    [SHEET_FRAMEWORK]: [expectedHeaders(SHEET_FRAMEWORK)],
-    [SHEET_SUBJECTS]: [expectedHeaders(SHEET_SUBJECTS)],
-    [SHEET_LESSONS]: [expectedHeaders(SHEET_LESSONS)],
+    [SHEET_GUIDE]: guide,
+    [SHEET_FRAMEWORK]: [expectedHeaders(SHEET_FRAMEWORK), ...example([[TEMPLATE_EXAMPLE.framework]])],
+    [SHEET_SUBJECTS]: [expectedHeaders(SHEET_SUBJECTS), ...example(TEMPLATE_EXAMPLE.subjects)],
+    [SHEET_LESSONS]: [expectedHeaders(SHEET_LESSONS), ...example(TEMPLATE_EXAMPLE.lessons)],
     [SHEET_META]: meta
   });
 }

@@ -1,6 +1,7 @@
 // P3-S5 edits to files that earlier slices pinned: the exact edits plus reversals that restore the previously verified (P3-S4 candidate de9057d) bytes, so every older
 // byte-pin keeps its meaning and any OTHER change is still detected. Per-file helpers: model (cloneCompleteness D1 resolution), the P3-S3 curriculum section view
 // (clone / delete-draft controls + flows, enabled only when cloneTools is injected) and index.html (wiring + cache tokens). Imports nothing (s4-edits composes these).
+import { reverseP4S3SectionViewEdits, reverseP4S3IndexEdits } from "../library-v2-p4-s3/p4s3-edits.mjs";   // P4-S3 aligned: the reversal chain starts with the P4-S3 edits (they are the newest edits to these files)
 const NL = String.fromCharCode(10), CRLF = String.fromCharCode(13, 10);
 export const withNl = (s, crlf) => (crlf ? s.split(NL).join(CRLF) : s);
 
@@ -189,7 +190,7 @@ export const SECTION_VIEW_EDITS_S5 = [
   [V_ROWACTION_NEW, V_ROWACTION_OLD],
   [V_FLOWS_BLOCK + V_FLOWS_ANCHOR, V_FLOWS_ANCHOR]
 ];
-export const reverseS5SectionViewEdits = (src) => transform(src, SECTION_VIEW_EDITS_S5, "P3-S5 section view", "reverse");
+export const reverseS5SectionViewEdits = (src) => transform(reverseP4S3SectionViewEdits(src), SECTION_VIEW_EDITS_S5, "P3-S5 section view", "reverse");
 export const applyS5SectionViewEdits = (src) => transform(src, SECTION_VIEW_EDITS_S5, "P3-S5 section view", "forward");
 
 // ---------------------------------------------------------------- index.html: clone tools wiring + cache tokens (model / section view changed after the S4 candidate)
@@ -208,5 +209,5 @@ const I_DEP_NEW = `      writer:createCurriculumWriter({collection,doc,setDoc,up
     // P3-S4: the MÔN -> BÀI node editor`;
 export const INDEX_EDITS_S5 = [[I_MODEL_NEW, I_MODEL_OLD], [I_VIEW_NEW, I_VIEW_OLD], [I_DEP_NEW, I_DEP_OLD]];
 export const INDEX_ADDED_S5 = { I_VIEW_NEW, I_DEP_NEW };
-export const reverseS5IndexEdits = (src) => transform(src, INDEX_EDITS_S5, "P3-S5 index.html", "reverse");
+export const reverseS5IndexEdits = (src) => transform(reverseP4S3IndexEdits(src), INDEX_EDITS_S5, "P3-S5 index.html", "reverse");
 export const applyS5IndexEdits = (src) => transform(src, INDEX_EDITS_S5, "P3-S5 index.html", "forward");

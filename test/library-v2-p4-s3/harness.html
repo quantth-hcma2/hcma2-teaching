@@ -1,0 +1,52 @@
+<!doctype html>
+<!-- TEST FIXTURE ONLY (never shipped): hosts import-center-view.mjs in a real browser. The REAL P4-S2/P4-S3 engine, the REAL module Worker and SheetJS 0.20.3 are used;
+     only the Organization lookup, toast, download and the page-level helpers are faked. There is NO Firestore here at all: the view receives no write function.
+     Loaded by controller.e2e.mjs. -->
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>P4-S3 Import Center harness</title>
+<style id="app-css"></style></head>
+<body><div id="app" style="max-width:1000px;margin:0 auto;padding:16px"><div id="host"></div></div><div id="toast-root"></div>
+<script type="module">
+import { createImportCenter } from "/import-center-view.mjs";
+
+const html = await (await fetch("/index.html")).text();
+document.getElementById("app-css").textContent = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n");
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const toast = (msg, type) => { const t = document.createElement("div"); t.className = "toast " + (type || ""); t.textContent = msg; document.getElementById("toast-root").appendChild(t); H.toasts.push({ msg, type }); };
+const mapError = (e) => "Lỗi: " + (e && e.code || "không rõ");
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const H = {
+  downloads: [], toasts: [], orgReads: [], engineLoads: 0, backs: 0, store: new Map(), readerCalls: 0, delays: { read: 0, org: 0 },
+  org: (o) => { H.store.set(o.id, o); },
+  reset() { H.downloads.length = 0; H.toasts.length = 0; H.orgReads.length = 0; H.engineLoads = 0; H.backs = 0; H.store.clear(); H.readerCalls = 0; H.delays = { read: 0, org: 0 }; document.getElementById("toast-root").innerHTML = ""; document.getElementById("host").innerHTML = ""; },
+  // mode: real | noCaps | engineFailOnce | readerUnsupported | slowReader
+  async mount({ isAdmin = true, org, mode = "real", host = "host" } = {}) {
+    let failedOnce = false;
+    const loadEngine = async () => {
+      H.engineLoads++;
+      if (mode === "engineFailOnce" && !failedOnce) { failedOnce = true; throw new Error("network"); }
+      const real = await import("/import-center-engine.mjs");   // dynamic, exactly like index.html: nothing is fetched until the screen opens
+      if (mode === "noCaps") return { ...real, detectReaderCapabilities: () => ({ supported: false, missing: ["decompression-stream", "readable-stream"] }) };
+      return real;
+    };
+    const makeReader = (engine) => {
+      const real = engine.createXlsxReader();
+      return { readXlsx: async (file, options) => {
+        H.readerCalls++;
+        if (H.delays.read) await sleep(H.delays.read);
+        if (mode === "readerUnsupported") { const { unsupportedBrowserDiagnostic } = await import("/import-capabilities.mjs"); return { ok: false, diagnostics: [unsupportedBrowserDiagnostic(["module-worker"])], raw: null, file: { name: file.name, size: file.size, sha256: null }, timedOut: false, unsupportedBrowser: true }; }
+        return real.readXlsx(file, options);
+      } };
+    };
+    const organizationQueries = { organizationById: async (db, id) => { H.orgReads.push(id); if (H.delays.org) await sleep(H.delays.org); const o = H.store.get(id); return o ? { ...o } : null; } };
+    H.center = createImportCenter({
+      db: {}, actorUid: "uid-admin", isPlatformAdmin: isAdmin, esc, toast, mapError, organizationQueries, loadEngine, makeReader,
+      downloadFile: (bytes, fileName, mime) => { H.downloads.push({ fileName, mime, size: bytes.length, b64: btoa(String.fromCharCode(...bytes)) }); }
+    });
+    await H.center.mount(document.getElementById(host), { organization: org, onBack: () => { H.backs++; } });
+  }
+};
+window.__h = H;
+window.__xss = undefined;
+window.__ready = true;
+</script></body></html>

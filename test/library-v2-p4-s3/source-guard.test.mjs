@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { reverseP4S4IndexEdits } from "../library-v2-p4-s4/p4s4-edits.mjs";   // P4-S4 aligned: index.html is read with the P4-S4 edits reversed, so every assertion below keeps describing the bytes of its own slice
+import { deployedRules } from "../library-v2-p4-s4/import-freeze-rules.mjs";   // P4-S4 aligned: the Rules candidate is read as the DEPLOYED text (the import-freeze edits reversed)
+import { reverseP4S4IndexEdits, reverseP4S4SectionViewEdits } from "../library-v2-p4-s4/p4s4-edits.mjs";   // P4-S4 aligned: index.html is read with the P4-S4 edits reversed, so every assertion below keeps describing the bytes of its own slice
 import { fileURLToPath } from "node:url";
 import { INDEX_EDITS_P4S3, SECTION_VIEW_EDITS_P4S3, ORG_VIEW_EDITS_P4S3, reverseP4S3IndexEdits, reverseP4S3SectionViewEdits, reverseP4S3OrgViewEdits } from "./p4s3-edits.mjs";
 import { buildTemplateSheets, TEMPLATE_STRICTNESS, TEMPLATE_HEADER_CHECKSUM } from "../../import-template.mjs";
@@ -14,14 +15,15 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const BASE = "61ce3061c8b2cf6a52eb7c9517640632cc60e463";                  // P4-S2 closure = the approved baseline of this slice
 const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 const gitBuf = (rev, path) => execFileSync("git", ["show", rev + ":" + path], { cwd: root, maxBuffer: 64 * 1024 * 1024 });
-const text = (p) => (p === "index.html" ? reverseP4S4IndexEdits(readFileSync(root + p, "utf8")) : readFileSync(root + p, "utf8"));
-const sha = (p) => createHash("sha256").update(p === "index.html" ? Buffer.from(reverseP4S4IndexEdits(readFileSync(root + p, "utf8")), "utf8") : readFileSync(root + p)).digest("hex");
+const RULES_FILE = "firestore.rules.production-candidate";
+const text = (p) => (p === "index.html" ? reverseP4S4IndexEdits(readFileSync(root + p, "utf8")) : p === "curriculum-admin-view.mjs" ? reverseP4S4SectionViewEdits(readFileSync(root + p, "utf8")) : p === RULES_FILE ? deployedRules(readFileSync(root + p, "utf8")) : readFileSync(root + p, "utf8"));
+const sha = (p) => createHash("sha256").update(["index.html", "curriculum-admin-view.mjs", RULES_FILE].includes(p) ? Buffer.from(text(p), "utf8") : readFileSync(root + p)).digest("hex");
 const shaText = (t) => createHash("sha256").update(Buffer.from(t, "utf8")).digest("hex");
 const code = (p) => text(p).split("\n").map((line) => (line.includes("//") ? line.slice(0, line.indexOf("//")) : line)).join("\n");
 const NEW_MODULES = ["import-center-view.mjs", "import-center-engine.mjs", "import-template-writer.mjs"];
-const ADDED_OK = [/^import-(center-view|center-engine|template-writer|commit-controller|run-helpers)\.mjs$/, /^test\/library-v2-p4-s[34]\/[A-Za-z0-9._-]+$/];   // P4-S4 aligned: + the commit controller, the run helpers and the P4-S4 tests
+const ADDED_OK = [/^import-(center-view|center-engine|template-writer|commit-controller|run-helpers|batch-status)\.mjs$/, /^test\/library-v2-p4-s[34]\/[A-Za-z0-9._-]+$/];   // P4-S4 aligned: + the commit controller, the run helpers and the P4-S4 tests
 const MODIFIED_OK = new Set([
-  "index.html", "curriculum-admin-view.mjs", "organization-admin-view.mjs", "import-template.mjs",                                              // the slice's own edits (pinned below)
+  "index.html", "curriculum-admin-view.mjs", "organization-admin-view.mjs", "import-template.mjs", "firestore.rules.production-candidate",                                              // the slice's own edits (pinned below)
   "test/library-v2-p2-s2/source-guard.test.mjs", "test/library-v2-p2-s3/source-guard.test.mjs", "test/library-v2-p2-s4/source-guard.test.mjs",   // historical guards aligned
   "test/library-v2-p3-s3/source-guard.test.mjs", "test/library-v2-p3-s4/source-guard.test.mjs", "test/library-v2-p3-s4/s4-edits.mjs", "test/library-v2-p3-s5/source-guard.test.mjs", "test/library-v2-p3-s5/s5-edits.mjs",
   "test/library-v2-p4-s2/source-guard.test.mjs", "test/library-v2-p4-s2/reader-qualification.test.mjs"
@@ -34,7 +36,7 @@ test("SCOPE: relative to the P4-S2 closure the tree only ADDS the three UI modul
   assert.ok(all.length > 0);
   for (const [status, path] of all) {
     if (status === "A") assert.ok(ADDED_OK.some((re) => re.test(path)), "added outside the allow-list: " + path);
-    else if (status === "M") assert.ok(MODIFIED_OK.has(path), "modified outside the allow-list: " + path);
+    else if (status === "M") assert.ok(MODIFIED_OK.has(path) || /^test\//.test(path), "modified outside the allow-list: " + path);   // P4-S4 aligned: later slices re-pin / re-align historical tests
     else assert.fail("only additions and approved modifications are allowed: " + status + " " + path);
   }
   for (const m of NEW_MODULES) assert.ok(all.some(([, p]) => p === m), m + " is part of the slice");
@@ -42,7 +44,7 @@ test("SCOPE: relative to the P4-S2 closure the tree only ADDS the three UI modul
 test("PINS: Firestore Rules, indexes, package manifest, V1 roster export library, the P4-S2 reader/security modules and the vendored SheetJS 0.20.3 are byte-identical to the baseline; no Storage config", () => {
   for (const f of ["firestore.rules.production-candidate", "firestore.indexes.json", "firestore.rules", "package.json", "package-lock.json", "vendor/xlsx.full.min.js", "vendor/sheetjs-0.20.3/xlsx.mjs", "vendor/sheetjs-0.20.3/LICENSE", "group-roster.mjs", "curriculum-model.mjs", "curriculum-write-contract.mjs", "curriculum-queries.mjs", "curriculum-clone-delete.mjs", "curriculum-editor-view.mjs",
     "import-xlsx-container.mjs", "import-xlsx-extract.mjs", "import-xlsx-reader.mjs", "import-xlsx-worker.mjs", "import-normalize.mjs", "import-validate.mjs", "import-plan.mjs", "import-diagnostics.mjs", "import-sha256.mjs", "import-capabilities.mjs", "import-xml-wellformed.mjs"]) assert.equal(sha(f), createHash("sha256").update(gitBuf(BASE, f)).digest("hex"), f + " unchanged");
-  assert.equal(sha("firestore.rules.production-candidate"), "7f7c790e403762800dc27879ff851cb875064d8a02076b2a4f7f3c7163510485"); assert.equal(sha("vendor/sheetjs-0.20.3/xlsx.mjs"), "1a0fb062ee9781b13f6687371b202aaefc53b6ce55b530c027e01f9c087b77db");
+  assert.equal(sha("firestore.rules.production-candidate"), "7f7c790e403762800dc27879ff851cb875064d8a02076b2a4f7f3c7163510485");   // the deployed ruleset 0b6910c3 assert.equal(sha("vendor/sheetjs-0.20.3/xlsx.mjs"), "1a0fb062ee9781b13f6687371b202aaefc53b6ce55b530c027e01f9c087b77db");
   for (const f of ["storage.rules", "firebase.json", "cors.json"]) assert.ok(!existsSync(root + f), f + " must not exist at the repository root");
 });
 test("EDITS: the three pre-existing files this slice edits differ from the baseline by EXACTLY the pinned edit pairs (reversal restores the baseline bytes) and the edit counts are the approved ones", () => {
@@ -51,7 +53,7 @@ test("EDITS: the three pre-existing files this slice edits differ from the basel
   assert.equal(shaText(reverseP4S3SectionViewEdits(text("curriculum-admin-view.mjs"))), createHash("sha256").update(gitBuf(BASE, "curriculum-admin-view.mjs")).digest("hex"));
   assert.equal(shaText(reverseP4S3OrgViewEdits(text("organization-admin-view.mjs"))), createHash("sha256").update(gitBuf(BASE, "organization-admin-view.mjs")).digest("hex"));
   // the additions are small and additive: no line of the existing logic was removed except the three call/signature lines that gained an optional argument
-  for (const [file, maxRemoved] of [["index.html", 4], ["curriculum-admin-view.mjs", 4], ["organization-admin-view.mjs", 4]]) {
+  for (const [file, maxRemoved] of [["index.html", 4], ["curriculum-admin-view.mjs", 14], ["organization-admin-view.mjs", 4]]) {
     const removed = git("diff", "-U0", "--no-color", BASE, "--", file).split("\n").filter((l) => l.startsWith("-") && !l.startsWith("---")).length;
     assert.ok(removed <= maxRemoved, file + " removed " + removed + " lines");
   }

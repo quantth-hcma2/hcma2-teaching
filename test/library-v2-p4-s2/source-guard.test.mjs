@@ -23,7 +23,7 @@ test("FROZEN: the approved P4-S2 reader, security gates, normalization, validati
 });
 test("SCOPE: Firestore Rules, indexes, package manifest and the V1 roster export library are byte-identical to the P4-S1 baseline; existing curriculum/organization data modules are unchanged", () => {
   const pins = {
-    "firestore.rules.production-candidate": "7f7c790e403762800dc27879ff851cb875064d8a02076b2a4f7f3c7163510485",
+    "firestore.rules.production-candidate": "f6b9de012c7f7d3d0fce6efc19d760b3b2e0bca9c9979811786ede93c9b17d4a",
     "firestore.indexes.json": "a27b5a20c63e1b446f63221a6c1fa93b31ac95a6556c6009e44a45f4ca354d51",
     "package.json": "446bef0b4c5941557b8a5fe4d2c7b20f73665086012e8cdc3f39ca8c7d6c8ba1",
     "firestore.rules": "a033e20c0d6c7eeb23cc1e76d98e5a4d246bead5becfcc14574c4f98b9fed538",

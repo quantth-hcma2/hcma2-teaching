@@ -13,7 +13,7 @@ import { validateRaw } from "./helpers.mjs";
 import { buildImportPlan, materializePayloads, prepareCommit } from "../../import-plan.mjs";
 
 const rules = candidateRules();
-assert.equal(sha(rules).toUpperCase(), "7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485", "the Rules under test are the production artifact");
+assert.equal(sha(rules).toUpperCase(), "F6B9DE012C7F7D3D0FCE6EFC19D760B3B2E0BCA9C9979811786EDE93C9B17D4A", "the Rules under test are the production artifact");
 const env = await makeEnv("demo-p4s2-plan", rules);
 const as = actors(env);
 test.after(async () => env.cleanup());
@@ -121,6 +121,6 @@ test("RULES COMPATIBILITY: a manual framework cannot be 'paired' afterwards - th
   await no(setDoc(ref(db, payloads.batch.path), payloads.batch.data));
 });
 test("EVIDENCE: the Rules under test are byte-identical to the production artifact and the plan module never touches Firestore", () => {
-  assert.equal(createHash("sha256").update(readFileSync(new URL("../../firestore.rules.production-candidate", import.meta.url))).digest("hex").toUpperCase(), "7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485");
+  assert.equal(createHash("sha256").update(readFileSync(new URL("../../firestore.rules.production-candidate", import.meta.url))).digest("hex").toUpperCase(), "F6B9DE012C7F7D3D0FCE6EFC19D760B3B2E0BCA9C9979811786EDE93C9B17D4A");
   assert.ok(!/firebase|firestore/i.test(readFileSync(new URL("../../import-plan.mjs", import.meta.url), "utf8").replace(/\/\/.*$/gm, "").replace(/"[^"]*"/g, "")));
 });

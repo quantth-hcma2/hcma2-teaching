@@ -11,7 +11,6 @@ export const RUN_PHASE_LABELS = freeze({
   nodes: "Đang ghi môn và bài",
   verify: "Đang đọc lại và kiểm tra toàn bộ dữ liệu",
   complete: "Đang hoàn tất lần nhập",
-  confirm: "Đang đọc lại lần cuối sau khi hoàn tất",
   done: "Hoàn tất",
   "rollback-nodes": "Đang xóa các mục đã ghi",
   "rollback-framework": "Đang xóa khung nháp",
@@ -52,7 +51,6 @@ export function describeStop(result) {
     case "blocked": return { tone: "warn", resume: false, rollback: false, text: RUN_MESSAGES.blockedIncomplete };
     case "identity-mismatch": return { tone: "err", resume: false, rollback: true, text: RUN_MESSAGES.resumeMismatch };
     case "not-committing": return { tone: "err", resume: false, rollback: true, text: "Lần nhập này đã ở trạng thái “" + (STATUS_LABELS[result.status] || "khác") + "” nên không thể tiếp tục. " + (result.status === "partial" ? "Chỉ có thể HOÀN TÁC NHẬP." : "") };
-    case "completed-drift": { const c = (result.verification && result.verification.counts) || {}; return { tone: "err", resume: false, rollback: false, text: "Lần nhập đã được ghi nhận hoàn tất, nhưng lần đọc lại cuối cùng cho thấy dữ liệu khung đã bị người khác thay đổi trong lúc hoàn tất (thiếu " + num(c.missing) + ", thừa " + num(c.extra) + ", sai khác " + num(c.altered) + "). KHÔNG kích hoạt khung này. Hãy dùng XÓA BẢN NHÁP trong màn hình Chương trình rồi nhập lại." }; }
     case "unconfirmed": return { tone: "warn", resume: true, rollback: true, text: "Chưa xác nhận được trạng thái cuối cùng từ máy chủ. Bấm TIẾP TỤC để kiểm tra lại; hệ thống sẽ không báo thành công khi chưa đọc lại được." };
     case "nodes-remain": case "framework-remains": return { tone: "warn", resume: false, rollback: true, text: "Hoàn tác chưa xóa hết dữ liệu. Bấm HOÀN TÁC NHẬP để thử lại." };
     case "framework-not-deletable": return { tone: "err", resume: false, rollback: false, text: "Khung của lần nhập này không còn là bản nháp chưa kích hoạt nên không thể hoàn tác tự động." };

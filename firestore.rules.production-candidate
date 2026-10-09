@@ -2143,11 +2143,13 @@ service cloud.firestore {
         request.resource.data.updatedAt == request.time &&
         fwTransitionOk(resource.data, request.resource.data) &&
         mayWriteCurriculum(resource.data.organizationId) &&
-        (resource.data.status != 'draft' || request.resource.data.status != 'active' || importAllowsActivation(fwId, resource.data.organizationId));   // P4-S1: import-governed frameworks activate only after a completed batch
+        (resource.data.status != 'draft' || request.resource.data.status != 'active' || importAllowsActivation(fwId, resource.data.organizationId)) &&
+        importFrameworkUpdateOk(fwId);   // P4-S1: import-governed frameworks activate only after a completed batch
       // Only a never-activated draft may be deleted (children are removed first by the client; nothing is cascaded).
       allow delete: if resource.data.status == 'draft' &&
         !('activatedAt' in resource.data) &&
-        mayWriteCurriculum(resource.data.organizationId);
+        mayWriteCurriculum(resource.data.organizationId) &&
+        importFrameworkDeleteOk(fwId);
 
       match /nodes/{nodeId} {
         function nodeParent() { return get(fwPath(fwId)).data; }
@@ -2184,18 +2186,21 @@ service cloud.firestore {
           request.resource.data.updatedAt == request.time &&
           request.resource.data.organizationId == nodeParent().organizationId &&
           nodeParent().status in ['draft', 'active'] &&
-          mayWriteCurriculum(request.resource.data.organizationId);
+          mayWriteCurriculum(request.resource.data.organizationId) &&
+          importNodeCreateOk(fwId, nodeId);
         // Structure (parent, ancestors, kind) is immutable in P3; only label/code/order/status move, never in an archived framework.
         allow update: if nodeShapeOk(request.resource.data) &&
           nodeImmutableOk(resource.data, request.resource.data) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'code', 'order', 'status', 'updatedAt']) &&
           request.resource.data.updatedAt == request.time &&
           nodeParent().status in ['draft', 'active'] &&
-          mayWriteCurriculum(resource.data.organizationId);
+          mayWriteCurriculum(resource.data.organizationId) &&
+          importNodeUpdateOk(fwId);
         // Deletable while the parent is a never-activated draft, or when the parent framework no longer exists (orphan cleanup).
         allow delete: if mayWriteCurriculum(resource.data.organizationId) &&
           (!exists(fwPath(fwId)) ||
-            (nodeParent().status == 'draft' && !('activatedAt' in nodeParent())));
+            (nodeParent().status == 'draft' && !('activatedAt' in nodeParent()))) &&
+          importNodeDeleteOk(fwId);
       }
     }
     // ===== LIBRARY V2 P3-S1 (CURRICULUM) - END =====
@@ -2220,6 +2225,19 @@ service cloud.firestore {
          get(importPath(id)).data.kind == 'curriculum');
     }
     function importIntIn(v, lo, hi) { return v is int && v >= lo && v <= hi; }
+    // P4-S4 IMPORT FREEZE (design LIBRARY_V2_P4_S4_RULES_DESIGN_GATE.md): the paired importBatches document is the lock. A framework WITHOUT a paired batch (every ordinary P3 framework) and a COMPLETED
+    // import are unaffected. While the batch is 'committing' only import-shaped node CREATES (32 lower-case hex ids) are admitted, and only until the batch is SEALED (chunksDone == chunksTotal: every
+    // chunk is written and the controller verifies): from the seal on nobody can create, change or delete a node or the framework until the batch leaves 'committing'. 'partial' (abandoned / rollback
+    // started / verification failed) admits only DELETES (clean-up). WHO may recover is not restricted here: the batch rules above are untouched (any authorized writer can abandon, resume, roll back).
+    function importNodeCreateOk(fwId, nodeId) {
+      return !exists(importPath(fwId)) ||
+        get(importPath(fwId)).data.status == 'completed' ||
+        (get(importPath(fwId)).data.status == 'committing' && get(importPath(fwId)).data.chunksDone < get(importPath(fwId)).data.chunksTotal && nodeId.matches('^[0-9a-f]{32}$'));
+    }
+    function importNodeUpdateOk(fwId) { return !exists(importPath(fwId)) || get(importPath(fwId)).data.status == 'completed'; }
+    function importNodeDeleteOk(fwId) { return !exists(importPath(fwId)) || get(importPath(fwId)).data.status in ['completed', 'partial', 'rolled_back']; }
+    function importFrameworkUpdateOk(fwId) { return !exists(importPath(fwId)) || get(importPath(fwId)).data.status == 'completed'; }
+    function importFrameworkDeleteOk(fwId) { return !exists(importPath(fwId)) || get(importPath(fwId)).data.status in ['completed', 'partial']; }
 
     match /importBatches/{batchId} {
       function batchNodePath(d) { return /databases/$(database)/documents/curriculumFrameworks/$(batchId)/nodes/$(d.finalNodeId); }

@@ -1,18 +1,20 @@
 // Library V2 P4-S4 - IMPORT COMMIT / RECOVERY / ROLLBACK controller (no DOM, no Firebase import: the Firestore functions are injected, like the P3 writers).
 //
-// It executes the deterministic, already validated import plan of P4-S2 against the DEPLOYED P4-S1 Rules (ruleset 0b6910c3) - nothing in the Rules changes:
-//   authorize -> importBatches/{X} (committing) -> curriculumFrameworks/{X} (draft) -> node chunks (<= 400 writes, separate commits) -> progress -> FULL read-back
-//   verification of every planned node -> importBatches/{X} completed (only after the verification passed) -> read-back of the completed state.
-// The Rules only witness the final node (finalNodeId) and chunksDone == chunksTotal; THIS controller is the only guarantee that the dataset is complete and exact.
+// It executes the deterministic, already validated import plan of P4-S2 against the P4-S4 IMPORT-FREEZE Rules (candidate; the deployed P4-S1 ruleset 0b6910c3 does not freeze incomplete imports):
+//   authorize -> importBatches/{X} (committing) -> curriculumFrameworks/{X} (draft) -> node chunks (<= 400 writes, separate commits) -> progress
+//   -> SEAL (progress chunksDone := chunksTotal, written only when EVERY planned node is present: from this write the Rules freeze all node and framework mutations)
+//   -> FULL server read-back verification of every planned node -> importBatches/{X} completed (only after the verification passed) -> server read-back of the final state before success.
+// Rollback: committing -> partial (the BARRIER: atomic, stops every resume / seal / completion) -> delete nodes -> delete the framework -> partial -> rolled_back. The batch is never deleted.
+// The Rules only witness the final node (finalNodeId); the seal + this controller's complete read-back are what make "completed" mean "exactly the plan".
 //
 // Design facts:
-//  * ONE algorithm for a new import and for a resume: read the batch (create it if absent), read the framework (create it if absent), list the nodes that exist,
-//    classify them against the plan, write ONLY the missing nodes (atomic chunks), verify, complete. Retries are therefore idempotent and a progress counter is never trusted.
-//  * Progress (chunksDone) is committed SEPARATELY after each node chunk: a chunk of 400 node writes plus a progress write would exceed the 400-write batch cap, and the frozen
-//    plan (P4-S2, 400 nodes per chunk, chunksTotal = ceil(n / 400)) is unchanged. chunksDone is derived from the nodes that really exist (leading complete chunks), never incremented blindly.
-//  * Interrupted imports stay `committing` (resume writes the missing nodes). `partial` is a durable, deliberate stop (verification found extra / altered / structurally wrong
-//    nodes, or the operator abandoned the import): per the Rules it can only go to `rolled_back`. Rollback deletes nodes, then the framework, then marks `rolled_back`; batches are never deleted.
-//  * Authorization is re-checked through `authorize()` before the batch, the framework, every chunk, the completion and every rollback phase; the organization is locked by the caller.
+//  * ONE algorithm for a new import and for a resume / authorized takeover: read the batch (create it if absent), read the framework (create it if absent), list the nodes that exist,
+//    classify them against the plan, write ONLY the missing nodes (atomic chunks), seal, verify, complete. Retries are idempotent; a progress counter is never trusted for completeness.
+//  * Progress (chunksDone) is committed SEPARATELY after each node chunk (400 node writes + a progress write would exceed the 400-write cap; the frozen P4-S2 plan keeps 400-node chunks).
+//    chunksDone is derived from the nodes that really exist; its final value (= chunksTotal) is the SEAL and is written only after the last node is present.
+//  * Interrupted imports stay `committing` (anybody authorized may resume). `partial` is a durable stop (verification failed, abandoned, rollback started): per the Rules it can only go to `rolled_back`.
+//  * Authorization is re-checked through `authorize()` before the batch, the framework, every chunk, the seal, the verification, the completion and every rollback phase; the organization is locked by the caller.
+//  * There is NO fallback to the old transaction / re-read completion: the safety of the final interval comes from the Rules (see test/library-v2-p4-s4).
 import { toBatchCreatePayload, toFrameworkPayload, toNodePayload, verifyPlanIntegrity, isExecutablePlan, canonicalJson } from "./import-plan.mjs";
 import { sha256Hex } from "./import-sha256.mjs";
 import { validateTree, activationReadiness, CURRICULUM_MAX_NODES, isValidId } from "./curriculum-model.mjs";
@@ -22,9 +24,8 @@ export const NODE_PAGE = 500;                                  // read pages of 
 export const MAX_ROLLBACK_ROUNDS = 40;                         // safety bound of the delete loop (5000 nodes = 13 rounds of 400)
 export const RETRY_DELAYS_MS = freeze([400, 1200]);            // 3 attempts per step
 export const STEP_TIMEOUT_MS = 90000;                          // a Firestore write queued while offline never settles: a write step that does not settle in time counts as a transient failure
-export const COMPLETE_TIMEOUT_MS = 240000;                      // the completion transaction (below the 270 s Firestore transaction limit)
 export const READ_TIMEOUT_MS = 120000;                         // server reads fail fast when offline; this only bounds a read that hangs
-export const RESULT_CODES = freeze({ verifyFailed: "VERIFY_FAILED", abandoned: "ABANDONED", rolledBack: "ROLLED_BACK" });
+export const RESULT_CODES = freeze({ verifyFailed: "VERIFY_FAILED", abandoned: "ABANDONED", rollbackStarted: "ROLLBACK_STARTED", rolledBack: "ROLLED_BACK" });
 const NODE_KEYS = freeze(["schemaVersion", "organizationId", "kind", "parentId", "ancestors", "order", "code", "name", "status", "createdAt", "updatedAt"]);
 const TRANSIENT = new Set(["unavailable", "deadline-exceeded", "aborted", "resource-exhausted", "internal", "cancelled", "unknown"]);
 
@@ -134,12 +135,9 @@ export function batchMatchesPlan(batch, plan, organizationId) {
 }
 
 // ================================================================ the controller
-export const NODE_TX_GROUP = 250;                                // planned nodes read per parallel group inside the completion transaction
-// completionMode "transaction" (always used by the page) completes inside ONE Firestore transaction that re-reads the batch, the framework and EVERY planned node; "plain" is the
-// behaviour of the first candidate (317e854) and exists only so the race tests can reproduce it - production wiring never passes it.
-export function createImportCommitController({ db, firestore, sleep, retryDelays = RETRY_DELAYS_MS, stepTimeoutMs = STEP_TIMEOUT_MS, readTimeoutMs = READ_TIMEOUT_MS, completionMode = "transaction" } = {}) {
+export function createImportCommitController({ db, firestore, sleep, retryDelays = RETRY_DELAYS_MS, stepTimeoutMs = STEP_TIMEOUT_MS, readTimeoutMs = READ_TIMEOUT_MS } = {}) {
   const fs = firestore || {};
-  for (const name of ["collection", "doc", "getDocFromServer", "getDocsFromServer", "runTransaction", "query", "where", "limit", "orderBy", "startAfter", "documentId", "writeBatch", "setDoc", "updateDoc", "deleteDoc", "serverTimestamp"]) {
+  for (const name of ["collection", "doc", "getDocFromServer", "getDocsFromServer", "query", "where", "limit", "orderBy", "startAfter", "documentId", "writeBatch", "setDoc", "updateDoc", "deleteDoc", "serverTimestamp"]) {
     if (typeof fs[name] !== "function") throw new TypeError("createImportCommitController requires the Firestore function: " + name);
   }
   const wait = typeof sleep === "function" ? sleep : (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -197,7 +195,7 @@ export function createImportCommitController({ db, firestore, sleep, retryDelays
   });
   const WRITE_LABELS = /^(create-|chunk-|delete-|progress|partial|complete|rolled-back)/;
   async function withRetry(step, label) {
-    const ms = label === "complete" ? Math.max(stepTimeoutMs, COMPLETE_TIMEOUT_MS) : WRITE_LABELS.test(label) ? stepTimeoutMs : readTimeoutMs;   // the completion transaction re-reads every planned node (5000 nodes: ~17 s on the emulator)
+    const ms = WRITE_LABELS.test(label) ? stepTimeoutMs : readTimeoutMs;  
     let last = null;
     for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
       try { return { ok: true, value: await settle(Promise.resolve().then(() => step(attempt)), ms) }; }
@@ -218,28 +216,6 @@ export function createImportCommitController({ db, firestore, sleep, retryDelays
 
   async function markPartial(batchId, resultCode) {
     return withRetry(() => fs.updateDoc(batchRef(batchId), { status: "partial", resultCode, finishedAt: fs.serverTimestamp(), updatedAt: fs.serverTimestamp() }), "partial");
-  }
-
-  // ---------------------------------------------------------------- completion transaction
-  // Re-reads the batch, the framework and EVERY planned node INSIDE one transaction, verifies them against the plan and writes the completion in the same transaction. Firestore's optimistic
-  // concurrency makes the commit fail (and the SDK re-run this callback) if ANY of those documents changed - or appeared - after it was read, so an alteration, deletion or rename by another
-  // client between the read and the commit can never be completed over. It CANNOT see a node that is not in the plan (the web SDK has no transactional query), so an EXTRA node created
-  // by another client in that interval is not prevented: the caller confirms the whole node set again after the commit (see commit()) and the Rules would have to close that gap.
-  async function completeInTransaction(plan, organizationId, batchId) {
-    return fs.runTransaction(db, async (tx) => {
-      const read = async (ref) => { try { const s = await tx.get(ref); return s.exists() ? plainDoc(s) : null; } catch (error) { if (classifyError(error) === "permission") return null; throw error; } };
-      const batch = await read(batchRef(batchId));
-      const framework = await read(frameworkRef(batchId));
-      const nodes = [];
-      for (let from = 0; from < plan.nodes.length; from += NODE_TX_GROUP) {
-        const docs = await Promise.all(plan.nodes.slice(from, from + NODE_TX_GROUP).map((node) => read(nodeRef(batchId, node.id))));
-        for (const d of docs) if (d) nodes.push(d);
-      }
-      const verification = verifyImportedDataset({ plan, framework, batch, nodes, organizationId });
-      if (!verification.ok) return { ok: false, verification };
-      tx.update(batchRef(batchId), { status: "completed", chunksDone: plan.chunks.length, finishedAt: fs.serverTimestamp(), updatedAt: fs.serverTimestamp() });
-      return { ok: true, verification };
-    });
   }
 
   // ---------------------------------------------------------------- COMMIT (new import or resume: the same idempotent algorithm)
@@ -298,6 +274,8 @@ export function createImportCommitController({ db, firestore, sleep, retryDelays
     const present = new Set(existing.map((node) => node.id));
     let written = present.size;
     progress("nodes", { nodesWritten: written, chunk: 0 });
+    // a SEALED batch (chunksDone == chunksTotal) is frozen by the Rules: a planned node that is missing there can never be written again -> durable stop, rollback is the only way forward
+    if ((batch.chunksDone || 0) >= plan.chunks.length && present.size < plan.nodes.length) return await failVerification({ plan, organizationId, verification: interim, batchId, phase: "scan" });
 
     // 4. node chunks (atomic, <= 400 writes) in plan order; progress is committed separately
     for (const chunk of plan.chunks) {
@@ -329,7 +307,18 @@ export function createImportCommitController({ db, firestore, sleep, retryDelays
       }
     }
 
-    // 5. FULL read-back verification of everything that exists (never "the counter says so")
+    // 5. SEAL: every planned node is present, so declare it (progress chunksDone := chunksTotal). From this write on the Rules freeze every node and framework mutation until the batch leaves
+    //    'committing': the node set read back next is exactly the node set at completion. Never written while a planned node is missing.
+    if (present.size !== plan.nodes.length) return stop("incomplete", { phase: "seal", nodesWritten: written });
+    if ((batch.chunksDone || 0) < plan.chunks.length) {
+      denied = await auth(); if (!denied.allowed) return stop("denied", { reason: denied.reason, phase: "seal", nodesWritten: written });
+      progress("seal", { nodesWritten: written });
+      const sealed = await withRetry(() => fs.updateDoc(batchRef(batchId), { chunksDone: plan.chunks.length, updatedAt: fs.serverTimestamp() }), "progress");
+      if (!sealed.ok) { const again = await readBatch(batchId).catch(() => null); if (again && again.status !== "committing") return stop("not-committing", { status: again.status, phase: "seal" }); return stop(failureState(sealed.kind), { phase: "seal", kind: sealed.kind, nodesWritten: written }); }
+      batch = { ...batch, chunksDone: plan.chunks.length };
+    }
+
+    // 6. FULL read-back verification of everything that exists (never "the counter says so")
     denied = await auth(); if (!denied.allowed) return stop("denied", { reason: denied.reason, phase: "verify" });
     progress("verify", { nodesWritten: written, verified: 0 });
     let readBack = null;
@@ -341,37 +330,24 @@ export function createImportCommitController({ db, firestore, sleep, retryDelays
       if (!r.ok) return stop(failureState(r.kind), { phase: "verify", kind: r.kind, nodesWritten: written }); readBack = r.value; }
     const verification = verifyImportedDataset({ plan, framework: readBack.fw, batch: readBack.b, nodes: readBack.nodes });
     if (!verification.ok) {
-      if (verification.repairable) return stop("incomplete", { phase: "verify", verification, nodesWritten: written });   // missing only: a resume writes them (batch stays committing)
       return await failVerification({ plan, organizationId, verification, batchId, phase: "verify" });
     }
 
-    // 6. completion (the Rules: chunksDone == chunksTotal, paired draft framework, witness node) and read-back of the completed state
+    // 7. completion (the Rules: committing -> completed needs chunksDone == chunksTotal, the paired draft framework and the witness node) and server read-back of the final state
     denied = await auth(); if (!denied.allowed) return stop("denied", { reason: denied.reason, phase: "complete" });
     progress("complete", { nodesWritten: written, verified: total });
     const completed = await withRetry(async () => {
-      if (completionMode === "plain") {
-        try { await fs.updateDoc(batchRef(batchId), { status: "completed", chunksDone: plan.chunks.length, finishedAt: fs.serverTimestamp(), updatedAt: fs.serverTimestamp() }); }
-        catch (error) { const again = await readBatch(batchId).catch(() => null); if (again && again.status === "completed") return { ok: true, already: true }; throw error; }
-        return { ok: true };
-      }
-      try { return await completeInTransaction(plan, organizationId, batchId); }
-      catch (error) { const again = await readBatch(batchId).catch(() => null); if (again && again.status === "completed") return { ok: true, already: true }; throw error; }   // ambiguous commit
+      try { await fs.updateDoc(batchRef(batchId), { status: "completed", chunksDone: plan.chunks.length, finishedAt: fs.serverTimestamp(), updatedAt: fs.serverTimestamp() }); }
+      catch (error) { const again = await readBatch(batchId).catch(() => null); if (again && again.status === "completed") return "already"; throw error; }
     }, "complete");
-    if (!completed.ok) return stop(failureState(completed.kind), { phase: "complete", kind: completed.kind, verification, nodesWritten: written });
-    if (completed.value && completed.value.ok === false) {                                             // the transaction re-read found a difference: nothing was written
-      const again = completed.value.verification;
-      if (again.repairable) return stop("incomplete", { phase: "complete", verification: again, nodesWritten: written });
-      return await failVerification({ plan, organizationId, verification: again, batchId, phase: "complete" });
+    if (!completed.ok) {                                                    // another client may have stopped the import (rollback barrier / abandon) inside the window: say so
+      const again = await readBatch(batchId).catch(() => null);
+      if (again && again.status !== "committing" && again.status !== "completed") return stop("not-committing", { status: again.status, phase: "complete" });
+      return stop(failureState(completed.kind), { phase: "complete", kind: completed.kind, verification, nodesWritten: written });
     }
     const [finalBatch, finalFramework] = await Promise.all([readBatch(batchId).catch(() => null), readFramework(batchId).catch(() => null)]);
     if (!finalBatch || finalBatch.status !== "completed" || !finalFramework || finalFramework.status !== "draft" || has(finalFramework, "activatedAt")) return stop("unconfirmed", { phase: "complete", verification });
-    // confirmation AFTER the commit: the transaction cannot see nodes outside the plan, so the whole node set is read once more (a success is never reported over a drifted dataset)
-    progress("confirm", { nodesWritten: written, verified: 0 });
-    const confirmRead = await withRetry(() => readNodes(batchId, organizationId, { onPage: (count) => progress("confirm", { nodesWritten: written, verified: count }) }), "verify-final");
-    if (!confirmRead.ok) return stop("unconfirmed", { phase: "confirm", kind: confirmRead.kind, verification });
-    const confirmation = verifyImportedDataset({ plan, framework: finalFramework, batch: finalBatch, nodes: confirmRead.value, organizationId });
-    if (!confirmation.ok) return stop("completed-drift", { phase: "confirm", verification: confirmation, batchCompleted: true, nodesWritten: written });
-    const eligibility = activationEligibility({ batch: finalBatch, framework: finalFramework, nodes: confirmRead.value });
+    const eligibility = activationEligibility({ batch: finalBatch, framework: finalFramework, nodes: readBack.nodes });
     progress("done", { nodesWritten: written, verified: total });
     return freeze({ ok: true, state: "completed", batchId, frameworkId: batchId, nodesWritten: written, verification, eligibility, batch: finalBatch });
   }
@@ -413,6 +389,17 @@ export function createImportCommitController({ db, firestore, sleep, retryDelays
     const frameworkRead = await withRetry(() => readFramework(batchId), "read-framework"); if (!frameworkRead.ok) return stop(failureState(frameworkRead.kind), { kind: frameworkRead.kind });
     let framework = frameworkRead.value;
     if (framework && (framework.organizationId !== organizationId || framework.status !== "draft" || has(framework, "activatedAt"))) return stop("framework-not-deletable", { status: framework.status });
+    // 0. BARRIER: committing -> partial. The Rules read the batch status on every node create / seal / completion, so after this atomic write nobody can create a node or complete the import;
+    //    a concurrent resume (another client) simply stops. Already partial (abandoned / verification failed / rollback started by someone else): the barrier is in place.
+    if (batch.status === "committing") {
+      denied = await checkAuthorized(authorize); if (!denied.allowed) return stop("denied", { reason: denied.reason, phase: "barrier" });
+      const barrier = await withRetry(() => fs.updateDoc(batchRef(batchId), { status: "partial", resultCode: RESULT_CODES.rollbackStarted, finishedAt: fs.serverTimestamp(), updatedAt: fs.serverTimestamp() }), "partial");
+      if (!barrier.ok) {
+        const again = await readBatch(batchId).catch(() => null);
+        if (!again || again.status === "completed") return stop("not-rollbackable", { status: again ? again.status : "missing" });   // completed is terminal: the import finished first
+        if (again.status !== "partial" && again.status !== "rolled_back") return stop(failureState(barrier.kind), { phase: "barrier", kind: barrier.kind });
+      }
+    }
     // 1. nodes (repeat: list a page, delete it in atomic batches of <= 400, until the framework holds none)
     let deleted = 0;
     for (let round = 0; round < MAX_ROLLBACK_ROUNDS; round++) {

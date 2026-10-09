@@ -8,10 +8,10 @@ import {
 } from "../library-v2-p3-s1/helpers.mjs";
 import { createImportCommitController, RESULT_CODES } from "../../import-commit-controller.mjs";
 import { toNodePayload } from "../../import-plan.mjs";
-import { BASE_FS, BATCH, big, planFor, allowAlways, faulty, transientError, never, noSleep } from "./helpers.mjs";
+import { BASE_FS, BATCH, big, planFor, allowAlways, faulty, transientError, never, noSleep, freezeCandidateRules } from "./helpers.mjs";
 
-const rules = candidateRules();
-assert.equal(sha(rules).toUpperCase(), "7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485", "the Rules under test are the production artifact");
+const rules = freezeCandidateRules();                                       // the Rules CANDIDATE with the import freeze (SHA-256 asserted by the helper)
+void sha;
 const env = await makeEnv("demo-p4s4", rules);
 const as = actors(env);
 test.after(async () => env.cleanup());
@@ -33,7 +33,7 @@ for (const uid of ["pa", "oaA", "capA"]) {
     const events = [];
     const r = await run(uid, plan, { onProgress: (e) => events.push(e.phase) });
     assert.equal(r.ok, true, JSON.stringify(r)); assert.equal(r.state, "completed"); assert.equal(r.nodesWritten, 63);
-    assert.deepEqual([...new Set(events)], ["batch", "framework", "scan", "nodes", "verify", "complete", "confirm", "done"]);
+    assert.deepEqual([...new Set(events)], ["batch", "framework", "scan", "nodes", "seal", "verify", "complete", "done"]);
     const s = await clean(); assert.equal(s.nodes, 63); assert.equal(s.batch.status, "completed"); assert.equal(s.batch.chunksDone, s.batch.chunksTotal); assert.equal(s.batch.importer, uid);
     assert.equal(s.framework.status, "draft"); assert.equal(s.framework.createdBy, uid); assert.equal(s.framework.name, plan.framework.name);
     assert.equal(r.eligibility.eligible, true); assert.equal(r.verification.ok, true);
@@ -143,13 +143,14 @@ test("DUPLICATE EXECUTION: a second NEW import is blocked while one is incomplet
   assert.equal((await run("pa", second)).state, "completed");
 });
 
-test("VERIFICATION - MISSING node (deleted behind the controller's back before the read-back): completion is blocked, the batch stays committing, a resume repairs it", async () => {
+test("VERIFICATION - MISSING node (deleted behind the controller's back, e.g. by an administrative tool, before the read-back): the seal cannot be repaired (nodes are frozen) -> durable partial, never completed; rollback is the way forward", async () => {
   const plan = planFor(big(3, 300)); const victim = plan.nodes[500].id;
   const fs = faulty(BASE_FS, { commit: async (ctx) => { await ctx.perform(); if (ctx.commitIndex === 3) await adm(async (db) => { await (await import("firebase/firestore")).deleteDoc(doc(db, "curriculumFrameworks/" + BATCH + "/nodes/" + victim)); }); } });
   const r = await run("pa", plan, { fs });
-  assert.equal(r.state, "incomplete", JSON.stringify(r)); assert.equal(r.verification.counts.missing, 1); assert.equal(r.verification.repairable, true);
-  let s = await clean(); assert.equal(s.batch.status, "committing"); assert.equal(s.nodes, 902);
-  const fixed = await run("pa", planFor(big(3, 300)), { resume: true }); assert.equal(fixed.state, "completed", JSON.stringify(fixed)); assert.equal((await nodesOf()).length, 903);
+  assert.equal(r.state, "verification-failed", JSON.stringify(r).slice(0, 300)); assert.equal(r.verification.counts.missing, 1); assert.equal(r.markedPartial, true);
+  const s = await clean(); assert.equal(s.batch.status, "partial"); assert.equal(s.batch.chunksDone, s.batch.chunksTotal, "it was sealed"); assert.equal(s.nodes, 902);
+  const again = await run("pa", planFor(big(3, 300)), { resume: true }); assert.equal(again.state, "not-committing");
+  assert.equal((await ctl("pa").rollback({ batchId: BATCH, organizationId: "orgA", authorize: allowAlways("pa") })).state, "rolled_back"); assert.equal((await clean()).nodes, 0);
 });
 test("VERIFICATION - EXTRA node: completion is blocked, the batch becomes partial (only rollback can follow), activation is impossible", async () => {
   const plan = planFor(big(3, 20));
@@ -189,7 +190,7 @@ test("WHY THE CONTROLLER VERIFIES: the Rules alone accept 'completed' with a mis
   assert.equal((await nodesOf()).length, plan.nodes.length - 1, "completed with a hole - exactly what the controller's read-back prevents");
   await env.clearFirestore(); await seedWorld(env);
   const fs = faulty(BASE_FS, { commit: async (ctx) => { await ctx.perform(); await adm((db) => import("firebase/firestore").then((m) => m.deleteDoc(doc(db, "curriculumFrameworks/" + BATCH + "/nodes/" + plan.nodes[20].id)))); } });
-  const guarded = await run("pa", plan, { fs }); assert.notEqual(guarded.state, "completed"); assert.equal((await read("importBatches/" + BATCH)).status, "committing");
+  const guarded = await run("pa", plan, { fs }); assert.notEqual(guarded.state, "completed"); assert.equal((await read("importBatches/" + BATCH)).status, "partial");
 });
 
 test("COMPLETION & ACTIVATION RULES (production Rules): activation is denied while committing and partial, allowed once completed; 'completed' needs chunksDone == chunksTotal and the paired draft framework", async () => {
@@ -262,7 +263,7 @@ test("ROLLBACK of a NETWORK-INTERRUPTED rollback resumes and finishes (idempoten
   let failing = true;
   const fs = faulty(BASE_FS, { commit: async (ctx) => { if (failing && ctx.commitIndex >= 2) throw transientError(); return ctx.perform(); } });
   const first = await ctl("pa", fs).rollback({ batchId: BATCH, organizationId: "orgA", authorize: allowAlways("pa") });
-  assert.equal(first.state, "paused", JSON.stringify(first)); assert.equal((await clean()).batch.status, "committing");
+  assert.equal(first.state, "paused", JSON.stringify(first)); assert.equal((await clean()).batch.status, "partial", "the barrier is already in place; the clean-up resumes from partial");
   failing = false;
   const second = await ctl("pa").rollback({ batchId: BATCH, organizationId: "orgA", authorize: allowAlways("pa") }); assert.equal(second.state, "rolled_back"); assert.deepEqual({ ...(await clean()), batch: (await clean()).batch.status }, { batch: "rolled_back", framework: null, nodes: 0 });
 });

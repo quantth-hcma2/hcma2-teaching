@@ -633,13 +633,14 @@ import { createOrganizationMembershipSection, createMembershipWriter, createTeac
 import * as CURRICULUM_MODEL from "./curriculum-model.mjs?v=20261007-p3s5";
 import { createCurriculumQueries } from "./curriculum-queries.mjs?v=20261007-p3s2";
 import { createCurriculumWriteContract } from "./curriculum-write-contract.mjs?v=20261007-p3s2";
-import { createCurriculumSection, createCurriculumWriter, createCurriculumViewHelpers } from "./curriculum-admin-view.mjs?v=20261008-p4s3";
+import { createCurriculumSection, createCurriculumWriter, createCurriculumViewHelpers } from "./curriculum-admin-view.mjs?v=20261009-p4s4";
 import { createCloneDeleteHelpers, createCurriculumCloneWriter } from "./curriculum-clone-delete.mjs?v=20261007-p3s5";
 import { createCurriculumEditor, createCurriculumNodeWriter } from "./curriculum-editor-view.mjs?v=20261007-p3s4";
 // Library V2 P4-S3: Template Center + Import Center (UI / PREVIEW ONLY, Platform Admin). The view is small and imported here; the engine (P4-S2 reader host, validator, plan,
 // template writer) is loaded LAZILY (a dynamic import) when the Import Center screen opens, and SheetJS 0.20.3 only inside the parsing Worker / on the first template download.
 // The V1 roster-export library (vendor/xlsx.full.min.js 0.18.5) is untouched. No Firestore import write exists in this release.
 import { createImportCenter } from "./import-center-view.mjs?v=20261009-p4s4";
+import { createImportStatusReader } from "./import-batch-status.mjs?v=20261009-p4s4";
 import { createActiveOrganizationLookup, createTeacherEnrollmentFlow } from "./teacher-organization-enrollment.mjs?v=20261005-o2";
 // GATE 5F.C: Knowledge Co-creation dashboard launch/close control for the Classroom Second Brain
 // (V2) projection. Talks only to the accepted, frozen Gate 5C HTTP contract — never touches
@@ -1787,7 +1788,9 @@ function adminOrganizations(c){
       model:CURRICULUM_MODEL, queries:CURRICULUM_QUERIES, organizationQueries:ORGANIZATION_QUERIES, contract:CURRICULUM_CONTRACT,
       writer:createCurriculumWriter({collection,doc,setDoc,updateDoc}),
       // P3-S5: NHÂN BẢN (clone, same organization) and XÓA BẢN NHÁP (never-activated draft only); without cloneTools neither control exists.
-      cloneTools:{ helpers:createCloneDeleteHelpers({model:CURRICULUM_MODEL}), writer:createCurriculumCloneWriter({collection,doc,setDoc,writeBatch,deleteDoc}) }
+      cloneTools:{ helpers:createCloneDeleteHelpers({model:CURRICULUM_MODEL}), writer:createCurriculumCloneWriter({collection,doc,setDoc,writeBatch,deleteDoc}) },
+      // P4-S4: imported frameworks whose batch is committing / partial are marked (Đang nhập dữ liệu / Nhập chưa hoàn tất) and their actions disabled (read-only lookup, two equality queries)
+      importStatus:createImportStatusReader({collection,query,where,limit,getDocs})
     }),
     // P3-S4: the MÔN -> BÀI node editor (replaces Organization Detail; Platform Admin only). Activation stays in the S3 list.
     frameworkEditor:createCurriculumEditor({
@@ -1803,7 +1806,7 @@ function adminOrganizations(c){
       esc, toast, mapError, organizationQueries:ORGANIZATION_QUERIES,
       loadEngine:()=>import("./import-center-engine.mjs?v=20261009-p4s4"),
       downloadFile:downloadImportFile,
-      commitTools:{ firestore:{collection,doc,getDocFromServer,getDocsFromServer,runTransaction,query,where,limit,orderBy,startAfter,documentId,writeBatch,setDoc,updateDoc,deleteDoc,serverTimestamp}, acquireLock:acquireImportLock }
+      commitTools:{ firestore:{collection,doc,getDocFromServer,getDocsFromServer,query,where,limit,orderBy,startAfter,documentId,writeBatch,setDoc,updateDoc,deleteDoc,serverTimestamp}, acquireLock:acquireImportLock }
     }),
     // P2-S4: ordinary membership management inside Organization Detail (Platform Admin only; no Organization Admin / capability work).
     membershipSection:createOrganizationMembershipSection({

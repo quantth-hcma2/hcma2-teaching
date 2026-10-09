@@ -1,13 +1,19 @@
-// Shared helpers for the P4-S4 suites (commit / recovery / rollback controller). Synthetic data only; the emulator suites run the REAL controller against the PRODUCTION Rules artifact.
-import { startAfter, getDocFromServer, getDocsFromServer, runTransaction } from "firebase/firestore";
+// Shared helpers for the P4-S4 suites (commit / recovery / rollback controller). Synthetic data only; the emulator suites run the REAL controller against the Rules CANDIDATE (import freeze) or, as a control,
+// against the DEPLOYED ruleset text (the candidate with the freeze edits reversed = SHA-256 7F7C790E...0485, ruleset 0b6910c3).
+import { startAfter, getDocFromServer, getDocsFromServer } from "firebase/firestore";
 import {
-  doc, setDoc, updateDoc, getDoc, getDocs, deleteDoc, collection, query, where, limit, orderBy, documentId, writeBatch, serverTimestamp, Timestamp
+  doc, setDoc, updateDoc, getDoc, getDocs, deleteDoc, collection, query, where, limit, orderBy, documentId, writeBatch, serverTimestamp, Timestamp, candidateRules, sha
 } from "../library-v2-p3-s1/helpers.mjs";
+import { deployedRules } from "./import-freeze-rules.mjs";
 import { validateRaw } from "../library-v2-p4-s2/helpers.mjs";
 import { prepareCommit } from "../../import-plan.mjs";
 
 export const BATCH = "Ab12Cd34Ef56Gh78Ij90";
-export const BASE_FS = { collection, doc, getDocFromServer, getDocsFromServer, runTransaction, query, where, limit, orderBy, startAfter, documentId, writeBatch, setDoc, updateDoc, deleteDoc, serverTimestamp };
+export const CANDIDATE_SHA = "F6B9DE012C7F7D3D0FCE6EFC19D760B3B2E0BCA9C9979811786EDE93C9B17D4A";      // firestore.rules.production-candidate WITH the import freeze
+export const DEPLOYED_SHA = "7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485";       // deployed ruleset 0b6910c3 (P4-S1)
+export const freezeCandidateRules = () => { const r = candidateRules(); if (sha(r).toUpperCase() !== CANDIDATE_SHA) throw new Error("the Rules candidate is not the expected import-freeze artifact: " + sha(r).toUpperCase()); return r; };
+export const deployedRulesText = () => { const r = deployedRules(candidateRules()); if (sha(r).toUpperCase() !== DEPLOYED_SHA) throw new Error("reversing the freeze edits does not give the deployed ruleset: " + sha(r).toUpperCase()); return r; };
+export const BASE_FS = { collection, doc, getDocFromServer, getDocsFromServer, query, where, limit, orderBy, startAfter, documentId, writeBatch, setDoc, updateDoc, deleteDoc, serverTimestamp };
 export { doc, getDoc, getDocs, collection, query, where, limit, orderBy, documentId, setDoc, updateDoc, deleteDoc, serverTimestamp, Timestamp, writeBatch };
 
 // big(3, 20) -> 3 subjects, 20 lessons each (63 nodes)
@@ -34,8 +40,6 @@ export function faulty(base, hooks = {}, counters = {}) {
     ...base,
     getDocFromServer: (...args) => { counters.reads++; return base.getDocFromServer(...args); },
     getDocsFromServer: (...args) => { counters.reads++; return base.getDocsFromServer(...args); },
-    // hooks.afterReads({ attempt }) runs INSIDE a transaction callback after the callback finished reading/queuing and before the SDK commits: the exact "read -> commit" interval
-    runTransaction: (db, fn, options) => { counters.tx = 0; return base.runTransaction(db, async (tx) => { const attempt = ++counters.tx; const result = await fn(tx); if (hooks.afterReads) await hooks.afterReads({ attempt }); return result; }, options); },
     writeBatch: (db) => {
       const inner = base.writeBatch(db); const ops = [];
       return {

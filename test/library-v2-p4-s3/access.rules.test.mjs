@@ -13,7 +13,7 @@ import { createOrganizationQueries } from "../../organization-queries.mjs";
 import { resolveImportAccess, loadImportAccess } from "../../import-center-view.mjs";
 
 const rules = candidateRules();
-assert.equal(sha(rules).toUpperCase(), "7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485", "the Rules under test are the production artifact");
+assert.equal(sha(rules).toUpperCase(), "F6B9DE012C7F7D3D0FCE6EFC19D760B3B2E0BCA9C9979811786EDE93C9B17D4A", "the Rules under test are the production artifact");
 const env = await makeEnv("demo-p4s3-access", rules);
 const as = actors(env);
 test.after(async () => env.cleanup());

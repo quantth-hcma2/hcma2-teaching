@@ -11,8 +11,9 @@ import {
   p3Region, p4Region, sha, makeEnv, actors, candidateRules, withProbes, seedWorld, assertSucceeds, assertFails, nodeDoc, fwDoc, newFwPayload, newNodePayload, fwTransition, D, NL,
   doc, setDoc, updateDoc, getDoc, deleteDoc, collection, writeBatch, serverTimestamp, fwRef, nodeRef
 } from "../library-v2-p3-s1/helpers.mjs";
+import { deployedRulesText } from "../library-v2-p4-s4/helpers.mjs";
 
-const rules = candidateRules();
+const rules = deployedRulesText();   // P4-S4: these tests document the DEPLOYED ruleset 0b6910c3 (the candidate with the import-freeze edits reversed); the freeze itself is covered by test/library-v2-p4-s4
 const env = await makeEnv("demo-p4s1-atomic", rules);
 const as = actors(env);
 // probe environment: the SAME candidate Rules + two test-only probe collections that contrast exists() with existsAfter()

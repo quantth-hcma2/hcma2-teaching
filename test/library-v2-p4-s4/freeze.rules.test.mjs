@@ -1,22 +1,19 @@
-// P4-S4 RULES DESIGN GATE - the FINAL proposed import-freeze Rules (test-only in-memory copy of the production artifact; NOT deployed) on the emulator.
+// P4-S4 IMPORT FREEZE - the Rules CANDIDATE (firestore.rules.production-candidate with the import freeze; NOT deployed) and the REAL controller on the emulator.
 //   1. permission matrix: every P3 mutation path x import state (importing / sealed / partial / completed) x actor (Platform Admin, Organization Admin, curriculum.manage holder)
 //   2. P3 behaviour is not weakened: ordinary frameworks (no paired batch) and completed imports behave exactly as in production
 //   3. recovery ownership: takeover / resume / abandon / rollback by ANY authorized writer of the same organization, nothing for unauthorized or other-organization users
-// Prototype controller = test-only derivation (sealed-protocol.mjs). Run: firebase emulators:exec --only firestore --project demo-p4s4f --config test/library-v2-p3-s2/firebase.json "node --test test/library-v2-p4-s4/freeze.rules.test.mjs"
+// Run: firebase emulators:exec --only firestore --project demo-p4s4f --config test/library-v2-p3-s2/firebase.json "node --test test/library-v2-p4-s4/freeze.rules.test.mjs"
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import {
   makeEnv, actors, candidateRules, seedWorld, assertSucceeds, doc, setDoc, updateDoc, deleteDoc, getDoc, fwRename, fwTransition, newFwPayload, lessonPayload, nodeEdit, serverTimestamp, sha
 } from "../library-v2-p3-s1/helpers.mjs";
 import { toNodePayload } from "../../import-plan.mjs";
-import { BASE_FS, BATCH, big, planFor, allowAlways, noSleep } from "./helpers.mjs";
-import { freezeRules } from "./import-freeze-rules.mjs";
-import { loadSealedController } from "./sealed-protocol.mjs";
+import { BASE_FS, BATCH, big, planFor, allowAlways, noSleep, freezeCandidateRules } from "./helpers.mjs";
+import { createImportCommitController } from "../../import-commit-controller.mjs";
 
-const rules = candidateRules();
-assert.equal(sha(rules).toUpperCase(), "7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485", "the base is the production artifact");
-const SC = await loadSealedController();
-const env = await makeEnv("demo-p4s4f", freezeRules(rules));
+const SC = { createImportCommitController };
+const env = await makeEnv("demo-p4s4f", freezeCandidateRules());                       // SHA-256 of the candidate asserted by the helper
 const as = actors(env);
 after(async () => env.cleanup());
 
@@ -36,7 +33,7 @@ async function setup(status) {
     await adm(async (db) => { for (const n of plan.nodes) await setDoc(doc(db, nodePath(n.id)), toNodePayload(n, { serverTimestamp: () => new Date() })); });
     return;
   }
-  const r = await c.commit({ plan, organizationId: "orgA", actorUid: "pa", authorize: flip("pa", 3) });      // all nodes written and SEALED, verification not reached
+  const r = await c.commit({ plan, organizationId: "orgA", actorUid: "pa", authorize: flip("pa", 4) });      // all nodes written and SEALED (start, framework, chunk 0, seal), verification not reached
   assert.equal(r.state, "denied"); const b = await adm(async (db) => (await getDoc(doc(db, "importBatches/" + BATCH))).data()); assert.equal(b.chunksDone, b.chunksTotal);
   if (status === "partial") assert.equal((await c.abandon({ batchId: BATCH, organizationId: "orgA", authorize: allowAlways("pa") })).state, "partial");
 }
@@ -124,4 +121,33 @@ test("3. RECOVERY OWNERSHIP (not tied to the importer): any authorized writer of
     const rollback = await ctl(uid).rollback({ batchId: BATCH, organizationId: "orgA", authorize: allowAlways(uid) }); assert.equal(rollback.ok, false, uid + " rollback");
   }
   const still = await adm(async (d) => (await getDoc(doc(d, "importBatches/" + BATCH))).data()); assert.equal(still.status, "committing", "nothing of the unauthorized attempts took effect");
+});
+
+test("4. INTERRUPTED BEFORE AND AFTER THE SEAL: before the seal anybody authorized resumes, seals and completes; after the seal the batch is frozen and anybody authorized completes it (no re-seal) or rolls it back; a sealed batch that lost a node can only be rolled back", { timeout: 900000 }, async () => {
+  const batchOf = () => adm(async (d) => (await getDoc(doc(d, "importBatches/" + BATCH))).data());
+  // A. all nodes written, interruption right BEFORE the seal (the seal authorization is refused)
+  await env.clearFirestore(); await seedWorld(env);
+  const before = await ctl("pa").commit({ plan, organizationId: "orgA", actorUid: "pa", authorize: flip("pa", 3) });
+  assert.equal(before.state, "denied"); assert.equal(before.phase, "seal"); let b = await batchOf(); assert.equal(b.status, "committing"); assert.ok(b.chunksDone < b.chunksTotal, "not sealed");
+  assert.equal(await can(attempt.nodeCreateHex(as("capA"))), true, "before the seal an import-shaped create is still admitted (resume)");
+  await env.clearFirestore(); await seedWorld(env); await ctl("pa").commit({ plan, organizationId: "orgA", actorUid: "pa", authorize: flip("pa", 3) });
+  const resumed = await ctl("capA").commit({ plan, organizationId: "orgA", actorUid: "capA", authorize: allowAlways("capA"), resume: true });
+  assert.equal(resumed.state, "completed", JSON.stringify(resumed).slice(0, 200)); b = await batchOf(); assert.equal(b.status, "completed"); assert.equal(b.chunksDone, b.chunksTotal);
+  // B. interruption right AFTER the seal (the verification authorization is refused): frozen, completed by someone else
+  await env.clearFirestore(); await seedWorld(env);
+  const after = await ctl("pa").commit({ plan, organizationId: "orgA", actorUid: "pa", authorize: flip("pa", 4) });
+  assert.equal(after.state, "denied"); assert.equal(after.phase, "verify"); b = await batchOf(); assert.equal(b.status, "committing"); assert.equal(b.chunksDone, b.chunksTotal, "sealed");
+  for (const op of ["nodeCreateHex", "nodeUpdate", "nodeDelete", "rename", "deleteFramework"]) assert.equal(await can(attempt[op](as("oaA"), "oaA")), false, "sealed: " + op);
+  const finished = await ctl("oaA").commit({ plan, organizationId: "orgA", actorUid: "oaA", authorize: allowAlways("oaA"), resume: true });
+  assert.equal(finished.state, "completed", JSON.stringify(finished).slice(0, 200)); assert.equal((await batchOf()).status, "completed");
+  // C. sealed, then rolled back by someone else
+  await env.clearFirestore(); await seedWorld(env); await ctl("pa").commit({ plan, organizationId: "orgA", actorUid: "pa", authorize: flip("pa", 4) });
+  assert.equal((await ctl("capA").rollback({ batchId: BATCH, organizationId: "orgA", authorize: allowAlways("capA") })).state, "rolled_back");
+  assert.deepEqual({ fw: await adm(async (d) => (await getDoc(doc(d, "curriculumFrameworks/" + BATCH))).exists()), status: (await batchOf()).status }, { fw: false, status: "rolled_back" });
+  // D. sealed but a planned node vanished (administrative tool): unrepairable -> partial, then rollback
+  await env.clearFirestore(); await seedWorld(env); await ctl("pa").commit({ plan, organizationId: "orgA", actorUid: "pa", authorize: flip("pa", 4) });
+  await adm((d) => deleteDoc(doc(d, nodePath(lesson.id))));
+  const lost = await ctl("capA").commit({ plan, organizationId: "orgA", actorUid: "capA", authorize: allowAlways("capA"), resume: true });
+  assert.equal(lost.state, "verification-failed", JSON.stringify(lost).slice(0, 200)); assert.equal((await batchOf()).status, "partial");
+  assert.equal((await ctl("oaA").rollback({ batchId: BATCH, organizationId: "orgA", authorize: allowAlways("oaA") })).state, "rolled_back");
 });

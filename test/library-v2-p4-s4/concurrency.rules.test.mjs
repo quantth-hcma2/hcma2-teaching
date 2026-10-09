@@ -1,10 +1,10 @@
-// P4-S4 RULES DESIGN GATE - two-client concurrency and completion integrity.
+// P4-S4 IMPORT FREEZE - two-client concurrency and completion integrity (REAL controller; Rules candidate = freeze, control = the DEPLOYED ruleset text).
 //   PART 1  resume (client A) versus rollback (client B) on the SAME batch
-//           1a production Rules + the reviewed controller: UNSAFE interleaving reproduced (rolled_back with an orphan node left behind)
-//           1b FINAL proposal + prototype controller (rollback barrier): the same injection point is harmless; randomized real concurrency keeps the invariants
+//           1a DEPLOYED Rules (even with the new controller's barrier): UNSAFE interleaving reproduced (rolled_back with an orphan node left behind) - the Rules are what make it safe
+//           1b freeze Rules candidate + controller (rollback barrier): the same injection point is harmless; randomized real concurrency keeps the invariants
 //   PART 2  completion integrity: a concurrent client acts at every point between the last node write and the completion
 //           2a FINAL proposal + prototype (seal): nothing can be added / changed / deleted after the seal; before the seal only an import-shaped create is possible and it is detected
-//           2b control: prototype WITHOUT the Rules (production Rules): the seal alone proves nothing - the Rules are the invariant
+//           2b control: the controller on the DEPLOYED Rules: the seal alone proves nothing - the Rules are the invariant
 //           2c concurrent completion / concurrent rollback
 // Run: firebase emulators:exec --only firestore --project demo-p4s4c --config test/library-v2-p3-s2/firebase.json "node --test test/library-v2-p4-s4/concurrency.rules.test.mjs"
 import test, { after } from "node:test";
@@ -12,17 +12,14 @@ import assert from "node:assert/strict";
 import {
   makeEnv, actors, candidateRules, seedWorld, doc, setDoc, updateDoc, deleteDoc, getDoc, getDocs, collection, fwRename, lessonPayload, nodeEdit, serverTimestamp, sha
 } from "../library-v2-p3-s1/helpers.mjs";
-import { createImportCommitController, verifyImportedDataset } from "../../import-commit-controller.mjs";
+import { createImportCommitController, verifyImportedDataset } from "../../import-commit-controller.mjs";   // the REAL controller
 import { toNodePayload } from "../../import-plan.mjs";
-import { BASE_FS, BATCH, big, planFor, allowAlways, faulty, noSleep } from "./helpers.mjs";
-import { freezeRules } from "./import-freeze-rules.mjs";
-import { loadSealedController } from "./sealed-protocol.mjs";
+import { BASE_FS, BATCH, big, planFor, allowAlways, faulty, noSleep, freezeCandidateRules, deployedRulesText } from "./helpers.mjs";
 
-const rules = candidateRules();
-assert.equal(sha(rules).toUpperCase(), "7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485", "the base is the production artifact");
-const SC = await loadSealedController();
-const envProd = await makeEnv("demo-p4s4c", rules);
-const envFreeze = await makeEnv("demo-p4s4c-freeze", freezeRules(rules));
+void sha; void candidateRules;
+const SC = { createImportCommitController };
+const envProd = await makeEnv("demo-p4s4c", deployedRulesText());               // control: the DEPLOYED ruleset text (the candidate with the freeze edits reversed)
+const envFreeze = await makeEnv("demo-p4s4c-freeze", freezeCandidateRules());   // the Rules candidate with the import freeze
 after(async () => { await envProd.cleanup(); await envFreeze.cleanup(); });
 
 const small = planFor(big(3, 20), { actorUid: "pa" });                                    // 63 nodes
@@ -40,7 +37,7 @@ const rollback = (c, uid) => c.rollback({ batchId: BATCH, organizationId: "orgA"
 const nodePayload = (plan, i) => toNodePayload(plan.nodes[i], { serverTimestamp });
 const nodeRef = (db, id) => doc(db, "curriculumFrameworks/" + BATCH + "/nodes/" + id);
 
-test("1a. PRODUCTION RULES + reviewed controller: resume (A) versus rollback (B) is UNSAFE - A creates a node after B's emptiness check; B deletes the framework and marks rolled_back; an ORPHAN node survives under a rolled_back batch", { timeout: 600000 }, async () => {
+test("1a. DEPLOYED RULES (control) + the controller: resume (A) versus rollback (B) is UNSAFE - A creates a node after B's emptiness check; B deletes the framework and marks rolled_back; an ORPHAN node survives under a rolled_back batch", { timeout: 600000 }, async () => {
   const as = actors(envProd); await envProd.clearFirestore(); await seedWorld(envProd);
   await run(createImportCommitController({ db: as("pa"), firestore: BASE_FS, retryDelays: [0, 0], sleep: noSleep }), "pa", medium, { authorize: flip("pa", 3) });   // interrupted after chunk 0 (400 nodes)
   let injected = false;
@@ -54,7 +51,7 @@ test("1a. PRODUCTION RULES + reviewed controller: resume (A) versus rollback (B)
   assert.equal(s.batch.status, "rolled_back"); assert.equal(s.framework, null); assert.equal(s.nodes.length, 1, "UNSAFE: an orphan node remains although the batch says rolled_back");
 });
 
-test("1b. FINAL PROPOSAL + rollback barrier: the same injection is refused (the batch is already partial), the rollback completes with ZERO nodes; an injection BEFORE the barrier is simply deleted afterwards", { timeout: 600000 }, async () => {
+test("1b. FREEZE RULES + rollback barrier: the same injection is refused (the batch is already partial), the rollback completes with ZERO nodes; an injection BEFORE the barrier is simply deleted afterwards", { timeout: 600000 }, async () => {
   const as = actors(envFreeze); await envFreeze.clearFirestore(); await seedWorld(envFreeze);
   await run(mk(SC, as, "pa"), "pa", medium, { authorize: flip("pa", 3) });
   let outcome = null;
@@ -78,7 +75,7 @@ test("1b. FINAL PROPOSAL + rollback barrier: the same injection is refused (the 
   assert.equal(early, "allowed"); assert.equal(r2.state, "rolled_back"); assert.equal((await snapshot(envFreeze)).nodes.length, 0);
 });
 
-test("1c. RANDOMIZED REAL CONCURRENCY (FINAL proposal): resume by A and rollback by B started with different offsets always end in ONE consistent terminal state - completed with the exact dataset, or rolled_back with no framework and no node", { timeout: 900000 }, async () => {
+test("1c. RANDOMIZED REAL CONCURRENCY (freeze Rules): resume by A and rollback by B started with different offsets always end in ONE consistent terminal state - completed with the exact dataset, or rolled_back with no framework and no node", { timeout: 900000 }, async () => {
   const as = actors(envFreeze); const seen = {};
   for (const delayMs of [0, 150, 900, 2500, 5000, 8000, 11000]) {
     await envFreeze.clearFirestore(); await seedWorld(envFreeze);
@@ -125,7 +122,7 @@ async function windowRun(env, Mod, as, point, kind, opts = {}) {
   return { out, result, s };
 }
 
-test("2a. FINAL PROPOSAL + seal: after the seal nothing can be created / changed / deleted by a concurrent client; the import completes over exactly the verified dataset", { timeout: 900000 }, async () => {
+test("2a. FREEZE RULES + seal: after the seal nothing can be created / changed / deleted by a concurrent client; the import completes over exactly the verified dataset", { timeout: 900000 }, async () => {
   const as = actors(envFreeze); const table = [];
   for (const point of ["afterSeal", "beforeCompletion"]) for (const kind of Object.keys(tampers)) {
     const { out, result, s } = await windowRun(envFreeze, SC, as, point, kind);
@@ -145,7 +142,7 @@ test("2a'. BEFORE the seal the only possible concurrent mutation is an import-sh
   }
 });
 
-test("2b. CONTROL - the prototype controller WITHOUT the freeze Rules (production Rules): the concurrent client gets through and the batch completes over drift - the seal protocol proves nothing by itself, the RULES are the invariant", { timeout: 900000 }, async () => {
+test("2b. CONTROL - the controller on the DEPLOYED Rules (no freeze): the concurrent client gets through and the batch completes over drift - the seal protocol proves nothing by itself, the RULES are the invariant", { timeout: 900000 }, async () => {
   const as = actors(envProd);
   for (const kind of ["extraHex", "update", "deleteNode", "rename"]) {
     const { out, result, s } = await windowRun(envProd, SC, as, "beforeCompletion", kind);
@@ -153,7 +150,7 @@ test("2b. CONTROL - the prototype controller WITHOUT the freeze Rules (productio
   }
 });
 
-test("2c. CONCURRENT COMPLETION and CONCURRENT ROLLBACK in the window (FINAL proposal): a second completer is harmless; a rollback barrier inside the window stops the completion and the rollback finishes cleanly; completion after a finished rollback is impossible", { timeout: 900000 }, async () => {
+test("2c. CONCURRENT COMPLETION and CONCURRENT ROLLBACK in the window (freeze Rules): a second completer is harmless; a rollback barrier inside the window stops the completion and the rollback finishes cleanly; completion after a finished rollback is impossible", { timeout: 900000 }, async () => {
   const as = actors(envFreeze);
   // two completers: B completes first (inside A's window); A's completion finds the batch completed
   await envFreeze.clearFirestore(); await seedWorld(envFreeze);

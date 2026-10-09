@@ -6,9 +6,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { deployedRulesText } from "../library-v2-p4-s4/helpers.mjs";
 import { candidateRules, baselineRules, p3Region, p4Region, sha, NL, BEGIN, END, P4_BEGIN, P4_END, DEPLOYED_SHA } from "../library-v2-p3-s1/helpers.mjs";
 
-const rules = candidateRules();
+const rules = deployedRulesText();   // P4-S4: this suite proves the DEPLOYED ruleset 0b6910c3 (the candidate with the import-freeze edits reversed)
 const root = new URL("../../", import.meta.url);
 const P3S1_DEPLOYED_SHA = "a0b206fcdda3843db2e08eeeeb00a9704b5a1415b97b9e488477d8f21aa4921d";   // production ruleset 5945fbe7-d5db-4e23-b355-a7b17793c7a8
 

@@ -128,8 +128,10 @@ export function createCurriculumViewHelpers({ model } = {}) {
 
   // ---- markup (every dynamic string goes through the injected escaper)
   const attr = (esc, v) => esc(String(v == null ? "" : v));
-  function renderRowHtml({ framework, organization, controls, esc, fmtDate, flash }) {
-    const view = frameworkStatusView(framework.status);
+  function renderRowHtml({ framework, organization, controls, esc, fmtDate, flash, importState = null, describeImport = null }) {
+    // P4-S4: an imported framework whose paired batch is committing / partial is frozen by the Rules: marked, explained, every action disabled
+    const frozen = importState && typeof describeImport === "function" ? describeImport(importState) : null;
+    const view = frozen ? { badge: "badge-yellow", icon: frozen.icon, label: frozen.label } : frameworkStatusView(framework.status);
     const id = attr(esc, framework.id);
     const name = esc(framework.name || "—");
     const created = "Tạo " + esc(fmtDate ? fmtDate(framework.createdAt) : "—");
@@ -145,15 +147,17 @@ export function createCurriculumViewHelpers({ model } = {}) {
       controls.deleteDraft ? `<button class="btn btn-outline" type="button" style="color:var(--danger);border-color:var(--danger)" data-fw-action="delete-draft" data-fw-id="${id}" aria-label="XÓA BẢN NHÁP — ${name}">XÓA BẢN NHÁP</button>` : "",
       controls.restore ? `<button class="btn btn-ok" type="button" data-fw-action="restore" data-fw-id="${id}" aria-label="KHÔI PHỤC — ${name}">KHÔI PHỤC</button>` : ""
     ].join(" ");
+    const shownButtons = frozen ? buttons.split("<button ").join("<button disabled aria-disabled=\"true\" title=\"" + attr(esc, frozen.title) + "\" ") : buttons;
+    const frozenNote = frozen ? `<div class="hint mt-8" data-fw-import-note="${attr(esc, importState)}">${esc(frozen.note)}</div>` : "";
     return `<li data-fw-row="${id}" data-fw-status="${attr(esc, framework.status)}" style="border:1px solid var(--border);border-radius:12px;padding:12px;margin-top:8px${flash ? ";background:#f0fdf4" : ""}">
       <div class="flex-between" style="flex-wrap:wrap;gap:10px;align-items:flex-start">
-        <div style="min-width:0;flex:1 1 240px"><div style="font-weight:650;overflow-wrap:anywhere">${name}</div><div class="small mut mt-8">${created}${activated}${clone}</div></div>
-        <div class="flex gap-8" style="flex-wrap:wrap;align-items:center"><span class="badge ${view.badge}" data-fw-badge="1"><span aria-hidden="true">${view.icon}</span> ${esc(view.label)}</span>${buttons}</div>
+        <div style="min-width:0;flex:1 1 240px"><div style="font-weight:650;overflow-wrap:anywhere">${name}</div><div class="small mut mt-8">${created}${activated}${clone}</div>${frozenNote}</div>
+        <div class="flex gap-8" style="flex-wrap:wrap;align-items:center"><span class="badge ${view.badge}" data-fw-badge="1"><span aria-hidden="true">${view.icon}</span> ${esc(view.label)}</span>${shownButtons}</div>
       </div></li>`;
   }
 
   // phase: "loading" | "error" | "ready". All variants share the card + header so the create control is always at the same place.
-  function renderSectionHtml({ phase, organization, items = [], truncated = false, errorMessage = "", canOpen = false, lifecycleTools = false, canImport = false, esc, fmtDate, flashId = null }) {
+  function renderSectionHtml({ phase, organization, items = [], truncated = false, errorMessage = "", canOpen = false, lifecycleTools = false, canImport = false, esc, fmtDate, flashId = null, importStates = null, describeImport = null }) {
     const archived = !!organization && organization.status !== "active";
     const reason = createDisabledReason(organization);
     const summary = phase === "ready" && items.length ? `<div class="small" id="orgCurriculumSummary" style="font-weight:650">${esc(summarizeFrameworks(items, truncated))}</div>` : "";
@@ -168,7 +172,7 @@ export function createCurriculumViewHelpers({ model } = {}) {
     else if (!items.length) body = `<div class="empty-state" id="orgCurriculumEmpty"><div class="ic">📚</div><h3>Chưa có khung chương trình</h3><p>${archived ? "Đơn vị đã lưu trữ: chưa có khung chương trình nào để xem." : "Tạo khung đầu tiên để bắt đầu xây dựng Môn và Bài cho đơn vị này."}</p></div>`;
     else {
       const groups = groupFrameworksByStatus(items).map((group) => `<h4 class="mt-14" style="margin-bottom:0" data-fw-group="${attr(esc, group.status)}">${esc(group.label)} <span class="mut">(${group.items.length})</span></h4>
-        <ul style="list-style:none;padding:0;margin:0">${group.items.map((framework) => renderRowHtml({ framework, organization, controls: controlsFor(framework, organization, { canOpen, lifecycleTools }), esc, fmtDate, flash: framework.id === flashId })).join("")}</ul>`).join("");
+        <ul style="list-style:none;padding:0;margin:0">${group.items.map((framework) => renderRowHtml({ framework, organization, controls: controlsFor(framework, organization, { canOpen, lifecycleTools }), esc, fmtDate, flash: framework.id === flashId, importState: importStates ? importStates.get(framework.id) || null : null, describeImport })).join("")}</ul>`).join("");
       body = groups + (truncated ? `<p class="small mut mt-8" id="orgCurriculumTruncated">${esc(truncationNote())}</p>` : "");
     }
     return `<section class="card" id="orgCurriculumCard" aria-labelledby="orgCurriculumTitle" aria-busy="${phase === "loading" ? "true" : "false"}">
@@ -241,7 +245,7 @@ export function createCurriculumWriter({ collection, doc, setDoc, updateDoc }) {
 class FlowAbort extends Error { constructor(kind) { super(kind); this.kind = kind; } }
 
 export function createCurriculumSection(deps) {
-  const { db, actorUid, isPlatformAdmin, esc, fmtDate, toast, mapError, openModal, closeModal, logAudit, model, queries, organizationQueries, contract, writer, onOpenFramework, cloneTools } = deps;
+  const { db, actorUid, isPlatformAdmin, esc, fmtDate, toast, mapError, openModal, closeModal, logAudit, model, queries, organizationQueries, contract, writer, onOpenFramework, cloneTools, importStatus } = deps;
   const H = createCurriculumViewHelpers({ model });
   const modalRoot = () => document.getElementById("globalModal");
   const modal$ = (selector) => { const root = modalRoot(); return root ? root.querySelector(selector) : null; };
@@ -258,12 +262,12 @@ export function createCurriculumSection(deps) {
     const openImport = typeof options.onOpenImport === "function" ? options.onOpenImport : null;   // P4-S3: Import Center entry (supplied by the Organization screen)
     let pendingFocusImport = !!options.focusImport;
     let pendingFocusId = options.focusFrameworkId || null;
-    let org = organization, items = [], truncated = false, generation = 0, busy = false, flashId = null, trigger = null;
+    let org = organization, items = [], truncated = false, generation = 0, busy = false, flashId = null, trigger = null, importStates = null;
     const live = (message) => { const el = host.querySelector("#orgFwLive"); if (el) el.textContent = message; };
 
     // ---------------------------------------------------------- painting / loading
     function paint(phase, extra = {}) {
-      host.innerHTML = H.renderSectionHtml({ phase, organization: org, items, truncated, canOpen, lifecycleTools: !!cloneTools, canImport: !!openImport, esc, fmtDate, flashId, ...extra });
+      host.innerHTML = H.renderSectionHtml({ phase, organization: org, items, truncated, canOpen, lifecycleTools: !!cloneTools, canImport: !!openImport, esc, fmtDate, flashId, importStates, describeImport: importStatus ? importStatus.describe : null, ...extra });
       const importBtn = host.querySelector("#orgImportBtn");
       if (importBtn && !importBtn.disabled) importBtn.onclick = () => { if (!busy) openImport(org); };
       const create = host.querySelector("#orgFwCreateBtn");
@@ -282,6 +286,8 @@ export function createCurriculumSection(deps) {
         const page = await queries.frameworksOfOrganization(db, org.id);
         if (mine !== generation) return;
         items = page.items; truncated = !!page.truncated;
+        importStates = null;
+        if (importStatus) { try { importStates = await importStatus.incompleteOf(db, org.id); } catch { importStates = null; } if (mine !== generation) return; }   // P4-S4: incomplete imports are marked and frozen; a failed lookup only means no marking (the Rules still refuse the writes)
         paint("ready");
         if (pendingFocusImport) { pendingFocusImport = false; const importBtn = host.querySelector("#orgImportBtn"); if (importBtn && !importBtn.disabled) { importBtn.focus(); pendingFocusId = null; } }
         if (pendingFocusId) {
@@ -437,6 +443,7 @@ export function createCurriculumSection(deps) {
     // ---------------------------------------------------------- row actions
     function onRowAction(action, framework) {
       if (busy || !framework) return;
+      if (importStates && importStates.has(framework.id)) return;                       // P4-S4: frozen by the import-freeze Rules (the buttons are disabled; this is defense in depth)
       if (action === "open") { if (canOpen) openHook(framework, org); return; }
       if (action === "rename") return openRename(framework);
       if (action === "activate") return openActivation(framework);

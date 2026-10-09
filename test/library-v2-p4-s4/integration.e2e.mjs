@@ -259,6 +259,16 @@ try {
     await page.reload(); await page.waitForSelector(".navlink", { timeout: 60000 });
     await page.waitForFunction(() => { const p = document.querySelector("#ovPending"); return !!document.querySelector("#ovGrid .stat") && !!p && !/Đang tải/.test(p.textContent || ""); }, null, { timeout: 60000 });
     const b = (await batches()).find((x) => x.sourceFile.name === "rollback.xlsx"); assert.equal(b.status, "committing"); const before = (await nodesOf(b.id)).length; assert.ok(before > 0);
+    // ---- P3 PROTECTION: the interrupted import is marked "Đang nhập dữ liệu" in the P3 list and every action of its row is disabled (the Rules refuse the edits anyway)
+    await openOrg("orgMain");
+    {
+      const row = page.locator(`[data-fw-row="${b.id}"]`); await row.waitFor({ timeout: 30000 });
+      assert.match(await row.innerText(), /Đang nhập dữ liệu/); assert.match(await row.innerText(), /Chưa thể mở, đổi tên, kích hoạt, nhân bản hoặc xóa/);
+      const states = await row.locator("button").evaluateAll((els) => els.map((e) => e.disabled && e.getAttribute("aria-disabled") === "true"));
+      assert.ok(states.length >= 2 && states.every(Boolean), "every action of the frozen row is disabled: " + JSON.stringify(states));
+      const ordinary = page.locator(`[data-fw-row="${smallId}"] button`); assert.ok((await ordinary.evaluateAll((els) => els.filter((e) => !e.disabled).length)) >= 1, "ordinary rows keep enabled actions");
+      await row.scrollIntoViewIfNeeded(); await shot(page, "s4-p3-frozen-committing");
+    }
     await importCenterOf("orgMain"); await page.waitForSelector("#impRecovery");
     await page.click(`[data-imp-action="rollback-open"][data-batch="${b.id}"]`); await page.waitForSelector("#impRollbackConfirm"); assert.equal(await page.locator("#impRbConfirm").isDisabled(), true);
     await page.check("#impRbAck"); await shot(page, "s4-08-rollback-confirm"); await page.click("#impRbConfirm"); await waitDone(240000);
@@ -266,6 +276,21 @@ try {
     const rb = await get(`importBatches/${b.id}`); assert.equal(rb.status, "rolled_back"); assert.equal(rb.resultCode, "ROLLED_BACK"); assert.ok(rb.finishedAt); assert.equal(await fwGet(b.id), null); assert.equal((await nodesOf(b.id)).length, 0);
     assert.equal(JSON.stringify({ fw: await fwGet("fwOther"), nodes: await nodesOf("fwOther") }), otherBefore, "another organization is untouched"); assert.equal(JSON.stringify({ fw: await fwGet("fwMain"), nodes: await nodesOf("fwMain") }), mainBefore, "the pre-existing framework is untouched");
     assert.equal(await count("#impRecovery"), 0, "nothing incomplete remains");
+  });
+
+  await step("P3 PROTECTION (partial): a framework whose paired batch is `partial` is marked \"Nhập chưa hoàn tất\" with every action disabled; when the batch is completed the same framework is an ordinary draft again", async () => {
+    const rb = (await batches()).find((x) => x.sourceFile.name === "rollback.xlsx"); const id = "PartialDemo000000001";
+    await put(`curriculumFrameworks/${id}`, fwDoc("orgMain", "Khung nhập dở (thử nghiệm)", "draft", 8));
+    await put(`importBatches/${id}`, { ...rb, status: "partial", resultCode: "ABANDONED", destination: { type: "curriculumFramework", frameworkId: id } });
+    await page.click("#impRunBack, #impBack").catch(() => {}); await openOrg("orgMain");
+    const row = page.locator(`[data-fw-row="${id}"]`); await row.waitFor({ timeout: 30000 });
+    assert.match(await row.innerText(), /Nhập chưa hoàn tất/);
+    const states = await row.locator("button").evaluateAll((els) => els.map((e) => e.disabled)); assert.ok(states.length >= 2 && states.every(Boolean));
+    await row.scrollIntoViewIfNeeded(); await shot(page, "s4-p3-frozen-partial");
+    await put(`importBatches/${id}`, { ...rb, status: "completed", destination: { type: "curriculumFramework", frameworkId: id } });
+    await openOrg("orgMain"); const again = page.locator(`[data-fw-row="${id}"]`); await again.waitFor({ timeout: 30000 });
+    assert.doesNotMatch(await again.innerText(), /Nhập chưa hoàn tất|Đang nhập dữ liệu/); assert.ok((await again.locator("button").evaluateAll((els) => els.filter((e) => !e.disabled).length)) >= 1, "a completed import is an ordinary draft with live actions");
+    for (const p of [`curriculumFrameworks/${id}`, `importBatches/${id}`]) await fetch(`${FS}/${p}`, { method: "DELETE", headers: H });
   });
 
   await step("BOUNDARIES: archived organization offers no import; a teacher has no entry; no source file bytes or Storage requests left the browser; no unexpected page errors", async () => {

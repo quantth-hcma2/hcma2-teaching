@@ -1,51 +1,58 @@
-# P4-S4 - Import Commit, Recovery & Activation Eligibility - RESULTS
+# P4-S4 - Import Commit, Recovery & Import Freeze - RESULTS
 
-Baseline: `6a05411f278c4ff925e30910ae92ce03df9500c7` (P4-S3 closed). Branch `candidate/library-v2-p4-s4-import-commit`. **Local / emulator only: no production import, no deployment, no Rules / index / Storage change, no push.** The deployed production Rules (ruleset `0b6910c3`, SHA-256 `7F7C790E...0485`) are used unmodified.
+Baseline: `6a05411f278c4ff925e30910ae92ce03df9500c7` (P4-S3 closed). Design gate: `d195a5c`. **Local / emulator only: no production import, no deployment, no Rules / index / Storage deployment, no Firestore production write, no Git push.**
 
-## Suites (focused)
-| Suite | Result | Run |
+## Rules candidate
+`firestore.rules.production-candidate`: **SHA-256 `F6B9DE012C7F7D3D0FCE6EFC19D760B3B2E0BCA9C9979811786EDE93C9B17D4A`** (+23 / -5 lines against the deployed ruleset `0b6910c3`, SHA-256 `7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485`). Exactly five approved mutation guards (framework update, framework delete, node create, node update, node delete) through five helpers `importNodeCreateOk / importNodeUpdateOk / importNodeDeleteOk / importFrameworkUpdateOk / importFrameworkDeleteOk`. No new status, field, schema or batch-rule change; reversing the edits (`deployedRules()` in `import-freeze-rules.mjs`) reproduces the deployed bytes.
+
+## Protocol (controller, no fallback)
+batch + draft framework -> deterministic node chunks (400 writes each, separate progress writes) -> **seal** (`chunksDone := chunksTotal`, only when every planned node is present) -> full server read-back verification -> plain `completed` update -> server read of the final state before success. Rollback = barrier (`committing -> partial`, `ROLLBACK_STARTED`) -> paged node deletes (<= 400) -> framework delete -> `rolled_back` (`ROLLED_BACK`); the batch is never deleted. No completion transaction, no `completionMode`, no `completed-drift`.
+
+## P3 UI protection
+`import-batch-status.mjs` (read-only, two equality queries on `importBatches`, no index) feeds the curriculum list: `committing` -> "Đang nhập dữ liệu", `partial` -> "Nhập chưa hoàn tất"; every row action disabled with a Vietnamese explanation. Ordinary rows render byte-identically.
+
+## Suites (all on the final tree)
+| Suite | Result |
+|---|---|
+| `controller.rules.test.mjs` (REAL controller vs freeze candidate; 5,000-node commit, resume, takeover, rollback, interrupted before and after seal) | 23/23 |
+| `freeze.rules.test.mjs` (security matrix, P3 not weakened, recovery ownership, interrupted before / after seal) | 4/4 |
+| `concurrency.rules.test.mjs` (resume vs rollback two-client; deployed-Rules control shows the orphan; randomized offsets; 14 post-seal mutations refused) | 7/7 |
+| `incomplete-import.rules.test.mjs` (CONTROL on the deployed text: the gap) | 1/1 |
+| `compat.rules.test.mjs` (controller on deployed text and on candidate) | 2/2 |
+| `p3-differential.rules.test.mjs` (714 P3 operations, 17 principals, deployed vs candidate) | identical outcomes (43 allow / 671 deny) |
+| `progress-atomic.probe.test.mjs` (399 nodes + 1 progress write; 400-write chunk) | 4/4 |
+| `budget.rules.test.mjs` (document-access headroom) | pass (table below) |
+| `rules-qualification.cjs` (Google `projects.test` evaluator, in-memory, no ruleset created) | matrix 120/120; control shows the gap on the deployed source |
+| `source-guard.test.mjs` | 11/11 |
+| `p3-ui.unit.test.mjs` (frozen markup, status reader) | 7/7 |
+| `run-helpers.unit.test.mjs` + `verify.unit.test.mjs` | pass |
+| `ui.e2e.mjs` (real Edge, scriptable controller) | 16/16 |
+| `integration.e2e.mjs` (real index.html + REAL controller + Auth/Firestore emulators + candidate Rules; incl. P3 row marking committing / partial, 5,000-node refresh recovery, offline at read-back, rollback) | 9/9 |
+
+### Expression headroom (Google evaluator; extra minimal predicates still evaluating, worst-case principal)
+| Rule | deployed | candidate |
 |---|---|---|
-| `verify.unit.test.mjs` (full read-back verification: exact / missing / extra / altered fields / structure / identity / plan integrity / error classes) | 9/9 | `node --test test/library-v2-p4-s4/verify.unit.test.mjs` |
-| `run-helpers.unit.test.mjs` (Vietnamese confirm / progress / success / stop / recovery / rollback markup) | 7/7 | `node --test test/library-v2-p4-s4/run-helpers.unit.test.mjs` |
-| `source-guard.test.mjs` (scope, pins, index edit pairs, collections, no-cheating, chunk caps, UI gating) | 7/7 | `node --test test/library-v2-p4-s4/source-guard.test.mjs` |
-| `controller.rules.test.mjs` (REAL controller vs PRODUCTION Rules, emulator) | 23/23 | `firebase emulators:exec --only firestore --project demo-p4s4 --config test/library-v2-p3-s2/firebase.json "node --test test/library-v2-p4-s4/controller.rules.test.mjs"` (Java 21) |
-| `progress-atomic.probe.test.mjs` (399 nodes + 1 progress write in one atomic commit vs the Rules) | 4/4 | same emulator command |
-| `ui.e2e.mjs` (real Edge, real engine + Worker, scriptable fake controller; 15 UI scenarios) | 15/15 | `node test/library-v2-p4-s4/ui.e2e.mjs` |
-| `integration.e2e.mjs` (REAL index.html + REAL controller + Auth/Firestore emulators + production Rules; 8 scenarios incl. 5000-node refresh recovery, offline at read-back, rollback) | 8/8 | `node test/library-v2-p4-s4/integration.e2e.mjs` (Java 21 on PATH) |
+| node create (hex id, importing) | 26 | 22 |
+| node update | 24 | 23 |
+| node delete | 36 | 34 |
+| framework update | 26 | 25 |
+| framework delete | 38 | 36 |
+| importBatches update (completed) - UNTOUCHED, thin | 3 | 3 |
 
-## controller.rules.test.mjs coverage (all against the production Rules)
-Commit by Platform Admin / Organization Admin / `curriculum.manage` holder (63 nodes, completed, activation then allowed through the P3 lifecycle); unauthorized principals (plain member, other capability, no membership, suspended/removed member, suspended account) write nothing - refused by the pre-write check AND by the Rules when the check is bypassed; archived organization (admin, org admin, capability holder); cross-organization (plan/org mismatch, other org admin cannot commit / roll back / abandon); transient failure retried; AMBIGUOUS commit (reached the server, client saw an error) found by the chunk probe; persistent network failure -> `paused` with the batch still `committing`, new controller resumes (browser refresh); hung write (offline queue) times out and is retried; partial, non-chunk-aligned data reconciled (only missing nodes written); interrupted import found by `findIncomplete`, only the SAME file matches; duplicate execution (two concurrent commits end with one exact dataset; a new import is blocked while one is incomplete); VERIFICATION failures: missing node (repairable by resume), extra node (-> `partial`), altered name / order / duplicate canonical code (-> `partial`); proof that the Rules alone accept `completed` with a missing middle node and that the controller refuses to get there; activation denied while `committing`/`partial`, allowed once `completed`; clone laundering denied for committing / partial / rolled_back sources, allowed for completed; rollback from committing / partial / batch-only (nodes -> framework -> `rolled_back`, batch kept, unrelated framework untouched, repeat is a no-op); completed batches are not rolled back; interrupted rollback resumes; **5,000-node maximum: 13 chunks (peak 400 writes per atomic commit), full read-back of every node, completed, activation eligible (45 s on the emulator); same-size rollback (22 s).**
+### Document-access headroom (emulator; distinct extra probes still passing, limit 10 per request)
+Ordinary framework create 4 -> 3, create 400 4 -> 3, delete 400 3 -> 2; importing node create 1 / 400: 2; partial delete 400: 1; Platform Admin create 6 -> 5 (import 4). Thinnest path (partial delete 400) keeps 1 probe of headroom: **thin, documented**; any future Rules addition on node delete needs a retest.
 
-## Regression (focused, directly affected only)
-- P4-S3: pure suites (view unit 10, access unit 3, template 7, contract 4, source guard 8) pass; controller e2e 20/20; **integration e2e 9/9 on the S4 wiring** (read-only flow: Firestore snapshot unchanged); access parity on the emulator 2/2.
-- P4-S2: pure suites pass; plan.rules.test 9/9 on the emulator.
-- P3 UI on the S4 wiring: P3-S4 integration 13/13, P3-S5 integration 9/9.
-- Older source guards aligned with the P4-S4 index.html edits (p2-s2/s3/s4, p3-s2..s5, p4-s2, p4-s3): pass. Three older guards (`library-v2-p1` dynamic-import count, two `o1-search` pins) were ALREADY failing at the baseline `6a05411`; unchanged by this slice.
+### 5,000-node controller run (emulator, idle)
+capA 38.3 s (node writing 33.4 s, verification read 3.3 s, 13 commits, 35 reads); Platform Admin 27.5 s. Design-gate transaction variant was 40-50 s extra.
 
-## Alignment of historical guards
-`index.html` is the only pinned file edited. The five edits are pinned as pairs in `p4s4-edits.mjs` (generated from `git diff -U0`; reversal restores the 6a05411 bytes and is idempotent); the P4-S3 chain (`p4s3-edits.mjs`) now starts with the P4-S4 reversal and the guards that read index.html directly read it through the reversal. One S3 integration assertion (disabled placeholder) was updated to the S4 confirm card; the S3 flow never acknowledges or clicks it.
+## Focused regression
+- Rules suites on the candidate: P2-S2 / P2-S4 / O1 / O2 (36/36), P3-S2 contract / P3-S5 clone-delete / P4-S1 budget / P4-S2 plan / P4-S3 access (57/57 incl. P4-S1 suites). The two P4-S1 Rules suites and `regression.test.mjs` document the DEPLOYED ruleset and now run on the candidate with the freeze edits reversed (`deployedRulesText()`); the freeze itself is covered by the P4-S4 suites.
+- Source guards of the Library V2 lineage + O1/O2 and unit suites: 176/179. The 3 failures (`library-v2-p1` dynamic-import count, two `o1-search` pins) fail identically on the P4-S3 baseline `6a05411` (pre-existing, not caused by this slice).
+- Browser: P3-S3 / P3-S4 / P3-S5 / P4-S3 controller e2e 24/24, 29/29, 16/16, 20/20; integration e2e P4-S3 9/9, P3-S5 9/9, P3-S3 14/14, P3-S4 13/13. P3-S3 and P3-S4 integration each hit the known adminOverview first-load race once (the older tests lack the readiness wait) and passed on retry.
 
-## Safety review (Architect CONDITIONAL PASS of 317e854) - added suites and results
-| Suite | Result | Run |
-|---|---|---|
-| `incomplete-import.rules.test.mjs` - A: production Rules matrix of every P3 mutation path on a committing / partial / completed import (3 actors); B: the same matrix on a TEST-ONLY copy with the proposed amendment; B2: amended workflow (commit 903 nodes for 3 writer types, abandon + rollback by another administrator, 400-write batches on a plain framework) | 3/3 | emulator command of `controller.rules.test.mjs` (Java 21) |
-| `race.rules.test.mjs` - A: reviewed candidate (plain completion): race is REAL; B: transactional completion closes alteration / deletion / rename / framework deletion; C: extra node = residual gap, reported as completed-drift; D: amended Rules close it in both modes; E: two controllers; F: 5,000-node completion transaction | 6/6 | same |
-| `controller.rules.test.mjs` (re-run after the controller change; phases now include `confirm`) | 23/23 | same |
-| `progress-atomic.probe.test.mjs` | 4/4 | same |
-| `ui.e2e.mjs` (+ completed-drift scenario) | 16/16 | `node test/library-v2-p4-s4/ui.e2e.mjs` |
-| `integration.e2e.mjs` (REAL app, REAL controller incl. the completion transaction, production Rules, emulators) | 8/8 | `node test/library-v2-p4-s4/integration.e2e.mjs` |
-| `verify.unit` 9, `run-helpers.unit` 7, `source-guard` 8 (+ safety-review pins); aligned older guards (p2-s2/s3/s4, p3-s3/s4/s5, p4-s2/s3, p4-s3 unit) | pass (96 pure in one run) | `node --test ...` |
-
-Facts established: the production Rules let a concurrent authorized writer rename / delete the framework and create / alter / reorder / delete nodes of a committing or partial import; with plain completion the batch becomes `completed` over drifted data (and the P3 lifecycle then activates it); a Firestore transaction closes alteration / deletion / rename / framework deletion but cannot see an extra node; only a Rules amendment closes that (proposal in `amended-rules.mjs`, NOT applied). The 5,000-node completion transaction re-reads all planned nodes (about 17 s of reads on the emulator, one attempt without contention); a full 5,000-node controller run on a loaded emulator took 209 s (commit + verification + completion transaction + confirmation) versus 45 s before the transaction.
-
-## Rules safety design gate (import freeze) - test-only evidence; production Rules, product source and index.html UNCHANGED
-| Suite | Result | Run |
-|---|---|---|
-| `freeze.rules.test.mjs` - permission matrix (importing / sealed / partial / completed x 3 writer types x 10 operations), P3 not weakened (incl. 400-write batches), recovery ownership (takeover / abandon / rollback by any authorized writer, nothing for unauthorized or other-organization users) | 3/3 | `firebase emulators:exec --only firestore --project demo-p4s4f --config test/library-v2-p3-s2/firebase.json "node --test test/library-v2-p4-s4/freeze.rules.test.mjs"` (Java 21) |
-| `concurrency.rules.test.mjs` - resume vs rollback (unsafe on production Rules: orphan node under `rolled_back`; safe with freeze + barrier; randomized real concurrency), completion integrity at three points x 7 concurrent mutations (all refused after the seal), control without the Rules, concurrent completion / rollback | 7/7 | same pattern (`demo-p4s4c`) |
-| `p3-differential.rules.test.mjs` - 714 P3 operations, 17 principals, production vs amended copy: identical outcomes | 1/1 | `demo-p4s4d` |
-| `compat.rules.test.mjs` - new controller works on production Rules; reviewed controller's direct rollback from `committing` breaks under freeze Rules (deployment order: controller first) | 2/2 | `demo-p4s4k` |
-| `budget.rules.test.mjs` - document-access headroom (emulator limit 10 per request), production vs amended | 1/1 | `demo-p4s4b` |
-| `perf-breakdown.rules.test.mjs` - 5,000-node phase breakdown + micro-benchmarks (measurement) | 2/2 | `demo-p4s4p2` |
-| `rules-qualification.cjs` - Google `projects.test` evaluator (in memory, no ruleset created): security matrix 120/120, expression headroom production -> amended (node create 26->22, update 24->23, delete 36->34, framework update 26->25, delete 38->36), `importBatches` update unchanged at 3 | 120/120 | `node test/library-v2-p4-s4/rules-qualification.cjs` (firebase login) |
-Amended artifact (test-only, in memory) SHA-256 `FEB9F69995C141B5B6502C9B190EEE3D836C2CAAC0A50F1180EE1A41ED738722`. Design document: Vault `09_DOCUMENTATION/library-v2/LIBRARY_V2_P4_S4_RULES_DESIGN_GATE.md`.
+## Remaining limitations
+- A sealed batch that is missing a node cannot be repaired (by design): durable `partial` / `VERIFY_FAILED`, rollback only.
+- Rules cannot count nodes: completion integrity is the controller read-back (accepted trust boundary, unchanged).
+- Document-access headroom of the thinnest freeze path is 1; importBatches update expression headroom stays 3 (unchanged).
+- P3 UI refusal of edits on incomplete imports is enforced by Rules; the list marking is advisory UX and degrades to unmarked rows if the status lookup fails.
+- Only Chromium (Edge) tested; unsupported browsers fail closed. Organization Admin / `curriculum.manage` entry point for the Import Center is still outstanding (entry stays Platform-Admin-only).

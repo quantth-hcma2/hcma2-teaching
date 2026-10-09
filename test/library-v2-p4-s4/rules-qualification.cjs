@@ -1,5 +1,5 @@
 // P4-S4 RULES DESIGN GATE - Google Rules evaluator (firebaserules projects.test: evaluates in memory, creates NO ruleset and NO release, touches no data; every request / resource / get() / exists()
-// answer is a synthetic mock) qualification of the FINAL proposed import-freeze amendment, using ONLY a test-only in-memory copy of the production artifact.
+// answer is a synthetic mock) qualification of the IMPLEMENTED import freeze: the repository Rules candidate (firestore.rules.production-candidate, with the freeze) versus the deployed ruleset text (the same file with the five freeze edits reversed).
 //   1. security matrix: 5 touched rules x 5 import states x 4 principals must ALLOW/DENY exactly as designed
 //   2. expression HEADROOM of the five touched rules: how many extra minimal predicates (importIntIn(1,0,5)) still evaluate, baseline (production) versus amended, for the worst-case principal
 //   3. the untouched rules (importBatches update: the thin-headroom rule) are re-measured to show the amendment did not change them
@@ -58,9 +58,10 @@ function withPredicates(src, rule, n) {
 }
 (async () => {
   await L.init();
-  const baseline = L.content();
-  const { freezeRules } = await import(pathToFileURL(path.join(__dirname, "import-freeze-rules.mjs")).href);
-  const amended = freezeRules(baseline);
+  const amended = L.content();                                              // the implemented candidate
+  const { deployedRules } = await import(pathToFileURL(path.join(__dirname, "import-freeze-rules.mjs")).href);
+  const baseline = deployedRules(amended);                                  // the deployed ruleset text (0b6910c3)
+  if (L.sha(amended) !== "F6B9DE012C7F7D3D0FCE6EFC19D760B3B2E0BCA9C9979811786EDE93C9B17D4A" || L.sha(baseline) !== "7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485") throw new Error("unexpected Rules SHA-256");
   const out = { baselineSha256: L.sha(baseline), amendedSha256: L.sha(amended), matrix: {}, headroom: {} };
   // 1. security matrix on the amended source
   const rules = Object.keys(EXPECT), states = Object.keys(STATES), actors = Object.keys(ACTORS);

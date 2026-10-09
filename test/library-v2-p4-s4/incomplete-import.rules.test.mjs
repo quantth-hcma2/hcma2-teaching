@@ -1,21 +1,16 @@
-// P4-S4 SAFETY REVIEW (task 1) - every existing P3 mutation path against a framework whose paired import batch is NOT completed, on the emulator.
-//   A. the PRODUCTION Rules artifact (ruleset 0b6910c3): which operations are denied and which remain possible (documented, asserted, printed as a matrix)
-//   B. a test-only in-memory COPY with the PROPOSED amendment (amended-rules.mjs): what it would close, that the importer keeps working, and the call budget.
-// Nothing is deployed; the repository Rules are untouched. Run: firebase emulators:exec --only firestore --project demo-p4s4m --config test/library-v2-p3-s2/firebase.json "node --test test/library-v2-p4-s4/incomplete-import.rules.test.mjs"
+// P4-S4 SAFETY REVIEW - CONTROL: every P3 mutation path against a framework whose paired import batch is NOT completed, under the DEPLOYED ruleset text (0b6910c3 = the candidate with the freeze edits
+// reversed): which operations are denied and which remain possible (documented, asserted, printed). This is the gap the import freeze closes; the freeze matrix itself is freeze.rules.test.mjs. Run: firebase emulators:exec --only firestore --project demo-p4s4m --config test/library-v2-p3-s2/firebase.json "node --test test/library-v2-p4-s4/incomplete-import.rules.test.mjs"
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import {
   makeEnv, actors, candidateRules, seedWorld, assertSucceeds, assertFails, doc, setDoc, updateDoc, deleteDoc, writeBatch, collection, getDocs, fwRename, fwTransition, newFwPayload, lessonPayload, nodeEdit, serverTimestamp, sha
 } from "../library-v2-p3-s1/helpers.mjs";
 import { createImportCommitController } from "../../import-commit-controller.mjs";
-import { BASE_FS, BATCH, big, planFor, allowAlways, noSleep } from "./helpers.mjs";
-import { amendedRules } from "./amended-rules.mjs";
+import { BASE_FS, BATCH, big, planFor, allowAlways, noSleep, deployedRulesText } from "./helpers.mjs";
 
-const rules = candidateRules();
-assert.equal(sha(rules).toUpperCase(), "7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485", "the Rules under test are the production artifact");
-const envProd = await makeEnv("demo-p4s4m", rules);
-const envAmended = await makeEnv("demo-p4s4m-amended", amendedRules(rules));
-after(async () => { await envProd.cleanup(); await envAmended.cleanup(); });
+void sha; void candidateRules;
+const envProd = await makeEnv("demo-p4s4m", deployedRulesText());
+after(async () => { await envProd.cleanup(); });
 
 const OPS = ["rename", "deleteFramework", "activate", "archive", "clone", "nodeCreate", "nodeUpdate", "nodeReorder", "nodeDelete"];
 const plan = planFor(big(3, 20), { actorUid: "pa" });                                    // 63 nodes: one chunk
@@ -66,39 +61,3 @@ test("A. PRODUCTION RULES: for a framework with a committing / partial batch onl
   }
 });
 
-test("B. PROPOSED AMENDMENT (copy of the Rules, not deployed): while committing only the IMPORTER mutates; while partial only deletes (clean-up) are possible; a completed import is an ordinary draft again", { timeout: 600000 }, async () => {
-  const as = actors(envAmended);
-  const rows = {};
-  for (const status of ["committing", "partial", "completed"]) for (const actor of ["capA", "oaA", "pa"]) rows[status + " / " + actor] = await matrix(envAmended, as, status, actor);
-  print("PROPOSED AMENDMENT (test-only copy) - the same paths (importer = pa)", rows);
-  for (const actor of ["capA", "oaA"]) assert.deepEqual(rows["committing / " + actor], E([]), "committing / non-importer " + actor);
-  assert.deepEqual(rows["committing / pa"], E(["rename", "deleteFramework", "nodeCreate", "nodeUpdate", "nodeReorder", "nodeDelete"]), "committing / importer");
-  for (const actor of ["capA", "oaA", "pa"]) {
-    assert.deepEqual(rows["partial / " + actor], E(["deleteFramework", "nodeDelete"]), "partial / " + actor);
-    assert.deepEqual(rows["completed / " + actor], E(["rename", "deleteFramework", "nodeCreate", "nodeUpdate", "nodeReorder", "nodeDelete", "activate", "clone"]), "completed / " + actor);
-  }
-});
-
-test("B2. PROPOSED AMENDMENT keeps the whole import workflow working for every writer type and keeps ordinary P3 drafts untouched (call budget): commit, abandon by ANOTHER administrator then rollback, 400-write node batches on a plain framework", { timeout: 600000 }, async () => {
-  const as = actors(envAmended);
-  for (const uid of ["pa", "oaA", "capA"]) {
-    await envAmended.clearFirestore(); await seedWorld(envAmended);
-    const p = planFor(big(3, 300), { actorUid: uid });                                        // 903 nodes -> 3 chunks of <= 400 writes
-    const r = await ctl(as, uid).commit({ plan: p, organizationId: "orgA", actorUid: uid, authorize: allowAlways(uid) });
-    assert.equal(r.state, "completed", uid + " " + JSON.stringify(r).slice(0, 300));
-  }
-  // an interrupted import of one administrator is abandoned (committing -> partial) and rolled back by ANOTHER authorized writer
-  await envAmended.clearFirestore(); await seedWorld(envAmended);
-  let calls = 0; const stop = Object.assign(async () => (++calls <= 3 ? { allowed: true } : { allowed: false }), { actorUid: "oaA" });
-  const p = planFor(big(3, 300), { actorUid: "oaA" });
-  assert.equal((await ctl(as, "oaA").commit({ plan: p, organizationId: "orgA", actorUid: "oaA", authorize: stop })).state, "denied");
-  const other = ctl(as, "capA");
-  assert.equal((await other.rollback({ batchId: BATCH, organizationId: "orgA", authorize: allowAlways("capA") })).ok, false, "a non-importer cannot delete nodes of a COMMITTING import");
-  assert.equal((await other.abandon({ batchId: BATCH, organizationId: "orgA", authorize: allowAlways("capA") })).state, "partial", "any authorized writer can stop it");
-  assert.equal((await other.rollback({ batchId: BATCH, organizationId: "orgA", authorize: allowAlways("capA") })).state, "rolled_back", "...and clean it up");
-  // ordinary P3 framework (no batch): 400 node creates and 400 node deletes in one atomic batch, as capA
-  await envAmended.clearFirestore(); await seedWorld(envAmended);
-  const db = as("capA"), ids = Array.from({ length: 400 }, (_, i) => i.toString(16).padStart(32, "0"));
-  const create = writeBatch(db); for (const [i, id] of ids.entries()) create.set(doc(db, "curriculumFrameworks/fwA_draft/nodes/" + id), lessonPayload("orgA", "s1", { name: "Bài " + i, order: 100 + i, code: "B" + i })); await assertSucceeds(create.commit());
-  const del = writeBatch(db); for (const id of ids) del.delete(doc(db, "curriculumFrameworks/fwA_draft/nodes/" + id)); await assertSucceeds(del.commit());
-});

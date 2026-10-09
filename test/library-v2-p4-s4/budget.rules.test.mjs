@@ -8,10 +8,10 @@ import assert from "node:assert/strict";
 import { makeEnv, actors, candidateRules, seedWorld, assertSucceeds, doc, setDoc, deleteDoc, writeBatch, lessonPayload, sha } from "../library-v2-p3-s1/helpers.mjs";
 import { toBatchCreatePayload } from "../../import-plan.mjs";
 import { big, planFor, BATCH } from "./helpers.mjs";
-import { freezeRules } from "./import-freeze-rules.mjs";
+import { freezeCandidateRules, deployedRulesText } from "./helpers.mjs";
 
-const base = candidateRules();
-assert.equal(sha(base).toUpperCase(), "7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485");
+void sha; void candidateRules;
+const base = deployedRulesText();                                 // production = the deployed ruleset text
 const MAXK = 12;
 const probeFn = () => "    function zprobe(n) { return " + Array.from({ length: MAXK }, (_, i) => "(n < " + (i + 1) + " || (exists(/databases/$(database)/documents/zprobe/p" + (i + 1) + ") || true))").join(" && ") + "; }\n";
 const MARK = "    function importIntIn(v, lo, hi) { return v is int && v >= lo && v <= hi; }\n";
@@ -52,7 +52,7 @@ async function headroom(rules, kind, actor) {
   return lo;
 }
 test("DOCUMENT-ACCESS HEADROOM (extra distinct probes still passing): production versus the FINAL import-freeze copy", { timeout: 1800000 }, async () => {
-  const freeze = freezeRules(base);
+  const freeze = freezeCandidateRules();
   const kinds = [
     ["ordinary framework: create 1", { imp: false, op: "create", n: 1 }, "prod+freeze"], ["ordinary framework: create 400 (atomic batch)", { imp: false, op: "create", n: 400 }, "prod+freeze"], ["ordinary framework: delete 400 (atomic batch)", { imp: false, op: "delete", n: 400 }, "prod+freeze"],
     ["importing import: create 1", { imp: true, op: "create", n: 1 }, "freeze"], ["importing import: create 400 (atomic batch)", { imp: true, op: "create", n: 400 }, "freeze"], ["partial import: delete 400 (atomic batch)", { imp: true, partial: true, op: "delete", n: 400 }, "freeze"]

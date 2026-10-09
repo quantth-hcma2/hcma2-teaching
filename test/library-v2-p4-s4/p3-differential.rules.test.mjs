@@ -7,11 +7,10 @@ import assert from "node:assert/strict";
 import {
   makeEnv, actors, candidateRules, seedWorld, doc, setDoc, updateDoc, deleteDoc, fwRename, fwTransition, newFwPayload, lessonPayload, nodeEdit, serverTimestamp, sha
 } from "../library-v2-p3-s1/helpers.mjs";
-import { freezeRules } from "./import-freeze-rules.mjs";
+import { deployedRulesText, freezeCandidateRules } from "./helpers.mjs";
 
-const rules = candidateRules();
-assert.equal(sha(rules).toUpperCase(), "7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485");
-const envA = await makeEnv("demo-p4s4d-prod", rules), envB = await makeEnv("demo-p4s4d-freeze", freezeRules(rules));
+void sha; void candidateRules;
+const envA = await makeEnv("demo-p4s4d-prod", deployedRulesText()), envB = await makeEnv("demo-p4s4d-freeze", freezeCandidateRules());
 after(async () => { await envA.cleanup(); await envB.cleanup(); });
 const FRAMEWORKS = [["fwA_draft", "orgA", "draft"], ["fwA_active", "orgA", "active"], ["fwA_archived", "orgA", "archived"], ["fwB_draft", "orgB", "draft"], ["fwC_draft", "orgC", "draft"], ["fwC_active", "orgC", "active"]];
 const PRINCIPALS = ["pa", "paSusp", "oaA", "capA", "revA", "mA", "noMember", "tSusp", "capSuspMem", "capRemoved", "ghost", "oaB", "capB", "oaC", "capC", "mC", null];

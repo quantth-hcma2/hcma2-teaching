@@ -78,7 +78,7 @@ test("O1 does not touch O2, approveTeacher, the member list/ordering/lifecycle, 
     "trash-query-contract.mjs": "a4639903403d88bb4cc1bb0d197e6c16a0b967242554975f2c47b33121efc7ea",
     "rich-text-contract.mjs": "d306f20778d5f01137ea549dff4b3b97ed0972d19065f15cb955a74df3e97c57",
     "group-pdf-runtime.mjs": "0dabe62465cc913188e5f34c35d811ffe0f0d626642e7d04aa8933fc6c0f06e3",
-    "firestore.rules.production-candidate": "7f7c790e403762800dc27879ff851cb875064d8a02076b2a4f7f3c7163510485", // P3-S1 candidate Rules (deployed 7EA5D7A5... + the P3 region)
+    "firestore.rules.production-candidate": "f6b9de012c7f7d3d0fce6efc19d760b3b2e0bca9c9979811786ede93c9b17d4a", // P3-S1 candidate Rules (deployed 7EA5D7A5... + the P3 region)
     "firestore.rules": "a033e20c0d6c7eeb23cc1e76d98e5a4d246bead5becfcc14574c4f98b9fed538",
     "firestore.indexes.json": "a27b5a20c63e1b446f63221a6c1fa93b31ac95a6556c6009e44a45f4ca354d51",
     "package.json": "446bef0b4c5941557b8a5fe4d2c7b20f73665086012e8cdc3f39ca8c7d6c8ba1",

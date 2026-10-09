@@ -41,7 +41,7 @@ test("V1 Library, question-set, wizard-picker and finalize code is byte-identica
 
 test("no data-model, Rules, indexes, Storage or dependency change (byte-pinned to production)", () => {
   const pinned = {
-    "firestore.rules.production-candidate": "7f7c790e403762800dc27879ff851cb875064d8a02076b2a4f7f3c7163510485", // P3-S1 candidate Rules (7ea5d7a5... after P2-S1, 218bff3b... at P1)
+    "firestore.rules.production-candidate": "f6b9de012c7f7d3d0fce6efc19d760b3b2e0bca9c9979811786ede93c9b17d4a", // P3-S1 candidate Rules (7ea5d7a5... after P2-S1, 218bff3b... at P1)
     "firestore.rules": "a033e20c0d6c7eeb23cc1e76d98e5a4d246bead5becfcc14574c4f98b9fed538",
     "firestore.indexes.json": "a27b5a20c63e1b446f63221a6c1fa93b31ac95a6556c6009e44a45f4ca354d51",
     "package.json": "446bef0b4c5941557b8a5fe4d2c7b20f73665086012e8cdc3f39ca8c7d6c8ba1",

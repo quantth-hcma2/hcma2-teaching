@@ -8,8 +8,9 @@ import {
   makeEnv, actors, candidateRules, seedWorld, assertSucceeds, assertFails, nodeDoc, fwDoc, newFwPayload, newNodePayload, lessonPayload, nodeEdit, fwRename, fwTransition, D,
   doc, setDoc, updateDoc, getDoc, getDocs, deleteDoc, collection, query, where, limit, writeBatch, serverTimestamp, fwRef, nodeRef
 } from "../library-v2-p3-s1/helpers.mjs";
+import { deployedRulesText } from "../library-v2-p4-s4/helpers.mjs";
 
-const rules = candidateRules();
+const rules = deployedRulesText();   // P4-S4: these tests document the DEPLOYED ruleset 0b6910c3 (the candidate with the import-freeze edits reversed); the freeze itself is covered by test/library-v2-p4-s4
 const env = await makeEnv("demo-p4s1-import", rules);
 const as = actors(env);
 test.after(async () => env.cleanup());

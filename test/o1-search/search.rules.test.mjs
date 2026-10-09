@@ -13,7 +13,7 @@ import { createOrganizationQueries } from "../../organization-queries.mjs";
 import { createMembershipWriter, createTeacherEmailSearchQuery, addTeacherFromSearch } from "../../organization-membership-view.mjs";
 
 const rules = candidateRules();
-assert.equal(sha(rules).toUpperCase(), "7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485", "proven against the approved P3-S1 Rules artifact");
+assert.equal(sha(rules).toUpperCase(), "F6B9DE012C7F7D3D0FCE6EFC19D760B3B2E0BCA9C9979811786EDE93C9B17D4A", "proven against the approved P3-S1 Rules artifact");
 const env = await makeEnv("demo-o1-search", rules);
 await seedWorld(env);
 await env.withSecurityRulesDisabled(async (ctx) => {

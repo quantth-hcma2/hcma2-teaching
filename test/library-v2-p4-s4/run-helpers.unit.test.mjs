@@ -53,7 +53,6 @@ test("STOP states: every controller outcome has a Vietnamese, actionable, raw-er
     blocked: { resume: false, rollback: false, match: /chưa hoàn tất/, input: { state: "blocked" } },
     "identity-mismatch": { resume: false, rollback: true, match: /KHÔNG khớp với lần nhập đang dở/, input: { state: "identity-mismatch" } },
     "not-committing": { resume: false, rollback: true, match: /Chỉ có thể HOÀN TÁC NHẬP/, input: { state: "not-committing", status: "partial" } },
-    "completed-drift": { resume: false, rollback: false, match: /đã bị người khác thay đổi trong lúc hoàn tất \(thiếu 0, thừa 1, sai khác 0\)[\s\S]*KHÔNG kích hoạt khung này[\s\S]*XÓA BẢN NHÁP/, input: { state: "completed-drift", verification: { counts: { missing: 0, extra: 1, altered: 0 } } } },
     unconfirmed: { resume: true, rollback: true, match: /không báo thành công khi chưa đọc lại được/, input: { state: "unconfirmed" } },
     "nodes-remain": { resume: false, rollback: true, match: /chưa xóa hết/, input: { state: "nodes-remain" } },
     "not-rollbackable": { resume: false, rollback: false, match: /XÓA BẢN NHÁP/, input: { state: "not-rollbackable" } },

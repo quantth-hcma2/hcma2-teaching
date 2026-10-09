@@ -3,9 +3,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { reverseP4S4IndexEdits } from "../library-v2-p4-s4/p4s4-edits.mjs";   // P4-S4 aligned: index.html is read with the P4-S4 edits reversed, so every assertion below keeps describing the bytes of its own slice
 
 const root = new URL("../../", import.meta.url);
-const bytes = (p) => readFileSync(new URL(p, root));
+const bytes = (p) => (p === "index.html" ? Buffer.from(reverseP4S4IndexEdits(readFileSync(new URL(p, root), "utf8")), "utf8") : readFileSync(new URL(p, root)));
 const text = (p) => bytes(p).toString("utf8");
 const sha = (p) => createHash("sha256").update(bytes(p)).digest("hex");
 const NL = String.fromCharCode(10);
@@ -15,8 +16,9 @@ const code = (p) => text(p).split(NL).filter((line) => !line.trim().startsWith("
 test("S2 modules plus the S3 view and S4 membership view modules are the only organization modules (no others)", () => {
   const rootMjs = readdirSync(new URL("./", root)).filter((f) => f.endsWith(".mjs")).sort();
   const baselineMjs = ["app-environment.mjs", "classroom-projection-launch.mjs", "contract-activation.mjs", "contract-editor.mjs", "contract-runtime.mjs", "contract-writer.mjs", "group-classroom-presentation.mjs", "group-classroom-timer.mjs", "group-clone.mjs", "group-file-link-safety.mjs", "group-membership.mjs", "group-pdf-export.mjs", "group-pdf-font-coverage.mjs", "group-pdf-runtime.mjs", "group-roster.mjs", "group-submission-upload.mjs", "library-hub-registry.mjs", "rich-text-contract.mjs", "rich-text-editor-serializer.mjs", "rich-text-editor.mjs", "rich-text-renderer.mjs", "session-info-compare.mjs", "session-reader-ui.mjs", "session-reader.mjs", "session-view.mjs", "trash-query-contract.mjs"];
+  // P4-S4 aligned: + import-commit-controller.mjs and import-run-helpers.mjs (the commit / recovery controller and the execution UI helpers, loaded lazily by the Import Center engine).
   // P3-S2 aligned: the three pure curriculum modules are the only new root modules (guarded by test/library-v2-p3-s2/source-guard.test.mjs).
-  assert.deepEqual(rootMjs, [...baselineMjs, ...MODULES, "organization-admin-view.mjs", "organization-membership-view.mjs", "teacher-organization-enrollment.mjs", "curriculum-model.mjs", "curriculum-queries.mjs", "curriculum-write-contract.mjs", "curriculum-admin-view.mjs", "curriculum-editor-view.mjs", "curriculum-clone-delete.mjs", "import-diagnostics.mjs", "import-normalize.mjs", "import-plan.mjs", "import-sha256.mjs", "import-template.mjs", "import-validate.mjs", "import-xlsx-container.mjs", "import-xlsx-extract.mjs", "import-xlsx-reader.mjs", "import-xlsx-worker.mjs", "import-capabilities.mjs", "import-xml-wellformed.mjs", "import-template-writer.mjs", "import-center-engine.mjs", "import-center-view.mjs"].sort());   // P4-S3 aligned: Template Center writer, lazy engine and Import Center view   // P4-S2 aligned: the twelve additive inert import modules (guarded by test/library-v2-p4-s2/source-guard.test.mjs);   // P3-S4 aligned: the node editor view (guarded by test/library-v2-p3-s4)
+  assert.deepEqual(rootMjs, [...baselineMjs, ...MODULES, "organization-admin-view.mjs", "organization-membership-view.mjs", "teacher-organization-enrollment.mjs", "curriculum-model.mjs", "curriculum-queries.mjs", "curriculum-write-contract.mjs", "curriculum-admin-view.mjs", "curriculum-editor-view.mjs", "curriculum-clone-delete.mjs", "import-diagnostics.mjs", "import-normalize.mjs", "import-plan.mjs", "import-sha256.mjs", "import-template.mjs", "import-validate.mjs", "import-xlsx-container.mjs", "import-xlsx-extract.mjs", "import-xlsx-reader.mjs", "import-xlsx-worker.mjs", "import-capabilities.mjs", "import-xml-wellformed.mjs", "import-template-writer.mjs", "import-center-engine.mjs", "import-center-view.mjs", "import-commit-controller.mjs", "import-run-helpers.mjs"].sort());   // P4-S3 aligned: Template Center writer, lazy engine and Import Center view   // P4-S2 aligned: the twelve additive inert import modules (guarded by test/library-v2-p4-s2/source-guard.test.mjs);   // P3-S4 aligned: the node editor view (guarded by test/library-v2-p3-s4)
 });
 
 test("modules are pure: only relative imports among themselves, no Firebase/network/storage/DOM access, no dynamic import", () => {

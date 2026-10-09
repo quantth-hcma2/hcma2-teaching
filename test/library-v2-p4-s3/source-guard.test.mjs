@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { reverseP4S4IndexEdits } from "../library-v2-p4-s4/p4s4-edits.mjs";   // P4-S4 aligned: index.html is read with the P4-S4 edits reversed, so every assertion below keeps describing the bytes of its own slice
 import { fileURLToPath } from "node:url";
 import { INDEX_EDITS_P4S3, SECTION_VIEW_EDITS_P4S3, ORG_VIEW_EDITS_P4S3, reverseP4S3IndexEdits, reverseP4S3SectionViewEdits, reverseP4S3OrgViewEdits } from "./p4s3-edits.mjs";
 import { buildTemplateSheets, TEMPLATE_STRICTNESS, TEMPLATE_HEADER_CHECKSUM } from "../../import-template.mjs";
@@ -13,16 +14,16 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const BASE = "61ce3061c8b2cf6a52eb7c9517640632cc60e463";                  // P4-S2 closure = the approved baseline of this slice
 const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 const gitBuf = (rev, path) => execFileSync("git", ["show", rev + ":" + path], { cwd: root, maxBuffer: 64 * 1024 * 1024 });
-const text = (p) => readFileSync(root + p, "utf8");
-const sha = (p) => createHash("sha256").update(readFileSync(root + p)).digest("hex");
+const text = (p) => (p === "index.html" ? reverseP4S4IndexEdits(readFileSync(root + p, "utf8")) : readFileSync(root + p, "utf8"));
+const sha = (p) => createHash("sha256").update(p === "index.html" ? Buffer.from(reverseP4S4IndexEdits(readFileSync(root + p, "utf8")), "utf8") : readFileSync(root + p)).digest("hex");
 const shaText = (t) => createHash("sha256").update(Buffer.from(t, "utf8")).digest("hex");
 const code = (p) => text(p).split("\n").map((line) => (line.includes("//") ? line.slice(0, line.indexOf("//")) : line)).join("\n");
 const NEW_MODULES = ["import-center-view.mjs", "import-center-engine.mjs", "import-template-writer.mjs"];
-const ADDED_OK = [/^import-(center-view|center-engine|template-writer)\.mjs$/, /^test\/library-v2-p4-s3\/[A-Za-z0-9._-]+$/];
+const ADDED_OK = [/^import-(center-view|center-engine|template-writer|commit-controller|run-helpers)\.mjs$/, /^test\/library-v2-p4-s[34]\/[A-Za-z0-9._-]+$/];   // P4-S4 aligned: + the commit controller, the run helpers and the P4-S4 tests
 const MODIFIED_OK = new Set([
   "index.html", "curriculum-admin-view.mjs", "organization-admin-view.mjs", "import-template.mjs",                                              // the slice's own edits (pinned below)
   "test/library-v2-p2-s2/source-guard.test.mjs", "test/library-v2-p2-s3/source-guard.test.mjs", "test/library-v2-p2-s4/source-guard.test.mjs",   // historical guards aligned
-  "test/library-v2-p3-s4/source-guard.test.mjs", "test/library-v2-p3-s4/s4-edits.mjs", "test/library-v2-p3-s5/source-guard.test.mjs", "test/library-v2-p3-s5/s5-edits.mjs",
+  "test/library-v2-p3-s3/source-guard.test.mjs", "test/library-v2-p3-s4/source-guard.test.mjs", "test/library-v2-p3-s4/s4-edits.mjs", "test/library-v2-p3-s5/source-guard.test.mjs", "test/library-v2-p3-s5/s5-edits.mjs",
   "test/library-v2-p4-s2/source-guard.test.mjs", "test/library-v2-p4-s2/reader-qualification.test.mjs"
 ]);
 
@@ -50,7 +51,7 @@ test("EDITS: the three pre-existing files this slice edits differ from the basel
   assert.equal(shaText(reverseP4S3SectionViewEdits(text("curriculum-admin-view.mjs"))), createHash("sha256").update(gitBuf(BASE, "curriculum-admin-view.mjs")).digest("hex"));
   assert.equal(shaText(reverseP4S3OrgViewEdits(text("organization-admin-view.mjs"))), createHash("sha256").update(gitBuf(BASE, "organization-admin-view.mjs")).digest("hex"));
   // the additions are small and additive: no line of the existing logic was removed except the three call/signature lines that gained an optional argument
-  for (const [file, maxRemoved] of [["index.html", 2], ["curriculum-admin-view.mjs", 4], ["organization-admin-view.mjs", 4]]) {
+  for (const [file, maxRemoved] of [["index.html", 4], ["curriculum-admin-view.mjs", 4], ["organization-admin-view.mjs", 4]]) {
     const removed = git("diff", "-U0", "--no-color", BASE, "--", file).split("\n").filter((l) => l.startsWith("-") && !l.startsWith("---")).length;
     assert.ok(removed <= maxRemoved, file + " removed " + removed + " lines");
   }
@@ -71,7 +72,7 @@ test("READ-ONLY: no new module can write Firestore or Storage, upload, persist, 
   assert.ok(!/^\s*import\s/m.test(view) && !/\bimport\s*\(/.test(code("import-center-view.mjs")), "the view imports nothing (every dependency is injected)");
   assert.ok(!/\bdb\.|\bgetDoc|\bgetDocs/.test(code("import-center-view.mjs")), "the view never touches the database object");
   const imports = [...text("import-center-engine.mjs").matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]).sort();
-  assert.deepEqual(imports, ["./import-capabilities.mjs", "./import-plan.mjs", "./import-template-writer.mjs", "./import-template.mjs", "./import-validate.mjs", "./import-xlsx-reader.mjs"]);
+  assert.deepEqual(imports, ["./import-capabilities.mjs", "./import-commit-controller.mjs", "./import-plan.mjs", "./import-run-helpers.mjs", "./import-template-writer.mjs", "./import-template.mjs", "./import-validate.mjs", "./import-xlsx-reader.mjs"]);
   assert.ok(!code("import-template-writer.mjs").includes("xlsx.full.min.js") && !/window\.XLSX/.test(code("import-template-writer.mjs")), "the V1 library is not referenced by code");
 });
 test("CONFIRM: the only 'confirm import' control in the view is rendered disabled with no handler; there is no enabling path", () => {

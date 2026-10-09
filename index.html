@@ -572,7 +572,7 @@ import {
 import {
   getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc, getDoc, getDocs,
   query, where, orderBy, limit, startAfter, documentId, onSnapshot, serverTimestamp, Timestamp, writeBatch, increment, deleteField,
-  getCountFromServer, collectionGroup, runTransaction, connectFirestoreEmulator
+  getCountFromServer, collectionGroup, runTransaction, connectFirestoreEmulator, getDocFromServer, getDocsFromServer
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 import {
   getStorage, ref as storageRef, uploadBytes, getBytes, deleteObject, connectStorageEmulator
@@ -639,7 +639,7 @@ import { createCurriculumEditor, createCurriculumNodeWriter } from "./curriculum
 // Library V2 P4-S3: Template Center + Import Center (UI / PREVIEW ONLY, Platform Admin). The view is small and imported here; the engine (P4-S2 reader host, validator, plan,
 // template writer) is loaded LAZILY (a dynamic import) when the Import Center screen opens, and SheetJS 0.20.3 only inside the parsing Worker / on the first template download.
 // The V1 roster-export library (vendor/xlsx.full.min.js 0.18.5) is untouched. No Firestore import write exists in this release.
-import { createImportCenter } from "./import-center-view.mjs?v=20261008-p4s3";
+import { createImportCenter } from "./import-center-view.mjs?v=20261009-p4s4";
 import { createActiveOrganizationLookup, createTeacherEnrollmentFlow } from "./teacher-organization-enrollment.mjs?v=20261005-o2";
 // GATE 5F.C: Knowledge Co-creation dashboard launch/close control for the Classroom Second Brain
 // (V2) projection. Talks only to the accepted, frozen Gate 5C HTTP contract — never touches
@@ -1769,6 +1769,11 @@ function downloadImportFile(bytes,fileName,mime){
   const a=document.createElement("a"); a.href=url; a.download=fileName; a.style.display="none"; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(url),4000);
 }
+// P4-S4: one import per organization across browser tabs (Web Locks). Resolves to a release function, or null while another tab of this browser holds the lock.
+function acquireImportLock(organizationId){
+  if(!navigator.locks||!navigator.locks.request) return Promise.resolve(()=>{});
+  return new Promise((resolve)=>{ navigator.locks.request("hcma2-import-"+organizationId,{ifAvailable:true},(lock)=>{ if(!lock){ resolve(null); return undefined; } return new Promise((release)=>{ resolve(()=>release()); }); }).catch(()=>resolve(()=>{})); });
+}
 function adminOrganizations(c){
   return createOrganizationAdminScreen({
     db, actorUid:STATE.user.uid, isPlatformAdmin:STATE.profile?.role==="admin",
@@ -1791,12 +1796,14 @@ function adminOrganizations(c){
       model:CURRICULUM_MODEL, viewHelpers:createCurriculumViewHelpers({model:CURRICULUM_MODEL}), queries:CURRICULUM_QUERIES, organizationQueries:ORGANIZATION_QUERIES, contract:CURRICULUM_CONTRACT,
       writer:createCurriculumNodeWriter({collection,doc,setDoc,updateDoc,writeBatch})
     }),
-    // P4-S3: NHẬP TỪ EXCEL (Template Center + Import Center preview). Read-only for curriculum data: it creates no import batch, framework or node documents and uploads nothing.
+    // P4-S3/S4: NHẬP TỪ EXCEL (Template Center + Import Center). P4-S4: commitTools lets it execute the import (batch -> framework -> node chunks -> full read-back -> completed), recover and roll back;
+    // every read of the controller goes to the SERVER (getDocFromServer / getDocsFromServer). The source file is never uploaded.
     importCenter:createImportCenter({
       db, actorUid:STATE.user.uid, isPlatformAdmin:STATE.profile?.role==="admin",
       esc, toast, mapError, organizationQueries:ORGANIZATION_QUERIES,
-      loadEngine:()=>import("./import-center-engine.mjs?v=20261008-p4s3"),
-      downloadFile:downloadImportFile
+      loadEngine:()=>import("./import-center-engine.mjs?v=20261009-p4s4"),
+      downloadFile:downloadImportFile,
+      commitTools:{ firestore:{collection,doc,getDocFromServer,getDocsFromServer,query,where,limit,orderBy,startAfter,documentId,writeBatch,setDoc,updateDoc,deleteDoc,serverTimestamp}, acquireLock:acquireImportLock }
     }),
     // P2-S4: ordinary membership management inside Organization Detail (Platform Admin only; no Organization Admin / capability work).
     membershipSection:createOrganizationMembershipSection({

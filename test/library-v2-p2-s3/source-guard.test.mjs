@@ -3,13 +3,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { reverseP4S4IndexEdits } from "../library-v2-p4-s4/p4s4-edits.mjs";   // P4-S4 aligned: index.html is read with the P4-S4 edits reversed, so every assertion below keeps describing the bytes of its own slice
 import { reverseO2Edits } from "../onboarding-o2/o2-edits.mjs";
 import { reverseO1Edits } from "../o1-search/o1-edits.mjs";
 import { reverseS3IndexEdits, reverseS3AdminViewEdits } from "../library-v2-p3-s3/s3-edits.mjs";   // P3-S3 aligned: older byte-pins keep their meaning by reversing the P3-S3 edits first
 
 const root = new URL("../../", import.meta.url);
-const text = (p) => readFileSync(new URL(p, root), "utf8");
-const sha = (p) => createHash("sha256").update(readFileSync(new URL(p, root))).digest("hex");
+const text = (p) => (p === "index.html" ? reverseP4S4IndexEdits(readFileSync(new URL(p, root), "utf8")) : readFileSync(new URL(p, root), "utf8"));
+const sha = (p) => createHash("sha256").update(p === "index.html" ? Buffer.from(reverseP4S4IndexEdits(readFileSync(new URL(p, root), "utf8")), "utf8") : readFileSync(new URL(p, root))).digest("hex");
 const NL = String.fromCharCode(10), CRLF = String.fromCharCode(13, 10);
 const html = text("index.html");
 const view = text("organization-admin-view.mjs");

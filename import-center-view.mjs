@@ -8,9 +8,11 @@
 //
 //   createImportViewHelpers()                 pure helpers + markup (no DOM access, no I/O)
 //   createImportCenter(deps).mount(host, { organization, onBack })
-// deps: { actorUid, isPlatformAdmin, esc, toast, mapError?, organizationQueries?, db?, loadEngine, downloadFile, makeReader? }
+// deps: { actorUid, isPlatformAdmin, esc, toast, mapError?, organizationQueries?, db?, loadEngine, downloadFile, makeReader?, commitTools? }
+// P4-S4: with deps.commitTools = { firestore, acquireLock? } the screen also executes the import (confirm -> commit -> full read-back -> completed), offers recovery of an interrupted
+// import and rollback; the execution logic lives in the lazy engine (import-commit-controller.mjs / import-run-helpers.mjs). Without commitTools the screen stays read-only (P4-S3).
 const freeze = Object.freeze;
-export const IMPORT_MAX_BYTES = 5 * 1024 * 1024;       // mirrors IMPORT_LIMITS.maxFileBytes (pinned equal by test/library-v2-p4-s3)
+export const IMPORT_MAX_BYTES = 5 * 1024 * 1024;       // mirrors IMPORT_LIMITS.maxFileBytes (pinned equal by the P4-S3 tests)
 export const DIAGNOSTIC_PAGE = 100;                      // mirrors IMPORT_LIMITS.diagnostics.maxDisplayed
 export const LESSON_PAGE = 100;
 export const TREE_COLLAPSE_ABOVE = 60;                   // same constant as the P3-S4 editor
@@ -80,6 +82,7 @@ export function createImportViewHelpers() {
     local: "Tệp được đọc ngay trong trình duyệt của bạn. Không có dữ liệu nào được tải lên máy chủ hoặc lưu vào hệ thống ở bước này.",
     futureAction: "Chức năng nhập dữ liệu chưa được bật. Việc ghi vào hệ thống sẽ có trong bản phát hành sau; hiện bạn chỉ có thể kiểm tra tệp và xem trước.",
     notWritten: "Chưa có dữ liệu nào được ghi. Đây chỉ là bản xem trước.",
+    notWrittenYet: "Chưa có dữ liệu nào được ghi: dữ liệu chỉ được ghi sau khi bạn xác nhận ở bước cuối.",
     tooLarge: "Tệp lớn hơn 5 MiB nên không thể đọc."
   });
 
@@ -277,7 +280,7 @@ export function createImportViewHelpers() {
       ${controls}${list}${more}</section>`;
   }
 
-  function renderPreviewHtml({ organization, preview, model, esc, open, shown, warningCount, highlightKey = null }) {
+  function renderPreviewHtml({ organization, preview, model, esc, open, shown, warningCount, highlightKey = null, commit = false }) {
     const orderText = (node) => (node.orderSource === "explicit" ? "theo cột Thứ tự" : "theo vị trí dòng");
     const chips = (node) => noteChips(node.notes).map((c) => `<span class="chip" data-chip="1">${esc(c)}</span>`).join(" ");
     const groupHtml = preview.groups.map((g) => {
@@ -295,7 +298,7 @@ export function createImportViewHelpers() {
     const orig = model.framework.original ? `<div class="small mut">Giá trị gốc trong tệp: “${esc(model.framework.original)}” (đã cắt khoảng trắng)</div>` : "";
     return `<section class="card mt-14" id="impPreview" aria-labelledby="impPreviewTitle">
       <h3 id="impPreviewTitle" tabindex="-1" style="margin:0;outline:none">👁 Bước 4 · Xem trước khung chương trình mới</h3>
-      <p class="mut mt-8">Khung mới sẽ được tạo ở trạng thái <b>Bản nháp</b> trong đơn vị <b>${esc(organization.name || "—")}</b>. ${esc(MESSAGES.notWritten)}</p>
+      <p class="mut mt-8">Khung mới sẽ được tạo ở trạng thái <b>Bản nháp</b> trong đơn vị <b>${esc(organization.name || "—")}</b>. ${esc(commit ? MESSAGES.notWrittenYet : MESSAGES.notWritten)}</p>
       <div class="grid grid-3 mt-8" id="impPreviewSummary">
         <div><div class="small mut">Đơn vị</div><b data-prev="org">${esc(organization.name || "—")}</b><div class="small mut"><code>${esc(organization.code || "—")}</code> · <code>${esc(organization.id)}</code></div></div>
         <div><div class="small mut">Tên khung</div><b data-prev="framework" style="overflow-wrap:anywhere">${esc(frameworkName)}</b>${orig}<div class="small mut">Mã khung: không áp dụng (khung chương trình chỉ có tên; mã nghiệp vụ nằm ở từng môn và bài)</div></div>
@@ -304,12 +307,12 @@ export function createImportViewHelpers() {
       ${preview.collapseByDefault ? `<p class="small mut mt-8">Khung lớn (${preview.total} mục): các môn được thu gọn; mỗi lần mở hiển thị tối đa ${LESSON_PAGE} bài.</p>` : ""}
       <ol id="impTree" aria-label="Cây chương trình xem trước" style="list-style:none;padding:0;margin:0">${groupHtml}</ol></section>`;
   }
-  function renderPlanHtml({ summary, planFailure = "", esc }) {
+  function renderPlanHtml({ summary, planFailure = "", esc, commit = false }) {
     if (planFailure) return `<section class="card mt-14" id="impPlan" role="alert" style="border-color:#f59e0b"><h3 style="margin:0">📋 Bước 5 · Kế hoạch nhập (chỉ đọc)</h3><p class="mt-8">${esc(planFailure)}</p></section>`;
     const sizes = summary.chunkSizes;
     return `<section class="card mt-14" id="impPlan" aria-labelledby="impPlanTitle">
       <h3 id="impPlanTitle" style="margin:0">📋 Bước 5 · Kế hoạch nhập (chỉ đọc)</h3>
-      <p class="mut mt-8">Đây là kế hoạch dự kiến khi nhập thật ở bản phát hành sau. ${esc(MESSAGES.notWritten)}</p>
+      <p class="mut mt-8">${commit ? "Đây là kế hoạch sẽ được thực hiện khi bạn xác nhận. " : "Đây là kế hoạch dự kiến khi nhập thật ở bản phát hành sau. "}${esc(commit ? MESSAGES.notWrittenYet : MESSAGES.notWritten)}</p>
       <div class="grid grid-3 mt-8"><div><div class="small mut">Tài liệu sẽ tạo</div><b data-plan="documents">${summary.totalDocuments}</b><div class="small mut">1 lô nhập + 1 khung + ${summary.nodeCount} mục (${summary.subjectCount} môn, ${summary.lessonCount} bài)</div></div>
         <div><div class="small mut">Đợt ghi dự kiến</div><b data-plan="chunks">${summary.chunkCount} đợt</b><div class="small mut">tối đa ${summary.maxChunkWrites} mục mỗi đợt${sizes.length > 1 ? "; đợt cuối " + sizes[sizes.length - 1] + " mục" : ""}</div></div>
         <div><div class="small mut">Trạng thái khung</div><b>Bản nháp</b><div class="small mut">chưa kích hoạt; kiểm tra lại từng mục sau khi ghi</div></div></div></section>`;
@@ -317,12 +320,12 @@ export function createImportViewHelpers() {
   function renderFutureActionHtml({ esc }) {
     return `<section class="card mt-14" id="impFuture"><button class="btn btn-ok" type="button" id="impConfirmDisabled" disabled aria-disabled="true" aria-describedby="impConfirmHint">XÁC NHẬN NHẬP</button><div class="hint mt-8" id="impConfirmHint">${esc(MESSAGES.futureAction)}</div></section>`;
   }
-  function renderShellHtml({ organization, esc }) {
+  function renderShellHtml({ organization, esc, commit = false }) {
     return `<button class="btn btn-ghost" type="button" id="impBack" data-imp-action="back">← Quay lại đơn vị</button>
-      <div class="section-title mt-14"><div><h2 id="impTitle" tabindex="-1" style="outline:none">⬆ Nhập chương trình từ Excel</h2><p class="mut">Tạo một khung chương trình <b>nháp mới</b> (Môn → Bài) từ tệp Excel theo mẫu. Hiện tại chỉ kiểm tra và xem trước, chưa ghi dữ liệu.</p></div></div>
+      <div class="section-title mt-14"><div><h2 id="impTitle" tabindex="-1" style="outline:none">⬆ Nhập chương trình từ Excel</h2><p class="mut">Tạo một khung chương trình <b>nháp mới</b> (Môn → Bài) từ tệp Excel theo mẫu. ${commit ? "Bạn kiểm tra và xem trước, rồi xác nhận để nhập; hệ thống đọc lại và kiểm tra toàn bộ dữ liệu trước khi báo thành công." : "Hiện tại chỉ kiểm tra và xem trước, chưa ghi dữ liệu."}</p></div></div>
       <div id="impOrgHost">${renderOrganizationHeaderHtml({ organization, esc })}</div>
       <div id="impLive" class="sr-only" role="status" aria-live="polite"></div>
-      <div id="impUnsupportedHost"></div><div id="impTemplateHost"></div><div id="impFileHost"></div><div id="impStatusHost"></div><div id="impResultsHost"></div><div id="impPreviewHost"></div><div id="impPlanHost"></div><div id="impFutureHost"></div>`;
+      <div id="impRecoveryHost"></div><div id="impUnsupportedHost"></div><div id="impTemplateHost"></div><div id="impFileHost"></div><div id="impStatusHost"></div><div id="impResultsHost"></div><div id="impPreviewHost"></div><div id="impPlanHost"></div><div id="impFutureHost"></div><div id="impRunHost"></div>`;
   }
   function renderDeniedHtml({ esc, reason = "NOT_MEMBER" }) {
     const message = DENIED_REASONS[reason] || MESSAGES.denied;
@@ -344,6 +347,7 @@ export function createImportViewHelpers() {
 // invalidates the first, so a stale async result can never paint into a different organization).
 export function createImportCenter(deps) {
   const { actorUid, isPlatformAdmin, esc, toast, organizationQueries, db, loadEngine, downloadFile, makeReader } = deps;
+  const commitTools = deps.commitTools && deps.commitTools.firestore ? deps.commitTools : null;   // P4-S4: execution is available only when the page injects it
   const accountActive = deps.accountActive !== false;   // the signed-in account is active (the application only lets active accounts in; the Rules re-check it on every read)
   const H = createImportViewHelpers();
   const warn = (label, error) => { try { console.warn("[import-center] " + label, error && error.name ? error.name : ""); } catch { /* ignore */ } };   // never the stack to the user
@@ -372,8 +376,10 @@ export function createImportCenter(deps) {
     let org = Object.freeze({ id: organization.id, name: source.name || "", code: source.code || "", status: source.status });
     let alive = true, generation = 0, busy = false, engine = null, reader = null, templateWriter = null;
     const state = { unsupported: null, file: null, phase: "idle", failure: "", reading: null, result: null, summary: null, planFailure: "", filters: { severity: "all", sheet: "all" }, limit: DIAGNOSTIC_PAGE, inspect: null, active: null, cursor: -1,
-      preview: null, open: new Set(), shown: new Map(), highlight: null, templateStatus: "" };
-    host.innerHTML = H.renderShellHtml({ organization: org, esc });
+      preview: null, open: new Set(), shown: new Map(), highlight: null, templateStatus: "",
+      run: null, recovery: [], recoveryFailed: false, resume: null, resumeMismatch: false, ack: false, rollbackTarget: null, rollbackAck: false };
+    const commitEnabled = () => !!commitTools;
+    host.innerHTML = H.renderShellHtml({ organization: org, esc, commit: commitEnabled() });
     const $ = (selector) => host.querySelector(selector);
     const region = (id, html) => { const el = $(id); if (el) el.innerHTML = html; };
     const live = (message) => { const el = $("#impLive"); if (el) el.textContent = message; };
@@ -397,12 +403,125 @@ export function createImportCenter(deps) {
     }
     function paintPreview() {
       const r = state.result;
-      if (!r || !r.ok || !r.model || archived()) { region("#impPreviewHost", ""); region("#impPlanHost", ""); region("#impFutureHost", ""); return; }
-      region("#impPreviewHost", H.renderPreviewHtml({ organization: org, preview: state.preview, model: r.model, esc, open: state.open, shown: state.shown, warningCount: r.warnings.length, highlightKey: state.highlight }));
-      region("#impPlanHost", H.renderPlanHtml({ summary: state.summary, planFailure: state.planFailure, esc }));
-      region("#impFutureHost", H.renderFutureActionHtml({ esc }));
+      if (!r || !r.ok || !r.model || archived()) { region("#impPreviewHost", ""); region("#impPlanHost", ""); if (!commitEnabled()) region("#impFutureHost", ""); else paintConfirm(); return; }
+      region("#impPreviewHost", H.renderPreviewHtml({ organization: org, preview: state.preview, model: r.model, esc, open: state.open, shown: state.shown, warningCount: r.warnings.length, highlightKey: state.highlight, commit: commitEnabled() }));
+      region("#impPlanHost", state.summary || state.planFailure ? H.renderPlanHtml({ summary: state.summary, planFailure: state.planFailure, esc, commit: commitEnabled() }) : "");
+      if (commitEnabled()) paintConfirm(); else region("#impFutureHost", H.renderFutureActionHtml({ esc }));
     }
-    const paintAll = () => { paintUnsupported(); paintTemplate(); paintFile(); paintStatus(); paintResults(); paintPreview(); };
+    const paintAll = () => { paintUnsupported(); paintTemplate(); paintFile(); paintStatus(); paintResults(); paintPreview(); if (commitEnabled()) { paintRecovery(); paintRun(); } };
+
+    // ---------------------------------------------------------- P4-S4: execution (confirm -> commit -> verify -> completed), recovery and rollback. Only with deps.commitTools.
+    // The commit itself lives in the lazy engine (createImportCommitController); this view only drives it. The organization is the frozen `org`; the plan is the frozen plan built at the
+    // moment of confirmation (the controller re-verifies its digest before the first write), so a later file or organization change cannot alter what is committed.
+    let controller = null, runHelpers = null, releaseLock = null;
+    const unloadGuard = (event) => { event.preventDefault(); event.returnValue = ""; return ""; };
+    const setUnloadGuard = (on) => { if (typeof window === "undefined" || !window.addEventListener) return; try { if (on) window.addEventListener("beforeunload", unloadGuard); else window.removeEventListener("beforeunload", unloadGuard); } catch { /* ignore */ } };
+    const running = () => !!(state.run && state.run.active);
+    function getController() {
+      if (!controller) controller = engine.createImportCommitController({ db, firestore: commitTools.firestore });
+      return controller;
+    }
+    function getRunHelpers() { if (!runHelpers) runHelpers = engine.createImportRunHelpers({ esc }); return runHelpers; }
+    // fresh authorization before every write phase (the controller calls it): the SAME contract as at mount, re-read from Firestore; leaving the screen also stops the run
+    async function authorizeNow() {
+      if (!alive) return { allowed: false, reason: "LEFT_SCREEN" };
+      const loaded = await loadImportAccess({ db, organizationQueries, actorUid, organizationId: org.id, isPlatformAdmin: isPlatformAdmin === true });
+      if (!loaded.organization || loaded.organization.id !== org.id) return { allowed: false, reason: "NOT_MEMBER" };
+      const verdict = resolveImportAccess({ isPlatformAdmin: isPlatformAdmin === true, accountActive, actorUid, organization: loaded.organization, membership: loaded.membership, capability: loaded.capability });
+      return verdict.canPrepare ? { allowed: true } : { allowed: false, reason: verdict.reason || "DENIED" };
+    }
+    async function takeLock() {
+      if (!commitTools || typeof commitTools.acquireLock !== "function") return () => {};
+      try { return await commitTools.acquireLock(org.id); } catch { return () => {}; }
+    }
+    const canAct = () => !archived() && commitEnabled();
+    function paintRecovery() {
+      if (!commitEnabled() || !engine) { region("#impRecoveryHost", ""); return; }
+      const rh = getRunHelpers();
+      let html = rh.renderRecoveryHtml({ batches: state.recovery, canAct: canAct() && !running(), archived: archived(), resumeId: state.resume ? state.resume.id : null });
+      if (state.recoveryFailed) html = `<section class="card mt-14" id="impRecoveryFailed" role="alert"><p>${esc(rh.RUN_MESSAGES.recoveryLoadFailed)}</p></section>`;
+      if (state.rollbackTarget) { const batch = state.recovery.find((b) => b.id === state.rollbackTarget) || (state.run && state.run.batch) || { id: state.rollbackTarget, sourceFile: {} }; html += rh.renderRollbackConfirmHtml({ batch, acknowledged: state.rollbackAck }); }
+      region("#impRecoveryHost", html);
+    }
+    function paintRun() {
+      if (!commitEnabled() || !engine) { region("#impRunHost", ""); return; }
+      region("#impRunHost", getRunHelpers().renderRunHtml({ run: state.run, organization: org }));
+    }
+    function paintConfirm() {
+      const r = state.result;
+      const ready = commitEnabled() && engine && r && r.ok && r.model && !archived() && state.summary && !state.resumeMismatch && !(state.run && (state.run.done || state.run.rollbackDone));
+      if (!ready) { region("#impFutureHost", commitEnabled() && state.resumeMismatch && engine ? `<section class="card mt-14" id="impResumeMismatch" role="alert" style="border-color:#dc2626"><p>${esc(getRunHelpers().RUN_MESSAGES.resumeMismatch)}</p></section>` : ""); return; }
+      const rh = getRunHelpers();
+      const blocked = !state.resume && state.recovery.length ? rh.RUN_MESSAGES.blockedIncomplete : "";
+      region("#impFutureHost", rh.renderConfirmHtml({ organization: org, summary: state.summary, file: state.file, acknowledged: state.ack, blockedReason: blocked, resume: state.resume, canAct: !running() }));
+    }
+    async function loadRecovery() {
+      if (!commitEnabled() || !engine) return;
+      state.recoveryFailed = false;
+      try { state.recovery = await getController().findIncomplete(org.id); }
+      catch (error) { warn("recovery", error); state.recovery = []; state.recoveryFailed = true; }
+      if (alive) { paintRecovery(); paintConfirm(); }
+    }
+    function progressInto(run, event) {
+      run.phase = event.phase;
+      if (event.nodesWritten !== undefined) run.nodesWritten = event.nodesWritten;
+      if (event.nodesDeleted !== undefined) run.nodesDeleted = event.nodesDeleted;
+      if (event.verified !== undefined) run.verified = event.verified;
+      if (event.chunk !== undefined) run.chunk = event.chunk;
+    }
+    async function runCommit({ plan, resume }) {
+      if (running() || !commitEnabled() || !engine) return;
+      const release = await takeLock();
+      if (release === null) { state.run = { stop: { tone: "warn", resume: false, rollback: false, text: getRunHelpers().RUN_MESSAGES.lockBusy }, kind: "commit", batchId: plan.batch.id }; paintRun(); return; }
+      releaseLock = release;
+      const run = { kind: "commit", active: true, batchId: plan.batch.id, plan, phase: "authorize", nodesTotal: plan.nodes.length, chunksTotal: plan.chunks.length, nodesWritten: 0, verified: 0, chunk: 0 };
+      state.run = run; busy = true; setUnloadGuard(true); paintAll(); live("Bắt đầu nhập");
+      let result;
+      try {
+        result = await getController().commit({ plan, organizationId: org.id, actorUid, authorize: authorizeNow, resume, onProgress: (event) => { if (!alive || state.run !== run) return; progressInto(run, event); paintRun(); } });
+      } catch (error) { warn("commit", error); result = { ok: false, state: "error", nodesWritten: run.nodesWritten }; }
+      finally { setUnloadGuard(false); if (releaseLock) { try { releaseLock(); } catch { /* ignore */ } releaseLock = null; } busy = false; }
+      if (!alive) return;
+      if (result.ok) {
+        const nodes = plan.verification.expectedNodeCount;
+        state.run = { done: { nodes, subjects: plan.verification.subjectCount, lessons: plan.verification.lessonCount, frameworkName: plan.framework.name, eligible: result.eligibility.eligible, eligibilityErrors: result.eligibility.errors }, kind: "commit", batchId: plan.batch.id };
+        state.resume = null; state.ack = false; resetResult(); state.file = null; state.phase = "idle";
+        live("Đã nhập xong và kiểm tra đầy đủ");
+      } else {
+        state.run = { stop: getRunHelpers().describeStop(result), kind: "commit", batchId: plan.batch.id, plan };
+        live(state.run.stop.text);
+      }
+      await loadRecovery(); paintAll();
+      const title = $("#impRunTitle"); if (title) title.focus();
+    }
+    async function runRollback(batchId) {
+      if (running() || !commitEnabled() || !engine) return;
+      const release = await takeLock();
+      if (release === null) { state.run = { stop: { tone: "warn", resume: false, rollback: false, text: getRunHelpers().RUN_MESSAGES.lockBusy }, kind: "rollback", batchId }; paintRun(); return; }
+      releaseLock = release;
+      const run = { kind: "rollback", active: true, batchId, phase: "rollback-nodes", nodesDeleted: 0 };
+      state.run = run; state.rollbackTarget = null; state.rollbackAck = false; busy = true; setUnloadGuard(true); paintAll(); live("Bắt đầu hoàn tác");
+      let result;
+      try { result = await getController().rollback({ batchId, organizationId: org.id, authorize: authorizeNow, onProgress: (event) => { if (!alive || state.run !== run) return; progressInto(run, event); paintRun(); } }); }
+      catch (error) { warn("rollback", error); result = { ok: false, state: "error" }; }
+      finally { setUnloadGuard(false); if (releaseLock) { try { releaseLock(); } catch { /* ignore */ } releaseLock = null; } busy = false; }
+      if (!alive) return;
+      if (result.ok) { state.run = { rollbackDone: { nodesDeleted: result.nodesDeleted || 0 }, kind: "rollback", batchId }; if (state.resume && state.resume.id === batchId) state.resume = null; live("Đã hoàn tác lần nhập"); }
+      else { state.run = { stop: { ...getRunHelpers().describeStop(result), resume: false }, kind: "rollback", batchId }; live(state.run.stop.text); }
+      await loadRecovery(); paintAll();
+      const title = $("#impRunTitle"); if (title) title.focus();
+    }
+    // New import: a fresh Firestore auto id for BOTH documents, the plan rebuilt with it (validation stage 10) and frozen. Resume: the plan rebuilt with the stored batch id.
+    async function confirmAndRun() {
+      if (running() || !engine || !state.result || !state.result.ok || !state.ack) return;
+      const verdict = await authorizeNow().catch(() => ({ allowed: false, reason: "ACCESS_CHECK_FAILED" }));
+      if (!verdict.allowed) { state.run = { stop: getRunHelpers().describeStop({ state: "denied" }), kind: "commit", batchId: "" }; paintAll(); return; }
+      const batchId = state.resume ? state.resume.id : getController().newBatchId();
+      const prepared = engine.prepareCommit(state.result.model, { organization: { id: org.id, status: "active" }, batchId, actorUid });
+      if (!prepared.ok) { state.run = { stop: { tone: "err", resume: false, rollback: false, text: "Không lập được kế hoạch nhập: " + (prepared.diagnostics[0] ? prepared.diagnostics[0].message : "dữ liệu không hợp lệ") }, kind: "commit", batchId }; paintAll(); return; }
+      if (state.resume && !engine.batchMatchesPlan(state.resume, prepared.plan, org.id)) { state.resumeMismatch = true; paintAll(); return; }
+      await runCommit({ plan: prepared.plan, resume: !!state.resume });
+    }
 
     // ---------------------------------------------------------- engine + capability check (lazy)
     async function ensureEngine() {
@@ -427,6 +546,7 @@ export function createImportCenter(deps) {
           if (alive && mine === generation && fresh && fresh.id === org.id) { org = Object.freeze({ id: org.id, name: fresh.name || org.name, code: fresh.code || org.code, status: fresh.status }); region("#impOrgHost", H.renderOrganizationHeaderHtml({ organization: org, esc })); paintAll(); }
         } catch (error) { warn("organization", error); }
       }
+      if (commitEnabled() && alive && mine === generation) await loadRecovery();
       const title = $("#impTitle"); if (title && alive) title.focus();
     }
 
@@ -450,9 +570,9 @@ export function createImportCenter(deps) {
       state.inspect = null; state.active = null; state.cursor = -1; state.open = new Set(); state.shown = new Map(); state.highlight = null; state.failure = "";
     }
     async function handleFile(file) {
-      if (!file || busy || archived() || state.unsupported || !engine) return;
+      if (!file || busy || running() || archived() || state.unsupported || !engine) return;
       const mine = ++generation;
-      busy = true; resetResult(); state.phase = "reading"; state.file = { name: file.name, size: file.size, sha256: null };
+      busy = true; resetResult(); state.resumeMismatch = false; state.ack = false; if (state.run && (state.run.done || state.run.rollbackDone)) state.run = null; state.phase = "reading"; state.file = { name: file.name, size: file.size, sha256: null };
       paintTemplate(); paintFile(); paintStatus(); paintResults(); paintPreview(); live("Đang đọc và kiểm tra tệp");
       try {
         const reading = await reader.readXlsx(file, { fileName: file.name });
@@ -465,9 +585,10 @@ export function createImportCenter(deps) {
           state.preview = H.buildPreview(result.model);
           if (!state.preview.collapseByDefault) state.preview.groups.forEach((g) => state.open.add(g.subject.key));
           // the plan is built ONLY to run validation stage 10 and to show numbers; it is never executable here and is dropped immediately (synthetic preview id)
-          const previewId = "preview" + String(state.file.sha256 || "0000000000000").slice(0, 14);
+          const previewId = state.resume ? state.resume.id : "preview" + String(state.file.sha256 || "0000000000000").slice(0, 14);
           const prepared = engine.prepareCommit(result.model, { organization: { id: org.id, status: org.status }, batchId: previewId, actorUid });
-          if (prepared.ok) state.summary = H.planSummary(prepared.plan); else state.planFailure = "Không lập được kế hoạch nhập: " + (prepared.diagnostics[0] ? prepared.diagnostics[0].message : "dữ liệu không hợp lệ") ;
+          if (state.resume && prepared.ok && !engine.batchMatchesPlan(state.resume, prepared.plan, org.id)) { state.resumeMismatch = true; state.summary = null; state.planFailure = ""; }
+          if (prepared.ok && !state.resumeMismatch) state.summary = H.planSummary(prepared.plan); else if (!prepared.ok) state.planFailure = "Không lập được kế hoạch nhập: " + (prepared.diagnostics[0] ? prepared.diagnostics[0].message : "dữ liệu không hợp lệ") ;
         }
       } catch (error) {
         warn("read", error);
@@ -520,7 +641,15 @@ export function createImportCenter(deps) {
       const button = event.target.closest && event.target.closest("[data-imp-action]");
       if (!button || !host.contains(button) || button.disabled) return;
       const action = button.dataset.impAction;
-      if (action === "back") { if (typeof onBack === "function") onBack(); return; }
+      if (action === "back") { if (running()) { live(getRunHelpers().RUN_MESSAGES.backBlocked); return; } if (typeof onBack === "function") onBack(); return; }
+      if (action === "confirm") return void confirmAndRun();
+      if (action === "run-resume") { const run = state.run; if (run && run.plan) { state.run = null; return void runCommit({ plan: run.plan, resume: false }); } return; }
+      if (action === "run-dismiss") { state.run = null; paintAll(); return; }
+      if (action === "run-finish") { state.run = null; if (typeof onBack === "function") onBack(); return; }
+      if (action === "resume-pick") { const batch = state.recovery.find((b) => b.id === button.dataset.batch); if (batch && batch.status === "committing") { state.resume = batch; state.resumeMismatch = false; state.ack = false; state.run = null; resetResult(); state.file = null; state.phase = "idle"; paintAll(); live(getRunHelpers().RUN_MESSAGES.resumeHint); const pick = $("#impPick"); if (pick) pick.focus(); } return; }
+      if (action === "rollback-open") { state.rollbackTarget = button.dataset.batch; state.rollbackAck = false; if (state.run && state.run.stop) state.run = { ...state.run, batch: state.recovery.find((b) => b.id === state.rollbackTarget) }; paintRecovery(); const box = $("#impRbTitle"); if (box) box.focus(); return; }
+      if (action === "rollback-cancel") { state.rollbackTarget = null; state.rollbackAck = false; paintRecovery(); return; }
+      if (action === "rollback-confirm") { if (state.rollbackAck) void runRollback(button.dataset.batch); return; }
       if (action === "retry-engine") { state.phase = "idle"; state.failure = ""; paintStatus(); return void start(); }
       if (action === "template-blank") return void downloadTemplate(false);
       if (action === "template-example") return void downloadTemplate(true);
@@ -535,6 +664,10 @@ export function createImportCenter(deps) {
       if (action === "close-all") { state.open.clear(); paintPreview(); return; }
     };
     const onChange = (event) => {
+      const ack = event.target.closest && event.target.closest("[data-imp-ack]");
+      if (ack) { state.ack = !!ack.checked; paintConfirm(); const again = $("#impConfirmAck"); if (again) again.focus(); return; }
+      const rb = event.target.closest && event.target.closest("[data-imp-rback]");
+      if (rb) { state.rollbackAck = !!rb.checked; paintRecovery(); const again = $("#impRbAck"); if (again) again.focus(); return; }
       const select = event.target.closest && event.target.closest("[data-imp-filter]");
       if (!select) return;
       state.filters = { ...state.filters, [select.dataset.impFilter]: select.value }; state.limit = DIAGNOSTIC_PAGE; state.active = null; state.inspect = null; paintResults();
@@ -542,7 +675,7 @@ export function createImportCenter(deps) {
     };
     host.addEventListener("click", onClick);
     host.addEventListener("change", onChange);
-    host.__importCenterTeardown = () => { alive = false; generation++; host.removeEventListener("click", onClick); host.removeEventListener("change", onChange); delete host.__importCenterTeardown; };
+    host.__importCenterTeardown = () => { alive = false; generation++; setUnloadGuard(false); if (releaseLock) { try { releaseLock(); } catch { /* ignore */ } releaseLock = null; } host.removeEventListener("click", onClick); host.removeEventListener("change", onChange); delete host.__importCenterTeardown; };
     await start();
   }
   return freeze({ mount, helpers: H });

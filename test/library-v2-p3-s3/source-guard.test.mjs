@@ -4,12 +4,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { reverseP4S4IndexEdits } from "../library-v2-p4-s4/p4s4-edits.mjs";   // P4-S4 aligned: index.html is read with the P4-S4 edits reversed, so every assertion below keeps describing the bytes of its own slice
 import { reverseS3IndexEdits, reverseS3AdminViewEdits, INDEX_EDITS, ADMIN_VIEW_EDITS, INDEX_ADDED } from "./s3-edits.mjs";
 import { reverseS4SectionViewEdits, reverseS4ModelEdits, reverseS4IndexEdits } from "../library-v2-p3-s4/s4-edits.mjs";   // P3-S4 aligned: every assertion below describes the P3-S3 candidate bytes (c95595a), i.e. with the approved S4 edits reversed first
 
 const root = new URL("../../", import.meta.url);
-const text = (p) => readFileSync(new URL(p, root), "utf8");
-const sha = (p) => createHash("sha256").update(readFileSync(new URL(p, root))).digest("hex");
+const text = (p) => (p === "index.html" ? reverseP4S4IndexEdits(readFileSync(new URL(p, root), "utf8")) : readFileSync(new URL(p, root), "utf8"));
+const sha = (p) => createHash("sha256").update(p === "index.html" ? Buffer.from(reverseP4S4IndexEdits(readFileSync(new URL(p, root), "utf8")), "utf8") : readFileSync(new URL(p, root))).digest("hex");
 const shaText = (t) => createHash("sha256").update(Buffer.from(t, "utf8")).digest("hex");
 const NL = String.fromCharCode(10);
 const code = (p) => text(p).split(NL).filter((l) => !l.trim().startsWith("//")).join(NL);

@@ -1,0 +1,87 @@
+<!doctype html>
+<!-- TEST FIXTURE ONLY (never shipped): hosts import-center-view.mjs with execution enabled in a real browser. The REAL P4-S2/S3/S4 engine (reader, Worker, validator, plan, run helpers) is used;
+     the commit CONTROLLER is a scriptable fake (the real controller is proven against the production Rules in controller.rules.test.mjs and in the emulator integration test), so every
+     UI state (progress, pause, denial, verification failure, recovery, rollback) can be provoked deterministically. Organization lookups, toast and download are faked too. -->
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>P4-S4 Import Center harness</title>
+<style id="app-css"></style></head>
+<body><div id="app" style="max-width:1000px;margin:0 auto;padding:16px"><div id="host"></div></div><div id="toast-root"></div>
+<script type="module">
+import { createImportCenter } from "/import-center-view.mjs";
+import { toBatchCreatePayload } from "/import-plan.mjs";
+
+const html = await (await fetch("/index.html")).text();
+document.getElementById("app-css").textContent = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n");
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const toast = (msg, type) => { H.toasts.push({ msg, type }); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const b64ToBytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+
+const H = {
+  toasts: [], store: new Map(), members: new Map(), caps: new Map(), calls: [], backs: 0, locks: { busy: false, held: 0, released: 0 },
+  incomplete: [], gates: {}, script: {}, engine: null, fakeBatchId: "FakeBatch0000000001", orgReads: 0,
+  org: (o) => { H.store.set(o.id, o); },
+  member: (m) => { H.members.set(m.organizationId + "_" + m.uid, m); },
+  capability: (c) => { H.caps.set(c.organizationId + "_" + c.uid, c); },
+  reset() { H.toasts.length = 0; H.store.clear(); H.members.clear(); H.caps.clear(); H.calls.length = 0; H.backs = 0; H.locks = { busy: false, held: 0, released: 0 }; H.incomplete = []; H.gates = {}; H.script = {}; H.fakeBatchId = "FakeBatch0000000001"; H.orgReads = 0; document.getElementById("host").innerHTML = ""; },
+  // a gate lets the test hold the fake commit/rollback at a phase and release it later
+  gate(name) { let open; const p = new Promise((r) => { open = r; }); H.gates[name] = { p, open }; return p; },
+  open(name) { H.gates[name] && H.gates[name].open(); },
+  // the stored batch document an earlier interrupted import of THIS file would have left behind (built with the real plan code)
+  async batchFor(b64, { batchId, orgId = "orgA", status = "committing", chunksDone = 0 } = {}) {
+    const engine = H.engine || (H.engine = await import("/import-center-engine.mjs"));
+    const bytes = b64ToBytes(b64);
+    const reading = await engine.createXlsxReader().readXlsx(new File([bytes], "tep.xlsx"), { fileName: "tep.xlsx" });
+    const result = engine.validateImport(reading);
+    const prepared = engine.prepareCommit(result.model, { organization: { id: orgId, status: "active" }, batchId, actorUid: "uid-admin" });
+    const data = toBatchCreatePayload(prepared.plan, { actorUid: "uid-admin", serverTimestamp: () => new Date("2026-10-09T03:04:00") });
+    return { id: batchId, ...data, status, chunksDone, createdAt: new Date("2026-10-09T03:04:00"), updatedAt: new Date("2026-10-09T03:04:00") };
+  },
+  async mount({ isAdmin = true, org, uid = "uid-admin", host = "host", commit = true, lock = "free" } = {}) {
+    const loadEngine = async () => {
+      const real = H.engine || (H.engine = await import("/import-center-engine.mjs"));
+      return { ...real, createImportCommitController: () => H.fake };
+    };
+    const absent = () => Object.assign(new Error("denied"), { code: "permission-denied" });
+    const organizationQueries = {
+      organizationById: async (db, id) => { H.orgReads++; const o = H.store.get(id); return o ? { ...o } : null; },
+      membershipOf: async (db, id, u) => { const m = H.members.get(id + "_" + u); if (!m) throw absent(); return { ...m }; },
+      capabilityOf: async (db, id, u) => { const c = H.caps.get(id + "_" + u); if (!c) throw absent(); return { ...c }; }
+    };
+    const commitTools = commit ? { firestore: { dummy: true }, acquireLock: async () => { if (H.locks.busy) return null; H.locks.held++; return () => { H.locks.released++; }; } } : undefined;
+    H.center = createImportCenter({
+      db: {}, actorUid: uid, isPlatformAdmin: isAdmin, esc, toast, organizationQueries, loadEngine, commitTools,
+      downloadFile: () => {}
+    });
+    await H.center.mount(document.getElementById(host), { organization: org, onBack: () => { H.backs++; } });
+  }
+};
+
+// ---- scriptable fake controller (same surface as createImportCommitController)
+H.fake = {
+  newBatchId: () => H.fakeBatchId,
+  findIncomplete: async (orgId) => { H.calls.push({ op: "findIncomplete", orgId }); if (H.script.findIncomplete) return H.script.findIncomplete(orgId); return H.incomplete.filter((b) => b.organizationId === orgId).map((b) => ({ ...b })); },
+  async commit(args) {
+    const { plan, organizationId, actorUid, authorize, onProgress, resume } = args;
+    H.calls.push({ op: "commit", batchId: plan.batch.id, organizationId, planOrganizationId: plan.organizationId, actorUid, resume, nodes: plan.nodes.length, frozen: Object.isFrozen(plan), digest: plan.planDigest, framework: plan.framework.name, planRef: plan });
+    const total = plan.nodes.length;
+    const emit = (e) => onProgress && onProgress({ nodesTotal: total, chunksTotal: plan.chunks.length, ...e });
+    if (H.script.commit) return H.script.commit({ plan, authorize, emit, args });
+    const auth = await authorize(); if (!auth.allowed) return { ok: false, state: "denied", reason: auth.reason };
+    emit({ phase: "batch", nodesWritten: 0 }); emit({ phase: "framework", nodesWritten: 0 }); emit({ phase: "nodes", nodesWritten: total, chunk: plan.chunks.length });
+    emit({ phase: "verify", nodesWritten: total, verified: total }); emit({ phase: "complete", nodesWritten: total, verified: total }); emit({ phase: "done", nodesWritten: total, verified: total });
+    H.incomplete = H.incomplete.filter((b) => b.id !== plan.batch.id);   // a completed batch is no longer incomplete
+    return { ok: true, state: "completed", batchId: plan.batch.id, nodesWritten: total, verification: { ok: true, counts: { expected: total, found: total, missing: 0, extra: 0, altered: 0 } }, eligibility: { eligible: true, errors: [] } };
+  },
+  async rollback(args) {
+    const { batchId, organizationId, authorize, onProgress } = args;
+    H.calls.push({ op: "rollback", batchId, organizationId });
+    if (H.script.rollback) return H.script.rollback({ authorize, emit: (e) => onProgress && onProgress(e), args });
+    const auth = await authorize(); if (!auth.allowed) return { ok: false, state: "denied" };
+    onProgress && onProgress({ phase: "rollback-nodes", nodesDeleted: 10 });
+    H.incomplete = H.incomplete.filter((b) => b.id !== batchId);
+    return { ok: true, state: "rolled_back", nodesDeleted: 10 };
+  }
+};
+window.__h = H;
+window.__ready = true;
+</script></body></html>

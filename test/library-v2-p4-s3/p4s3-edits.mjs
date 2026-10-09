@@ -1,6 +1,7 @@
 // P4-S3 edits to files that EARLIER slices pinned (index.html, curriculum-admin-view.mjs, organization-admin-view.mjs): the exact edits plus reversals that restore the previously
 // verified bytes (P3-S5 closure state, commit 61ce306 = P4-S2 closure), so every older byte-pin keeps its meaning and any OTHER change is still detected.
-// GENERATED from git diff -U0 against 61ce306 (see test/library-v2-p4-s3/source-guard.test.mjs, which pins these pairs and the resulting hashes). Imports nothing.
+// GENERATED from git diff -U0 against 61ce306 (see test/library-v2-p4-s3/source-guard.test.mjs, which pins these pairs and the resulting hashes). Imports only the P4-S4 reversal (newest edits first).
+import { reverseP4S4IndexEdits } from "../library-v2-p4-s4/p4s4-edits.mjs";   // P4-S4 aligned
 const NL = String.fromCharCode(10), CRLF = String.fromCharCode(13, 10);
 export const withNl = (s, crlf) => (crlf ? s.split(NL).join(CRLF) : s);
 function transform(source, edits, label, direction) {
@@ -87,6 +88,6 @@ export const ORG_VIEW_EDITS_P4S3 = [
   ""
  ]
 ];
-export const reverseP4S3IndexEdits = (src) => transform(src, INDEX_EDITS_P4S3, "P4-S3 index.html", "reverse");
+export const reverseP4S3IndexEdits = (src) => transform(reverseP4S4IndexEdits(src), INDEX_EDITS_P4S3, "P4-S3 index.html", "reverse");   // P4-S4 aligned: the chain starts with the (newer) P4-S4 edits
 export const reverseP4S3SectionViewEdits = (src) => transform(src, SECTION_VIEW_EDITS_P4S3, "P4-S3 curriculum-admin-view", "reverse");
 export const reverseP4S3OrgViewEdits = (src) => transform(src, ORG_VIEW_EDITS_P4S3, "P4-S3 organization-admin-view", "reverse");

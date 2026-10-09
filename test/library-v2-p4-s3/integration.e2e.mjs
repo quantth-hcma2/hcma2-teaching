@@ -166,8 +166,9 @@ try {
     assert.match(await text("#impVerdict"), /Tệp hợp lệ, không có lỗi hay cảnh báo\./); assert.equal(await text('[data-prev="counts"]'), "3 môn · 7 bài · 10 mục"); assert.equal(await text('[data-prev="org"]'), "Khoa Quản trị");
     assert.match(await text("#impPreviewSummary"), /khoa-quan-tri · orgMain/); assert.equal(await count("[data-subject-key]"), 3); assert.equal(await count('[data-kind="lesson"]'), 7);
     assert.equal(await text('[data-plan="documents"]'), "12"); assert.equal(await text('[data-plan="chunks"]'), "1 đợt");
-    assert.equal(await page.locator("#impConfirmDisabled").isDisabled(), true); assert.match(await text("#impConfirmHint"), /Chức năng nhập dữ liệu chưa được bật/);
-    await page.click("#impConfirmDisabled", { force: true, timeout: 2000 }).catch(() => {});
+    // P4-S4 aligned: the S3 disabled placeholder was replaced by the confirm card; the control is disabled until the explicit acknowledgement and THIS test never acknowledges or clicks it (read-only flow)
+    assert.equal(await page.locator("#impConfirmBtn").isDisabled(), true); assert.equal(await count("#impConfirmDisabled"), 0);
+    await page.click("#impConfirmBtn", { force: true, timeout: 2000 }).catch(() => {});
     await shot(page, "03-preview");
   });
 

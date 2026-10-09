@@ -4,12 +4,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { reverseP4S4IndexEdits } from "../library-v2-p4-s4/p4s4-edits.mjs";   // P4-S4 aligned: index.html is read with the P4-S4 edits reversed, so every assertion below keeps describing the bytes of its own slice
 import { reverseS4ModelEdits, reverseS4SectionViewEdits, reverseS4AdminViewEdits, MODEL_EDITS, SECTION_VIEW_EDITS, ADMIN_VIEW_EDITS_S4 } from "./s4-edits.mjs";
 import { reverseP4S3OrgViewEdits } from "../library-v2-p4-s3/p4s3-edits.mjs";   // P4-S3 aligned: the S4 organization-admin-view assertions describe the S4 bytes, i.e. with the P4-S3 edits reversed
 
 const root = new URL("../../", import.meta.url);
-const text = (p) => readFileSync(new URL(p, root), "utf8");
-const sha = (p) => createHash("sha256").update(readFileSync(new URL(p, root))).digest("hex");
+const text = (p) => (p === "index.html" ? reverseP4S4IndexEdits(readFileSync(new URL(p, root), "utf8")) : readFileSync(new URL(p, root), "utf8"));
+const sha = (p) => createHash("sha256").update(p === "index.html" ? Buffer.from(reverseP4S4IndexEdits(readFileSync(new URL(p, root), "utf8")), "utf8") : readFileSync(new URL(p, root))).digest("hex");
 const shaText = (t) => createHash("sha256").update(Buffer.from(t, "utf8")).digest("hex");
 const count = (src, token) => src.split(token).length - 1;
 

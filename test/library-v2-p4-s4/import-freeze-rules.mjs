@@ -1,0 +1,37 @@
+// TEST-ONLY (NEVER shipped, never deployed): the FINAL PROPOSED "import freeze" Rules amendment (Architect design gate) applied to an in-memory COPY of the production Rules artifact.
+// Supersedes amended-rules.mjs (first proposal: importer-only while committing - rejected because recovery must not be tied to the original importer).
+//
+// STATE MACHINE USED AS THE LOCK (no new status, no new field): the paired importBatches/{fwId} document
+//   committing, chunksDone <  chunksTotal   "importing"  : node CREATE only, id shaped like an import node id (32 lower-case hex); no node update/delete; no framework update/delete
+//   committing, chunksDone == chunksTotal   "sealed"     : every chunk is declared written - NO node create/update/delete, NO framework update/delete (nodes cannot change until the batch leaves committing)
+//   partial                                 "cleanup"    : node DELETE and framework DELETE only (rollback by any authorized writer); no create/update
+//   completed                               ordinary P3 draft (everything as before);   rolled_back: orphan node delete only
+// A framework WITHOUT a batch is unaffected (every ordinary P3 framework). Activation and clone of incomplete imports stay denied by P4-S1; batch rules are NOT touched
+// (committing -> partial is the barrier: it is already open to every authorized writer and is atomic with respect to every other write).
+export const FREEZE_ANCHORS = [
+  ["    function importIntIn(v, lo, hi) { return v is int && v >= lo && v <= hi; }\n",
+   "    function importIntIn(v, lo, hi) { return v is int && v >= lo && v <= hi; }\n" +
+   "    // P4-S4 import freeze: the paired batch is the lock. 'sealed' = committing with chunksDone == chunksTotal.\n" +
+   "    function importNodeCreateOk(fwId, nodeId) {\n" +
+   "      return !exists(importPath(fwId)) ||\n" +
+   "        get(importPath(fwId)).data.status == 'completed' ||\n" +
+   "        (get(importPath(fwId)).data.status == 'committing' && get(importPath(fwId)).data.chunksDone < get(importPath(fwId)).data.chunksTotal && nodeId.matches('^[0-9a-f]{32}$'));\n" +
+   "    }\n" +
+   "    function importNodeUpdateOk(fwId) { return !exists(importPath(fwId)) || get(importPath(fwId)).data.status == 'completed'; }\n" +
+   "    function importNodeDeleteOk(fwId) { return !exists(importPath(fwId)) || get(importPath(fwId)).data.status in ['completed', 'partial', 'rolled_back']; }\n" +
+   "    function importFrameworkUpdateOk(fwId) { return !exists(importPath(fwId)) || get(importPath(fwId)).data.status == 'completed'; }\n" +
+   "    function importFrameworkDeleteOk(fwId) { return !exists(importPath(fwId)) || get(importPath(fwId)).data.status in ['completed', 'partial']; }\n"],
+  ["importAllowsActivation(fwId, resource.data.organizationId));", "importAllowsActivation(fwId, resource.data.organizationId)) &&\n        importFrameworkUpdateOk(fwId);"],
+  ["        !('activatedAt' in resource.data) &&\n        mayWriteCurriculum(resource.data.organizationId);", "        !('activatedAt' in resource.data) &&\n        mayWriteCurriculum(resource.data.organizationId) &&\n        importFrameworkDeleteOk(fwId);"],
+  ["          nodeParent().status in ['draft', 'active'] &&\n          mayWriteCurriculum(request.resource.data.organizationId);", "          nodeParent().status in ['draft', 'active'] &&\n          mayWriteCurriculum(request.resource.data.organizationId) &&\n          importNodeCreateOk(fwId, nodeId);"],
+  ["          nodeParent().status in ['draft', 'active'] &&\n          mayWriteCurriculum(resource.data.organizationId);", "          nodeParent().status in ['draft', 'active'] &&\n          mayWriteCurriculum(resource.data.organizationId) &&\n          importNodeUpdateOk(fwId);"],
+  ["            (nodeParent().status == 'draft' && !('activatedAt' in nodeParent())));", "            (nodeParent().status == 'draft' && !('activatedAt' in nodeParent()))) &&\n          importNodeDeleteOk(fwId);"]
+];
+export function freezeRules(rules) {
+  let out = rules;
+  for (const [anchor, replacement] of FREEZE_ANCHORS) {
+    if (out.split(anchor).length !== 2) throw new Error("freeze anchor must occur exactly once: " + anchor.slice(0, 70));
+    out = out.replace(anchor, () => replacement);
+  }
+  return out;
+}

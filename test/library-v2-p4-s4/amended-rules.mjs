@@ -1,3 +1,4 @@
+// SUPERSEDED (Architect design gate): the importer-only first proposal below was replaced by import-freeze-rules.mjs, because recovery must not be tied to the original importer. Kept as evidence for the safety-review tests.
 // TEST-ONLY evidence for the Architect (NEVER shipped, never deployed): the PROPOSED minimal Rules amendment applied to an in-memory COPY of the production Rules artifact.
 // It is used only by the emulator probes in this folder to show what the amendment would close and whether the call budget still holds. The repository Rules file is not touched.
 //

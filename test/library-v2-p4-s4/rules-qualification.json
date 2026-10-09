@@ -1,0 +1,63 @@
+{
+  "baselineSha256": "7F7C790E403762800DC27879FF851CB875064D8A02076B2A4F7F3C7163510485",
+  "amendedSha256": "FEB9F69995C141B5B6502C9B190EEE3D836C2CAAC0A50F1180EE1A41ED738722",
+  "matrix": {
+    "total": 120,
+    "pass": 120,
+    "fail": 0,
+    "failures": []
+  },
+  "headroom": {
+    "nodeCreateHex": {
+      "production": 26,
+      "amended": 22
+    },
+    "nodeUpdate": {
+      "production": 24,
+      "amended": 23
+    },
+    "nodeDelete": {
+      "production": 36,
+      "amended": 34
+    },
+    "fwUpdate": {
+      "production": 26,
+      "amended": 25
+    },
+    "fwDelete": {
+      "production": 38,
+      "amended": 36
+    },
+    "importBatchesUpdateCompleted": {
+      "production": 3,
+      "amended": 3
+    }
+  },
+  "productionControl": {
+    "nodeUpdate": [
+      "SUCCESS",
+      "SUCCESS",
+      "SUCCESS"
+    ],
+    "nodeDelete": [
+      "SUCCESS",
+      "SUCCESS",
+      "SUCCESS"
+    ],
+    "fwUpdate": [
+      "SUCCESS",
+      "SUCCESS",
+      "SUCCESS"
+    ],
+    "fwDelete": [
+      "SUCCESS",
+      "SUCCESS",
+      "SUCCESS"
+    ],
+    "nodeCreateAuto": [
+      "SUCCESS",
+      "SUCCESS",
+      "SUCCESS"
+    ]
+  }
+}

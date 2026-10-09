@@ -16,11 +16,13 @@ const mapError = (e) => "Lỗi: " + (e && e.code || "không rõ");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const H = {
-  downloads: [], toasts: [], orgReads: [], engineLoads: 0, backs: 0, store: new Map(), readerCalls: 0, delays: { read: 0, org: 0 },
+  downloads: [], toasts: [], orgReads: [], engineLoads: 0, backs: 0, store: new Map(), members: new Map(), caps: new Map(), accessReads: [], readerCalls: 0, delays: { read: 0, org: 0 },
   org: (o) => { H.store.set(o.id, o); },
-  reset() { H.downloads.length = 0; H.toasts.length = 0; H.orgReads.length = 0; H.engineLoads = 0; H.backs = 0; H.store.clear(); H.readerCalls = 0; H.delays = { read: 0, org: 0 }; document.getElementById("toast-root").innerHTML = ""; document.getElementById("host").innerHTML = ""; },
+  member: (m) => { H.members.set(m.organizationId + "_" + m.uid, m); },
+  capability: (c) => { H.caps.set(c.organizationId + "_" + c.uid, c); },
+  reset() { H.downloads.length = 0; H.toasts.length = 0; H.orgReads.length = 0; H.engineLoads = 0; H.backs = 0; H.store.clear(); H.members.clear(); H.caps.clear(); H.accessReads.length = 0; H.readerCalls = 0; H.delays = { read: 0, org: 0 }; document.getElementById("toast-root").innerHTML = ""; document.getElementById("host").innerHTML = ""; },
   // mode: real | noCaps | engineFailOnce | readerUnsupported | slowReader
-  async mount({ isAdmin = true, org, mode = "real", host = "host" } = {}) {
+  async mount({ isAdmin = true, org, mode = "real", host = "host", uid = "uid-admin", accountActive = true } = {}) {
     let failedOnce = false;
     const loadEngine = async () => {
       H.engineLoads++;
@@ -38,9 +40,15 @@ const H = {
         return real.readXlsx(file, options);
       } };
     };
-    const organizationQueries = { organizationById: async (db, id) => { H.orgReads.push(id); if (H.delays.org) await sleep(H.delays.org); const o = H.store.get(id); return o ? { ...o } : null; } };
+    // like the Rules for a non-admin: a missing OWN document answers permission-denied (the view must treat it as absent)
+    const absent = () => Object.assign(new Error("denied"), { code: "permission-denied" });
+    const organizationQueries = {
+      organizationById: async (db, id) => { H.orgReads.push(id); if (H.delays.org) await sleep(H.delays.org); const o = H.store.get(id); return o ? { ...o } : null; },
+      membershipOf: async (db, id, u) => { H.accessReads.push(["membership", id, u]); if (H.failNextMembership) { H.failNextMembership = false; throw Object.assign(new Error("unavailable"), { code: "unavailable" }); } const m = H.members.get(id + "_" + u); if (!m) throw absent(); return { ...m }; },
+      capabilityOf: async (db, id, u) => { H.accessReads.push(["capability", id, u]); const c = H.caps.get(id + "_" + u); if (!c) throw absent(); return { ...c }; }
+    };
     H.center = createImportCenter({
-      db: {}, actorUid: "uid-admin", isPlatformAdmin: isAdmin, esc, toast, mapError, organizationQueries, loadEngine, makeReader,
+      db: {}, actorUid: uid, accountActive, isPlatformAdmin: isAdmin, esc, toast, mapError, organizationQueries, loadEngine, makeReader,
       downloadFile: (bytes, fileName, mime) => { H.downloads.push({ fileName, mime, size: bytes.length, b64: btoa(String.fromCharCode(...bytes)) }); }
     });
     await H.center.mount(document.getElementById(host), { organization: org, onBack: () => { H.backs++; } });

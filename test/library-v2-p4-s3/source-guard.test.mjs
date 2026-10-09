@@ -95,3 +95,15 @@ test("WIRING: the engine is imported ONLY dynamically (lazy); the view and the t
   assert.equal([...html.matchAll(/getAdminFeature\("organizations"\)\.routeKey, label:"Đơn vị"/g)].length, 1, "no new menu entry");
   assert.ok(html.includes("function downloadImportFile(bytes,fileName,mime)") && html.includes("function downloadBlob(filename, content, mime)"), "the V1 download helper is untouched next to the new one");
 });
+test("ACCESS: the Import Center authorization reuses the approved capability vocabulary and the existing organization queries; it is a mirror of the deployed Rules helpers, not a new model", async () => {
+  const { IMPORT_ACCESS_CAPABILITY } = await import("../../import-center-view.mjs");
+  const { CAPABILITIES } = await import("../../organization-write-contract.mjs");
+  assert.ok(CAPABILITIES.includes(IMPORT_ACCESS_CAPABILITY) && IMPORT_ACCESS_CAPABILITY === "curriculum.manage");
+  const rules = text("firestore.rules.production-candidate");
+  assert.ok(rules.includes("function mayReadCurriculum(orgId) { return orgGoverns(orgId) || hasOrgCap(orgId, 'curriculum.manage'); }"));
+  assert.ok(rules.includes("function mayWriteCurriculum(orgId) { return orgActive(orgId) && hasOrgCap(orgId, 'curriculum.manage'); }"));
+  const view = code("import-center-view.mjs");
+  assert.equal([...view.matchAll(/"curriculum\.manage"/g)].length, 1, "the capability name is a quoted literal exactly once (the constant)");
+  assert.ok(/organizationQueries\.membershipOf/.test(view) && /organizationQueries\.capabilityOf/.test(view) && /organizationQueries\.organizationById/.test(view), "authorization reads go through the existing organization queries");
+  assert.ok(!/\busers\b|userCapabilities|organizationMembers/.test(view.replace(/"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g, '""')), "no collection name in code");
+});

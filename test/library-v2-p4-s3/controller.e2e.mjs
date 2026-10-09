@@ -36,7 +36,7 @@ const ev = (fn, arg) => page.evaluate(fn, arg);
 const text = (sel) => ev((s) => (document.querySelector(s)?.textContent || "").replace(/\s+/g, " ").trim(), sel);
 const count = (sel) => page.locator(sel).count();
 const ORG = (extra = {}) => ({ id: "orgA", name: "Khoa Quản trị", code: "khoa-quan-tri", status: "active", ...extra });
-const mount = async (opts = {}) => { await ev(async (o) => { const h = window.__h; if (!o.keep) h.reset(); if (o.org) h.org(o.org); await h.mount(o); }, { keep: false, ...opts, org: opts.org === undefined ? ORG() : opts.org }); };
+const mount = async (opts = {}) => { await ev(async (o) => { const h = window.__h; if (!o.keep) h.reset(); if (o.org) h.org(o.org); for (const m of o.members || []) h.member(m); for (const c of o.caps || []) h.capability(c); await h.mount(o); }, { keep: false, ...opts, org: opts.org === undefined ? ORG() : opts.org }); };
 const file = (name, bytes) => ({ name, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from(bytes) });
 const choose = async (f) => { await page.setInputFiles("#impFile", f); await page.waitForSelector("#impResults, #impFailed, #impUnsupported[data-after-read]", { timeout: 60000 }).catch(() => {}); await page.waitForFunction(() => !document.querySelector("#impReading"), null, { timeout: 60000 }); };
 const downloads = () => ev(() => window.__h.downloads);
@@ -49,15 +49,6 @@ const manyErrors = workbookBytes({ subjects: D(250).map((i) => [null, "Môn " + 
 const big = (() => { const subjects = D(50).map((i) => ["S" + i, "Môn số " + i, i]); const lessons = []; for (let s = 0; s < 50; s++) for (let l = 0; l < 99; l++) lessons.push(["S" + s, "S" + s + "-B" + l, "Bài " + l + " của môn " + s, l]); return workbookBytes({ subjects, lessons }); })();
 
 try {
-  await step("ACCESS: a non-admin sees only the denied view; the engine/reader are NOT requested; an organization-less mount is refused", async () => {
-    requests.length = 0;
-    await mount({ isAdmin: false });
-    assert.equal(await count("#impDenied"), 1); assert.match(await text("#host"), /Chỉ quản trị viên hệ thống/); assert.equal(await count("#impFile, #impTemplateBlank"), 0);
-    assert.equal(await ev(() => window.__h.engineLoads), 0); assert.equal(await ev(() => window.__h.orgReads.length), 0);
-    assert.ok(!requests.some((r) => /import-center-engine|import-xlsx|sheetjs/.test(r.url)), "nothing lazy was loaded");
-    await mount({ org: null }); assert.equal(await count("#impDenied"), 1);
-  });
-
   await step("MOUNT (admin): the engine loads lazily on open (reader code yes, SheetJS no); organization name, code and id are shown and fixed; Quay lại works; template + file cards present", async () => {
     requests.length = 0;
     await mount({});
@@ -72,6 +63,64 @@ try {
     assert.equal(await count("#impConfirmDisabled"), 0, "no confirm action before a valid preview");
     await page.click("#impBack"); assert.equal(await ev(() => window.__h.backs), 1);
     await shot("01-open");
+  });
+
+  await step("ACCESS MATRIX (approved P2/P3 contract): Platform Admin, Organization Admin and an active member with curriculum.manage get the Import Center; unprivileged members, suspended members, outsiders and capability-less accounts see only a Vietnamese denial; the engine and the reader are NOT requested for a denied principal", async () => {
+    const M = (uid, extra = {}) => ({ organizationId: "orgA", uid, orgRole: "member", status: "active", ...extra });
+    const C = (uid, caps, denied = [], extra = {}) => ({ organizationId: "orgA", uid, caps, denied, ...extra });
+    const denied = [
+      ["outsider (no membership)", { uid: "u-out" }, "NOT_MEMBER"],
+      ["unprivileged member (no capability document)", { uid: "u-m", members: [M("u-m")] }, "NO_CAPABILITY"],
+      ["member holding only another capability", { uid: "u-r", members: [M("u-r")], caps: [C("u-r", ["library.review"])] }, "NO_CAPABILITY"],
+      ["member whose curriculum.manage is explicitly denied", { uid: "u-d", members: [M("u-d")], caps: [C("u-d", ["curriculum.manage"], ["curriculum.manage"])] }, "NO_CAPABILITY"],
+      ["suspended member with the capability", { uid: "u-s", members: [M("u-s", { status: "suspended" })], caps: [C("u-s", ["curriculum.manage"])] }, "MEMBERSHIP_INACTIVE"],
+      ["removed organization admin", { uid: "u-x", members: [M("u-x", { status: "removed", orgRole: "org_admin" })] }, "MEMBERSHIP_INACTIVE"],
+      ["another organization's membership", { uid: "u-o", members: [M("u-o", { organizationId: "orgB" })], caps: [C("u-o", ["curriculum.manage"], [], { organizationId: "orgB" })] }, "NOT_MEMBER"],
+      ["inactive account", { uid: "u-i", accountActive: false, members: [M("u-i", { orgRole: "org_admin" })] }, "ACCOUNT_INACTIVE"]
+    ];
+    for (const [label, who, reason] of denied) {
+      requests.length = 0;
+      await mount({ isAdmin: false, ...who });
+      assert.equal(await count("#impDenied"), 1, label); assert.equal(await ev(() => document.querySelector("#impDenied").dataset.reason), reason, label);
+      assert.equal(await count("#impFile, #impTemplateBlank, #impOrg"), 0, label + ": no panel"); assert.doesNotMatch(await text("#host"), /Khoa Quản trị/, label + ": the organization name is not shown to a denied principal");
+      assert.equal(await ev(() => window.__h.engineLoads), 0, label + ": engine not loaded"); assert.equal(await ev(() => window.__h.readerCalls), 0);
+      assert.ok(!requests.some((r) => /import-center-engine|import-xlsx|sheetjs/.test(r.url)), label + ": nothing lazy was fetched");
+    }
+    assert.match(await text("#impDenied"), /Tài khoản của bạn hiện không hoạt động/);
+    const allowed = [
+      ["Organization Admin", { uid: "u-a", members: [M("u-a", { orgRole: "org_admin" })] }, ["membership"]],
+      ["member with curriculum.manage", { uid: "u-c", members: [M("u-c")], caps: [C("u-c", ["library.review", "curriculum.manage"])] }, ["membership", "capability"]]
+    ];
+    for (const [label, who, reads] of allowed) {
+      await mount({ isAdmin: false, ...who });
+      assert.equal(await count("#impDenied"), 0, label); assert.equal(await count("#impOrg"), 1, label); assert.match(await text("#impOrgName"), /Khoa Quản trị/);
+      assert.equal(await count("#impTemplateBlank"), 1); assert.equal(await count("#impFile:not([disabled])"), 1, label + ": the file chooser is enabled for an active organization");
+      assert.deepEqual(await ev(() => window.__h.accessReads.map((r) => r[0])), reads, label + ": only the user's OWN membership (and capability for an ordinary member) was read");
+      assert.equal(await ev(() => window.__h.engineLoads), 1);
+      assert.equal(await count("#impConfirmDisabled[disabled]"), 0, "confirm is only rendered with a preview");
+    }
+    // archived: Organization Admin may open (read-only governance) but cannot prepare; a capability holder is denied outright
+    await mount({ isAdmin: false, uid: "u-a", org: ORG({ status: "archived" }), members: [M("u-a", { orgRole: "org_admin" })] });
+    assert.equal(await count("#impDenied"), 0); assert.equal(await count("#impOrgArchived"), 1); assert.equal(await count("#impFile[disabled]"), 1); assert.equal(await count("#impTemplateBlank:not([disabled])"), 1);
+    await mount({ isAdmin: false, uid: "u-c", org: ORG({ status: "archived" }), members: [M("u-c")], caps: [C("u-c", ["curriculum.manage"])] });
+    assert.equal(await ev(() => document.querySelector("#impDenied").dataset.reason), "ORGANIZATION_ARCHIVED"); assert.equal(await count("#impFile, #impTemplateBlank"), 0);
+    // Platform Admin: no membership or capability reads at all
+    await mount({ isAdmin: true });
+    assert.equal(await count("#impDenied"), 0); assert.deepEqual(await ev(() => window.__h.accessReads), []);
+    await mount({ isAdmin: true, accountActive: false }); assert.equal(await ev(() => document.querySelector("#impDenied").dataset.reason), "ACCOUNT_INACTIVE");
+    await mount({ org: null }); assert.equal(await count("#impDenied"), 1);
+  });
+
+  await step("ACCESS CHECK FAILURE: a transient failure shows a retry (never access); THỬ LẠI recovers and then applies the real decision", async () => {
+    await ev(async () => {
+      const h = window.__h; h.reset(); h.org({ id: "orgA", name: "Khoa Quản trị", code: "khoa-quan-tri", status: "active" });
+      h.member({ organizationId: "orgA", uid: "u-c", orgRole: "member", status: "active" }); h.capability({ organizationId: "orgA", uid: "u-c", caps: ["curriculum.manage"], denied: [] });
+    });
+    await ev(async () => { const h = window.__h; h.failNextMembership = true; await h.mount({ isAdmin: false, uid: "u-c", org: { id: "orgA", name: "Khoa Quản trị", code: "khoa-quan-tri", status: "active" } }); });
+    assert.equal(await count("#impAccessFailed"), 1); assert.equal(await count("#impFile, #impTemplateBlank, #impDenied"), 0); assert.equal(await ev(() => window.__h.engineLoads), 0);
+    await page.click("#impAccessRetry");
+    await page.waitForSelector("#impFile", { timeout: 15000 });
+    assert.equal(await count("#impAccessFailed"), 0); assert.match(await text("#impOrgName"), /Khoa Quản trị/);
   });
 
   await step("TEMPLATE CENTER: both downloads are generated locally with the right names and mime; the bytes RE-IMPORT through the approved pipeline (example = valid 3/7/10, blank = structure OK)", async () => {
@@ -100,7 +149,7 @@ try {
     assert.equal(await ev(() => document.activeElement && document.activeElement.id), "impResultTitle");
     assert.match(await text("#impFileLine"), /HCMA2_mau_khung_chuong_trinh_v1_co_vi_du\.xlsx/);
     assert.equal(await text('[data-prev="org"]'), "Khoa Quản trị"); assert.match(await text("#impPreviewSummary"), /khoa-quan-tri.*orgA/);
-    assert.match(await text('[data-prev="framework"]'), /Khung ví dụ: Nghiệp vụ văn phòng/); assert.match(await text("#impPreviewSummary"), /Mã khung: chưa có/);
+    assert.match(await text('[data-prev="framework"]'), /Khung ví dụ: Nghiệp vụ văn phòng/); assert.match(await text("#impPreviewSummary"), /Mã khung: không áp dụng/);
     assert.equal(await text('[data-prev="counts"]'), "3 môn · 7 bài · 10 mục"); assert.match(await text("#impPreviewSummary"), /9 mục có mã · 1 mục không mã/);
     assert.equal(await count("[data-subject-key]"), 3); assert.equal(await count('[data-kind="lesson"]'), 7, "small framework: subjects open by default");
     const subjects = await ev(() => [...document.querySelectorAll("[data-subject-key]")].map((li) => li.querySelector("div div").textContent.replace(/\s+/g, " ").trim()));

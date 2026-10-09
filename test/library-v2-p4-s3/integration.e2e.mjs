@@ -79,6 +79,9 @@ async function login(p, email) {
   await p.waitForSelector("#loginEmail", { timeout: 60000 });
   await p.fill("#loginEmail", email); await p.fill("#loginPass", PASS); await p.click("#loginBtn");
   await p.waitForSelector(".navlink", { timeout: 60000 });
+  // Readiness, not a delay: the Admin landing page (adminOverview) finishes asynchronously and, if the test navigates away first, its late write replaces whatever screen was opened
+  // meanwhile (that was the first-load flake). Wait until the overview has fully rendered (tiles present and the pending-teacher list no longer loading) before the first navigation.
+  if (email === ADMIN) await p.waitForFunction(() => { const pending = document.querySelector("#ovPending"); return !!document.querySelector("#ovGrid .stat") && !!pending && !/Đang tải/.test(pending.textContent || ""); }, null, { timeout: 60000 });
 }
 const openOrgs = async () => { await page.click('[data-nav="organizations"]'); await page.waitForSelector("#orgCreateBtn, #orgBackBtn, #orgRetryBtn", { timeout: 30000 }); };
 const openCreate = async () => { await page.click("#orgCreateBtn"); await page.waitForSelector("#orgCreateName"); };

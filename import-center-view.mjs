@@ -15,12 +15,63 @@ export const DIAGNOSTIC_PAGE = 100;                      // mirrors IMPORT_LIMIT
 export const LESSON_PAGE = 100;
 export const TREE_COLLAPSE_ABOVE = 60;                   // same constant as the P3-S4 editor
 
+// ================================================================ 0. access (the approved P2/P3 authorization contract - NOT a new permission model)
+// This is the client mirror of the deployed Rules helpers that guard curriculum: mayReadCurriculum = orgGoverns || hasOrgCap(org, 'curriculum.manage') and
+// mayWriteCurriculum = orgActive && hasOrgCap(...) (P3-S1), where hasOrgCap = Platform Admin || (active account + active membership + active organization + (org_admin || the
+// capability granted and not denied)). The Rules stay the authority; this only decides what the UI offers. Parity with the Rules is proven by test/library-v2-p4-s3/access.rules.test.mjs.
+//   allowed    = may open the Import Center for this organization (== mayReadCurriculum)
+//   canPrepare = may check a file and see a preview (== mayWriteCurriculum: the organization must be ACTIVE; an archived organization never prepares an import)
+export const IMPORT_ACCESS_CAPABILITY = "curriculum.manage";
+export function resolveImportAccess({ isPlatformAdmin = false, accountActive = true, actorUid, organization, membership, capability } = {}) {
+  const deny = (reason) => freeze({ allowed: false, canPrepare: false, role: null, reason });
+  if (!organization || typeof organization.id !== "string" || !organization.id) return deny("NO_ORGANIZATION");
+  if (accountActive !== true) return deny("ACCOUNT_INACTIVE");
+  const orgActive = organization.status === "active";
+  if (isPlatformAdmin === true) return freeze({ allowed: true, canPrepare: orgActive, role: "platform_admin", reason: orgActive ? null : "ORGANIZATION_ARCHIVED" });
+  if (!membership || membership.organizationId !== organization.id || typeof actorUid !== "string" || !actorUid || membership.uid !== actorUid) return deny("NOT_MEMBER");
+  if (membership.status !== "active") return deny("MEMBERSHIP_INACTIVE");
+  if (membership.orgRole === "org_admin") return freeze({ allowed: true, canPrepare: orgActive, role: "org_admin", reason: orgActive ? null : "ORGANIZATION_ARCHIVED" });   // governance survives archiving (read-only)
+  if (membership.orgRole !== "member") return deny("NOT_MEMBER");
+  if (!orgActive) return deny("ORGANIZATION_ARCHIVED");                                                                     // a capability holder has no access in an archived organization
+  const caps = capability && capability.organizationId === organization.id && capability.uid === actorUid && Array.isArray(capability.caps) ? capability.caps : [];
+  const denied = capability && Array.isArray(capability.denied) ? capability.denied : [];
+  if (caps.includes(IMPORT_ACCESS_CAPABILITY) && !denied.includes(IMPORT_ACCESS_CAPABILITY)) return freeze({ allowed: true, canPrepare: true, role: "capability_holder", reason: null });
+  return deny("NO_CAPABILITY");
+}
+const isMissing = (error) => !!error && (error.code === "permission-denied" || error.code === "not-found");   // for a non-admin the Rules answer a missing own document with permission-denied
+// Reads exactly what the decision needs through the EXISTING organization queries (the organization, the user's OWN membership and, for an ordinary member, the user's OWN capability).
+// Fail closed: a transient failure throws Error("ACCESS_CHECK_FAILED") (the caller shows a retry, never access).
+export async function loadImportAccess({ db, organizationQueries, actorUid, organizationId, isPlatformAdmin = false } = {}) {
+  if (!organizationQueries || typeof organizationQueries.organizationById !== "function" || !db) throw new Error("ACCESS_CHECK_FAILED");
+  const read = async (fn, ...args) => { try { return (await fn(db, ...args)) || null; } catch (error) { if (isMissing(error)) return null; throw new Error("ACCESS_CHECK_FAILED"); } };
+  const organization = await read(organizationQueries.organizationById, organizationId);
+  if (!organization || isPlatformAdmin === true) return { organization, membership: null, capability: null };
+  if (typeof organizationQueries.membershipOf !== "function") throw new Error("ACCESS_CHECK_FAILED");
+  const membership = await read(organizationQueries.membershipOf, organizationId, actorUid);
+  let capability = null;
+  if (membership && membership.status === "active" && membership.orgRole === "member") {
+    if (typeof organizationQueries.capabilityOf !== "function") throw new Error("ACCESS_CHECK_FAILED");
+    capability = await read(organizationQueries.capabilityOf, organizationId, actorUid);
+  }
+  return { organization, membership, capability };
+}
+
 // ================================================================ 1. pure helpers
 export function createImportViewHelpers() {
   const attr = (esc, v) => esc(String(v == null ? "" : v));
 
+  const DENIED_REASONS = freeze({
+    NO_ORGANIZATION: "Không xác định được đơn vị để nhập chương trình.",
+    ACCOUNT_INACTIVE: "Tài khoản của bạn hiện không hoạt động nên không thể dùng chức năng nhập chương trình.",
+    NOT_MEMBER: "Bạn không có quyền dùng chức năng nhập chương trình của đơn vị này.",
+    MEMBERSHIP_INACTIVE: "Tư cách thành viên của bạn trong đơn vị này không còn hiệu lực.",
+    NO_CAPABILITY: "Bạn cần được cấp quyền quản lý chương trình (curriculum.manage) trong đơn vị này để nhập chương trình.",
+    ORGANIZATION_ARCHIVED: "Đơn vị đã lưu trữ: không thể chuẩn bị nhập chương trình."
+  });
   const MESSAGES = freeze({
-    denied: "Chỉ quản trị viên hệ thống mới được dùng chức năng nhập chương trình.",
+    denied: "Bạn không có quyền dùng chức năng nhập chương trình của đơn vị này.",
+    checkingAccess: "Đang kiểm tra quyền truy cập…",
+    accessCheckFailed: "Không kiểm tra được quyền truy cập lúc này. Hãy thử lại.",
     archived: "Đơn vị đã lưu trữ: không thể kiểm tra hoặc nhập tệp mới. Hãy khôi phục đơn vị trước. Bạn vẫn có thể tải tệp mẫu.",
     engineFailed: "Không tải được bộ đọc tệp Excel. Hãy kiểm tra kết nối mạng rồi thử lại.",
     readFailed: "Không thể đọc tệp này. Hãy thử lại hoặc dùng tệp mẫu của hệ thống.",
@@ -247,7 +298,7 @@ export function createImportViewHelpers() {
       <p class="mut mt-8">Khung mới sẽ được tạo ở trạng thái <b>Bản nháp</b> trong đơn vị <b>${esc(organization.name || "—")}</b>. ${esc(MESSAGES.notWritten)}</p>
       <div class="grid grid-3 mt-8" id="impPreviewSummary">
         <div><div class="small mut">Đơn vị</div><b data-prev="org">${esc(organization.name || "—")}</b><div class="small mut"><code>${esc(organization.code || "—")}</code> · <code>${esc(organization.id)}</code></div></div>
-        <div><div class="small mut">Tên khung</div><b data-prev="framework" style="overflow-wrap:anywhere">${esc(frameworkName)}</b>${orig}<div class="small mut">Mã khung: chưa có (mẫu v1 không có cột mã khung; hệ thống cấp mã nội bộ khi nhập thật)</div></div>
+        <div><div class="small mut">Tên khung</div><b data-prev="framework" style="overflow-wrap:anywhere">${esc(frameworkName)}</b>${orig}<div class="small mut">Mã khung: không áp dụng (khung chương trình chỉ có tên; mã nghiệp vụ nằm ở từng môn và bài)</div></div>
         <div><div class="small mut">Quy mô</div><b data-prev="counts">${preview.subjectCount} môn · ${preview.lessonCount} bài · ${preview.total} mục</b><div class="small mut">${preview.withCode} mục có mã · ${preview.withoutCode} mục không mã · ${warningCount} cảnh báo</div></div></div>
       <div class="flex-between mt-14" style="flex-wrap:wrap;gap:8px"><h4 style="margin:0">Cây Môn → Bài</h4><div class="flex gap-8"><button class="btn btn-outline" type="button" data-imp-action="open-all">MỞ TẤT CẢ</button><button class="btn btn-outline" type="button" data-imp-action="close-all">THU GỌN TẤT CẢ</button></div></div>
       ${preview.collapseByDefault ? `<p class="small mut mt-8">Khung lớn (${preview.total} mục): các môn được thu gọn; mỗi lần mở hiển thị tối đa ${LESSON_PAGE} bài.</p>` : ""}
@@ -273,12 +324,18 @@ export function createImportViewHelpers() {
       <div id="impLive" class="sr-only" role="status" aria-live="polite"></div>
       <div id="impUnsupportedHost"></div><div id="impTemplateHost"></div><div id="impFileHost"></div><div id="impStatusHost"></div><div id="impResultsHost"></div><div id="impPreviewHost"></div><div id="impPlanHost"></div><div id="impFutureHost"></div>`;
   }
-  function renderDeniedHtml({ esc }) {
-    return `<div class="card"><div class="empty-state" id="impDenied"><div class="ic">🔒</div><p>${esc(MESSAGES.denied)}</p></div></div>`;
+  function renderDeniedHtml({ esc, reason = "NOT_MEMBER" }) {
+    const message = DENIED_REASONS[reason] || MESSAGES.denied;
+    return `<div class="card"><div class="empty-state" id="impDenied" data-reason="${attr(esc, reason)}"><div class="ic">🔒</div><p>${esc(message)}</p></div></div>`;
+  }
+  function renderAccessStateHtml({ esc, failed = false }) {
+    return failed
+      ? `<div class="card"><div class="empty-state" id="impAccessFailed" role="alert"><div class="ic">⚠️</div><p>${esc(MESSAGES.accessCheckFailed)}</p><button class="btn btn-outline" type="button" id="impAccessRetry" data-imp-action="retry-access">THỬ LẠI</button></div></div>`
+      : `<div class="card"><div class="empty-state" id="impAccessChecking" role="status" aria-busy="true"><div class="ic">⏳</div><p>${esc(MESSAGES.checkingAccess)}</p></div></div>`;
   }
   return freeze({
-    MESSAGES, CAPABILITY_LABELS, describeUnsupported, formatBytes, severityView, noteChips, countDiagnostics, sheetOptions, filterDiagnostics, locationText, messageBody, rowCells, buildPreview, planSummary,
-    renderShellHtml, renderOrganizationHeaderHtml, renderTemplateCardHtml, renderFileCardHtml, renderUnsupportedHtml, renderStatusHtml, renderResultsHtml, renderDiagnosticItemHtml, renderPreviewHtml, renderPlanHtml, renderFutureActionHtml, renderDeniedHtml, FILE_LEVEL
+    MESSAGES, DENIED_REASONS, CAPABILITY_LABELS, describeUnsupported, formatBytes, severityView, noteChips, countDiagnostics, sheetOptions, filterDiagnostics, locationText, messageBody, rowCells, buildPreview, planSummary,
+    renderShellHtml, renderOrganizationHeaderHtml, renderTemplateCardHtml, renderFileCardHtml, renderUnsupportedHtml, renderStatusHtml, renderResultsHtml, renderDiagnosticItemHtml, renderPreviewHtml, renderPlanHtml, renderFutureActionHtml, renderDeniedHtml, renderAccessStateHtml, FILE_LEVEL
   });
 }
 
@@ -287,15 +344,32 @@ export function createImportViewHelpers() {
 // invalidates the first, so a stale async result can never paint into a different organization).
 export function createImportCenter(deps) {
   const { actorUid, isPlatformAdmin, esc, toast, organizationQueries, db, loadEngine, downloadFile, makeReader } = deps;
+  const accountActive = deps.accountActive !== false;   // the signed-in account is active (the application only lets active accounts in; the Rules re-check it on every read)
   const H = createImportViewHelpers();
   const warn = (label, error) => { try { console.warn("[import-center] " + label, error && error.name ? error.name : ""); } catch { /* ignore */ } };   // never the stack to the user
 
   async function mount(host, { organization, onBack } = {}) {
     if (!host) return;
     if (host.__importCenterTeardown) { try { host.__importCenterTeardown(); } catch { /* ignore */ } }
-    if (!isPlatformAdmin) { host.innerHTML = H.renderDeniedHtml({ esc }); return; }
-    if (!organization || typeof organization.id !== "string" || !organization.id) { host.innerHTML = H.renderDeniedHtml({ esc }); return; }
-    let org = Object.freeze({ id: organization.id, name: organization.name || "", code: organization.code || "", status: organization.status });
+    if (!organization || typeof organization.id !== "string" || !organization.id) { host.innerHTML = H.renderDeniedHtml({ esc, reason: "NO_ORGANIZATION" }); return; }
+    // ---- access: the approved P2/P3 contract (resolveImportAccess mirrors the Rules). Nothing else is loaded or read until it allows.
+    let source = organization, access;
+    if (isPlatformAdmin === true) access = resolveImportAccess({ isPlatformAdmin: true, accountActive, actorUid, organization });
+    else {
+      let pending = true;
+      const again = (event) => { const retry = event.target.closest && event.target.closest("[data-imp-action='retry-access']"); if (retry && host.contains(retry)) { host.removeEventListener("click", again); delete host.__importCenterTeardown; void mount(host, { organization, onBack }); } };
+      host.__importCenterTeardown = () => { pending = false; host.removeEventListener("click", again); delete host.__importCenterTeardown; };
+      host.innerHTML = H.renderAccessStateHtml({ esc });
+      let loaded = null;
+      try { loaded = await loadImportAccess({ db, organizationQueries, actorUid, organizationId: organization.id }); }
+      catch (error) { if (!pending) return; warn("access", error); host.innerHTML = H.renderAccessStateHtml({ esc, failed: true }); host.addEventListener("click", again); return; }
+      if (!pending) return;
+      host.removeEventListener("click", again); delete host.__importCenterTeardown;
+      source = loaded.organization;
+      access = loaded.organization ? resolveImportAccess({ accountActive, actorUid, organization: loaded.organization, membership: loaded.membership, capability: loaded.capability }) : { allowed: false, reason: "NOT_MEMBER" };   // an outsider cannot even read the organization
+    }
+    if (!access.allowed) { host.innerHTML = H.renderDeniedHtml({ esc, reason: access.reason }); return; }
+    let org = Object.freeze({ id: organization.id, name: source.name || "", code: source.code || "", status: source.status });
     let alive = true, generation = 0, busy = false, engine = null, reader = null, templateWriter = null;
     const state = { unsupported: null, file: null, phase: "idle", failure: "", reading: null, result: null, summary: null, planFailure: "", filters: { severity: "all", sheet: "all" }, limit: DIAGNOSTIC_PAGE, inspect: null, active: null, cursor: -1,
       preview: null, open: new Set(), shown: new Map(), highlight: null, templateStatus: "" };

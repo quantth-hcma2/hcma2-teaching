@@ -2,7 +2,7 @@
 // and integration.e2e.mjs (real index.html + emulators + production Rules). Run: node --test test/library-v2-p4-s3/view.unit.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createImportViewHelpers, createImportCenter, IMPORT_MAX_BYTES, DIAGNOSTIC_PAGE, LESSON_PAGE, TREE_COLLAPSE_ABOVE } from "../../import-center-view.mjs";
+import { createImportViewHelpers, createImportCenter, resolveImportAccess, loadImportAccess, IMPORT_MAX_BYTES, DIAGNOSTIC_PAGE, LESSON_PAGE, TREE_COLLAPSE_ABOVE } from "../../import-center-view.mjs";
 import { IMPORT_LIMITS } from "../../import-template.mjs";
 import { workbookBytes, validateBytes, validateRaw } from "../library-v2-p4-s2/helpers.mjs";
 
@@ -96,7 +96,7 @@ test("PREVIEW model + markup: subjects in effective order with their lessons, co
   const open = new Set(preview.groups.map((g) => g.subject.key));
   const html = H.renderPreviewHtml({ organization: ORG, preview, model: result.model, esc, open, shown: new Map(), warningCount: result.warnings.length });
   assert.match(html, /Khoa Quản trị/); assert.match(html, /<code>khoa-quan-tri<\/code> · <code>orgA<\/code>/); assert.match(html, /Khung &lt;script&gt;x&lt;\/script&gt;/); assert.doesNotMatch(html, /<script>/);
-  assert.match(html, /Giá trị gốc trong tệp: “  Khung &lt;script&gt;/); assert.match(html, /Mã khung: chưa có/);
+  assert.match(html, /Giá trị gốc trong tệp: “  Khung &lt;script&gt;/); assert.match(html, /Mã khung: không áp dụng/);
   assert.match(html, /2 môn · 3 bài · 5 mục/); assert.match(html, /4 mục có mã · 1 mục không mã/);
   assert.equal(tags(html, /data-kind="lesson"/g), 3); assert.equal(tags(html, /data-subject-key=/g), 2);
   assert.match(html, /Môn 1 · <code>A<\/code> · Môn A/); assert.match(html, /chip[^>]*>tên: đã cắt khoảng trắng/); assert.match(html, /dòng 4/);
@@ -142,15 +142,17 @@ test("SHELL / cards: organization identity is rendered and locked, archived orga
   const file = H.renderFileCardHtml({ esc, disabled: true, reason: "lý do", file: { name: "a.xlsx", size: 1024, sha256: "b".repeat(64) } });
   assert.match(file, /id="impPick"[^>]* disabled/); assert.match(file, /id="impFile"[^>]* disabled/); assert.match(file, /lý do/); assert.match(file, /bbbbbbbbbbbb…/); assert.match(file, /accept="\.xlsx,/); assert.match(file, /tối đa <b>5 MiB<\/b>/);
   assert.doesNotMatch(H.renderFileCardHtml({ esc }), /id="impPick"[^>]* disabled/);
-  assert.match(H.renderDeniedHtml({ esc }), /Chỉ quản trị viên hệ thống/);
+  assert.match(H.renderDeniedHtml({ esc }), /id="impDenied"[^>]*data-reason="NOT_MEMBER"[\s\S]*không có quyền dùng chức năng nhập chương trình/);
+  for (const reason of Object.keys(H.DENIED_REASONS)) assert.match(H.renderDeniedHtml({ esc, reason }), new RegExp("data-reason=\"" + reason + "\""));
+  assert.match(H.renderAccessStateHtml({ esc }), /id="impAccessChecking"/); assert.match(H.renderAccessStateHtml({ esc, failed: true }), /id="impAccessFailed"[\s\S]*data-imp-action="retry-access"/);
   assert.match(H.renderStatusHtml({ phase: "reading", esc, fileName: "a.xlsx" }), /aria-busy="true"[\s\S]*Đang đọc và kiểm tra tệp/); assert.match(H.renderStatusHtml({ phase: "failed", esc, failure: "Không thể đọc" }), /role="alert"/); assert.equal(H.renderStatusHtml({ phase: "idle", esc }), "");
 });
-test("ACCESS: a non-admin mount renders only the denied view and loads NOTHING (no engine, no reads); a missing organization is refused; a second mount tears the first down", async () => {
+test("ACCESS: a mount without the means to check authorization fails CLOSED (no engine, no panel); a missing organization is refused; a second mount tears the first down", async () => {
   let loaded = 0;
   const host = { innerHTML: "", querySelector: () => null, addEventListener() {}, removeEventListener() {}, contains: () => false };
   const denied = createImportCenter({ actorUid: "t", isPlatformAdmin: false, esc, toast() {}, loadEngine: async () => { loaded++; return {}; }, downloadFile() {} });
   await denied.mount(host, { organization: ORG, onBack() {} });
-  assert.match(host.innerHTML, /impDenied/); assert.equal(loaded, 0);
+  assert.match(host.innerHTML, /impAccessFailed/); assert.doesNotMatch(host.innerHTML, /impFile|impTemplateBlank/); assert.equal(loaded, 0);
   const noOrg = createImportCenter({ actorUid: "a", isPlatformAdmin: true, esc, toast() {}, loadEngine: async () => { loaded++; return {}; }, downloadFile() {} });
   await noOrg.mount(host, { organization: null }); assert.match(host.innerHTML, /impDenied/); await noOrg.mount(host, { organization: { id: "" } }); assert.equal(loaded, 0);
   await noOrg.mount(null, { organization: ORG });

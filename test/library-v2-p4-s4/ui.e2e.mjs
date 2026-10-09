@@ -126,6 +126,13 @@ try {
     const [rb] = (await calls()).filter((c) => c.op === "rollback"); assert.equal(rb.organizationId, "orgA"); assert.equal(rb.batchId, "FakeBatch0000000001");
   });
 
+  await step("COMPLETED-DRIFT (another client changed the framework while it was being completed): the batch is completed but the final read-back differs - NO success, an explicit 'do not activate' message, no resume / rollback", async () => {
+    await valid({ setup: 'h.script.commit = async ({ emit }) => { emit({ phase:"confirm", nodesWritten:5, verified:5 }); return { ok:false, state:"completed-drift", phase:"confirm", batchCompleted:true, verification:{ counts:{ missing:0, extra:1, altered:0 } } }; };' });
+    await ack(); await page.click("#impConfirmBtn"); await waitRun("#impRun [data-run='stop']");
+    assert.match(await text('[data-run="stop"]'), /đã bị người khác thay đổi trong lúc hoàn tất \(thiếu 0, thừa 1, sai khác 0\)[\s\S]*KHÔNG kích hoạt khung này[\s\S]*XÓA BẢN NHÁP/);
+    assert.doesNotMatch(await text("#host"), /Đã nhập xong và kiểm tra đầy đủ/); assert.equal(await count("#impRunResume, #impRunRollback"), 0); await shot("s4-09-completed-drift");
+  });
+
   await step("DENIED mid-run (authorization re-check): the message explains it, no resume/rollback is offered, no success is shown", async () => {
     await valid({ setup: 'h.script.commit = async () => ({ ok:false, state:"denied", reason:"DENIED", phase:"nodes", nodesWritten:2 });' });
     await ack(); await page.click("#impConfirmBtn"); await waitRun("#impRun [data-run='stop']");

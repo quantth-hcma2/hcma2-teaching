@@ -1803,7 +1803,7 @@ function adminOrganizations(c){
       esc, toast, mapError, organizationQueries:ORGANIZATION_QUERIES,
       loadEngine:()=>import("./import-center-engine.mjs?v=20261009-p4s4"),
       downloadFile:downloadImportFile,
-      commitTools:{ firestore:{collection,doc,getDocFromServer,getDocsFromServer,query,where,limit,orderBy,startAfter,documentId,writeBatch,setDoc,updateDoc,deleteDoc,serverTimestamp}, acquireLock:acquireImportLock }
+      commitTools:{ firestore:{collection,doc,getDocFromServer,getDocsFromServer,runTransaction,query,where,limit,orderBy,startAfter,documentId,writeBatch,setDoc,updateDoc,deleteDoc,serverTimestamp}, acquireLock:acquireImportLock }
     }),
     // P2-S4: ordinary membership management inside Organization Detail (Platform Admin only; no Organization Admin / capability work).
     membershipSection:createOrganizationMembershipSection({

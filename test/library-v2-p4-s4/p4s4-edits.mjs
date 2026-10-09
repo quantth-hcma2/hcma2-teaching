@@ -37,7 +37,7 @@ export const INDEX_EDITS_P4S4 = [
   "    // P4-S3: NHẬP TỪ EXCEL (Template Center + Import Center preview). Read-only for curriculum data: it creates no import batch, framework or node documents and uploads nothing.\n"
  ],
  [
-  "      loadEngine:()=>import(\"./import-center-engine.mjs?v=20261009-p4s4\"),\n      downloadFile:downloadImportFile,\n      commitTools:{ firestore:{collection,doc,getDocFromServer,getDocsFromServer,query,where,limit,orderBy,startAfter,documentId,writeBatch,setDoc,updateDoc,deleteDoc,serverTimestamp}, acquireLock:acquireImportLock }\n",
+  "      loadEngine:()=>import(\"./import-center-engine.mjs?v=20261009-p4s4\"),\n      downloadFile:downloadImportFile,\n      commitTools:{ firestore:{collection,doc,getDocFromServer,getDocsFromServer,runTransaction,query,where,limit,orderBy,startAfter,documentId,writeBatch,setDoc,updateDoc,deleteDoc,serverTimestamp}, acquireLock:acquireImportLock }\n",
   "      loadEngine:()=>import(\"./import-center-engine.mjs?v=20261008-p4s3\"),\n      downloadFile:downloadImportFile\n"
  ]
 ];

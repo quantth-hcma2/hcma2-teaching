@@ -22,6 +22,7 @@ export const NODE_PAGE = 500;                                  // read pages of 
 export const MAX_ROLLBACK_ROUNDS = 40;                         // safety bound of the delete loop (5000 nodes = 13 rounds of 400)
 export const RETRY_DELAYS_MS = freeze([400, 1200]);            // 3 attempts per step
 export const STEP_TIMEOUT_MS = 90000;                          // a Firestore write queued while offline never settles: a write step that does not settle in time counts as a transient failure
+export const COMPLETE_TIMEOUT_MS = 240000;                      // the completion transaction (below the 270 s Firestore transaction limit)
 export const READ_TIMEOUT_MS = 120000;                         // server reads fail fast when offline; this only bounds a read that hangs
 export const RESULT_CODES = freeze({ verifyFailed: "VERIFY_FAILED", abandoned: "ABANDONED", rolledBack: "ROLLED_BACK" });
 const NODE_KEYS = freeze(["schemaVersion", "organizationId", "kind", "parentId", "ancestors", "order", "code", "name", "status", "createdAt", "updatedAt"]);
@@ -133,9 +134,12 @@ export function batchMatchesPlan(batch, plan, organizationId) {
 }
 
 // ================================================================ the controller
-export function createImportCommitController({ db, firestore, sleep, retryDelays = RETRY_DELAYS_MS, stepTimeoutMs = STEP_TIMEOUT_MS, readTimeoutMs = READ_TIMEOUT_MS } = {}) {
+export const NODE_TX_GROUP = 250;                                // planned nodes read per parallel group inside the completion transaction
+// completionMode "transaction" (always used by the page) completes inside ONE Firestore transaction that re-reads the batch, the framework and EVERY planned node; "plain" is the
+// behaviour of the first candidate (317e854) and exists only so the race tests can reproduce it - production wiring never passes it.
+export function createImportCommitController({ db, firestore, sleep, retryDelays = RETRY_DELAYS_MS, stepTimeoutMs = STEP_TIMEOUT_MS, readTimeoutMs = READ_TIMEOUT_MS, completionMode = "transaction" } = {}) {
   const fs = firestore || {};
-  for (const name of ["collection", "doc", "getDocFromServer", "getDocsFromServer", "query", "where", "limit", "orderBy", "startAfter", "documentId", "writeBatch", "setDoc", "updateDoc", "deleteDoc", "serverTimestamp"]) {
+  for (const name of ["collection", "doc", "getDocFromServer", "getDocsFromServer", "runTransaction", "query", "where", "limit", "orderBy", "startAfter", "documentId", "writeBatch", "setDoc", "updateDoc", "deleteDoc", "serverTimestamp"]) {
     if (typeof fs[name] !== "function") throw new TypeError("createImportCommitController requires the Firestore function: " + name);
   }
   const wait = typeof sleep === "function" ? sleep : (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -193,7 +197,7 @@ export function createImportCommitController({ db, firestore, sleep, retryDelays
   });
   const WRITE_LABELS = /^(create-|chunk-|delete-|progress|partial|complete|rolled-back)/;
   async function withRetry(step, label) {
-    const ms = WRITE_LABELS.test(label) ? stepTimeoutMs : readTimeoutMs;
+    const ms = label === "complete" ? Math.max(stepTimeoutMs, COMPLETE_TIMEOUT_MS) : WRITE_LABELS.test(label) ? stepTimeoutMs : readTimeoutMs;   // the completion transaction re-reads every planned node (5000 nodes: ~17 s on the emulator)
     let last = null;
     for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
       try { return { ok: true, value: await settle(Promise.resolve().then(() => step(attempt)), ms) }; }
@@ -214,6 +218,28 @@ export function createImportCommitController({ db, firestore, sleep, retryDelays
 
   async function markPartial(batchId, resultCode) {
     return withRetry(() => fs.updateDoc(batchRef(batchId), { status: "partial", resultCode, finishedAt: fs.serverTimestamp(), updatedAt: fs.serverTimestamp() }), "partial");
+  }
+
+  // ---------------------------------------------------------------- completion transaction
+  // Re-reads the batch, the framework and EVERY planned node INSIDE one transaction, verifies them against the plan and writes the completion in the same transaction. Firestore's optimistic
+  // concurrency makes the commit fail (and the SDK re-run this callback) if ANY of those documents changed - or appeared - after it was read, so an alteration, deletion or rename by another
+  // client between the read and the commit can never be completed over. It CANNOT see a node that is not in the plan (the web SDK has no transactional query), so an EXTRA node created
+  // by another client in that interval is not prevented: the caller confirms the whole node set again after the commit (see commit()) and the Rules would have to close that gap.
+  async function completeInTransaction(plan, organizationId, batchId) {
+    return fs.runTransaction(db, async (tx) => {
+      const read = async (ref) => { try { const s = await tx.get(ref); return s.exists() ? plainDoc(s) : null; } catch (error) { if (classifyError(error) === "permission") return null; throw error; } };
+      const batch = await read(batchRef(batchId));
+      const framework = await read(frameworkRef(batchId));
+      const nodes = [];
+      for (let from = 0; from < plan.nodes.length; from += NODE_TX_GROUP) {
+        const docs = await Promise.all(plan.nodes.slice(from, from + NODE_TX_GROUP).map((node) => read(nodeRef(batchId, node.id))));
+        for (const d of docs) if (d) nodes.push(d);
+      }
+      const verification = verifyImportedDataset({ plan, framework, batch, nodes, organizationId });
+      if (!verification.ok) return { ok: false, verification };
+      tx.update(batchRef(batchId), { status: "completed", chunksDone: plan.chunks.length, finishedAt: fs.serverTimestamp(), updatedAt: fs.serverTimestamp() });
+      return { ok: true, verification };
+    });
   }
 
   // ---------------------------------------------------------------- COMMIT (new import or resume: the same idempotent algorithm)
@@ -323,13 +349,29 @@ export function createImportCommitController({ db, firestore, sleep, retryDelays
     denied = await auth(); if (!denied.allowed) return stop("denied", { reason: denied.reason, phase: "complete" });
     progress("complete", { nodesWritten: written, verified: total });
     const completed = await withRetry(async () => {
-      try { await fs.updateDoc(batchRef(batchId), { status: "completed", chunksDone: plan.chunks.length, finishedAt: fs.serverTimestamp(), updatedAt: fs.serverTimestamp() }); }
-      catch (error) { const again = await readBatch(batchId).catch(() => null); if (again && again.status === "completed") return "already"; throw error; }
+      if (completionMode === "plain") {
+        try { await fs.updateDoc(batchRef(batchId), { status: "completed", chunksDone: plan.chunks.length, finishedAt: fs.serverTimestamp(), updatedAt: fs.serverTimestamp() }); }
+        catch (error) { const again = await readBatch(batchId).catch(() => null); if (again && again.status === "completed") return { ok: true, already: true }; throw error; }
+        return { ok: true };
+      }
+      try { return await completeInTransaction(plan, organizationId, batchId); }
+      catch (error) { const again = await readBatch(batchId).catch(() => null); if (again && again.status === "completed") return { ok: true, already: true }; throw error; }   // ambiguous commit
     }, "complete");
     if (!completed.ok) return stop(failureState(completed.kind), { phase: "complete", kind: completed.kind, verification, nodesWritten: written });
+    if (completed.value && completed.value.ok === false) {                                             // the transaction re-read found a difference: nothing was written
+      const again = completed.value.verification;
+      if (again.repairable) return stop("incomplete", { phase: "complete", verification: again, nodesWritten: written });
+      return await failVerification({ plan, organizationId, verification: again, batchId, phase: "complete" });
+    }
     const [finalBatch, finalFramework] = await Promise.all([readBatch(batchId).catch(() => null), readFramework(batchId).catch(() => null)]);
     if (!finalBatch || finalBatch.status !== "completed" || !finalFramework || finalFramework.status !== "draft" || has(finalFramework, "activatedAt")) return stop("unconfirmed", { phase: "complete", verification });
-    const eligibility = activationEligibility({ batch: finalBatch, framework: finalFramework, nodes: readBack.nodes });
+    // confirmation AFTER the commit: the transaction cannot see nodes outside the plan, so the whole node set is read once more (a success is never reported over a drifted dataset)
+    progress("confirm", { nodesWritten: written, verified: 0 });
+    const confirmRead = await withRetry(() => readNodes(batchId, organizationId, { onPage: (count) => progress("confirm", { nodesWritten: written, verified: count }) }), "verify-final");
+    if (!confirmRead.ok) return stop("unconfirmed", { phase: "confirm", kind: confirmRead.kind, verification });
+    const confirmation = verifyImportedDataset({ plan, framework: finalFramework, batch: finalBatch, nodes: confirmRead.value, organizationId });
+    if (!confirmation.ok) return stop("completed-drift", { phase: "confirm", verification: confirmation, batchCompleted: true, nodesWritten: written });
+    const eligibility = activationEligibility({ batch: finalBatch, framework: finalFramework, nodes: confirmRead.value });
     progress("done", { nodesWritten: written, verified: total });
     return freeze({ ok: true, state: "completed", batchId, frameworkId: batchId, nodesWritten: written, verification, eligibility, batch: finalBatch });
   }

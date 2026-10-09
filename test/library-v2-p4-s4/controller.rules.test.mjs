@@ -33,7 +33,7 @@ for (const uid of ["pa", "oaA", "capA"]) {
     const events = [];
     const r = await run(uid, plan, { onProgress: (e) => events.push(e.phase) });
     assert.equal(r.ok, true, JSON.stringify(r)); assert.equal(r.state, "completed"); assert.equal(r.nodesWritten, 63);
-    assert.deepEqual([...new Set(events)], ["batch", "framework", "scan", "nodes", "verify", "complete", "done"]);
+    assert.deepEqual([...new Set(events)], ["batch", "framework", "scan", "nodes", "verify", "complete", "confirm", "done"]);
     const s = await clean(); assert.equal(s.nodes, 63); assert.equal(s.batch.status, "completed"); assert.equal(s.batch.chunksDone, s.batch.chunksTotal); assert.equal(s.batch.importer, uid);
     assert.equal(s.framework.status, "draft"); assert.equal(s.framework.createdBy, uid); assert.equal(s.framework.name, plan.framework.name);
     assert.equal(r.eligibility.eligible, true); assert.equal(r.verification.ok, true);
@@ -101,7 +101,7 @@ test("NETWORK DOWN -> PAUSED -> RESUME: a persistent failure pauses with the bat
 test("HUNG WRITE (offline queue): a commit that never settles times out as transient, is retried, and the server state decides - no duplicate, no false success", async () => {
   const plan = planFor(big(3, 300)); let hung = 0;
   const fs = faulty(BASE_FS, { commit: async (ctx) => { if (ctx.commitIndex === 2 && hung++ < 1) return never(); return ctx.perform(); } });
-  const r = await run("pa", plan, { fs, ctl: { stepTimeoutMs: 5000 } });
+  const r = await run("pa", plan, { fs, ctl: { stepTimeoutMs: 15000 } });
   assert.equal(r.state, "completed", JSON.stringify(r)); assert.equal(hung, 1); assert.equal((await nodesOf()).length, 903);
 });
 test("PARTIAL DATA (not chunk aligned) is reconciled: only the MISSING nodes are written, progress is derived from real data, the counter is never trusted", async () => {

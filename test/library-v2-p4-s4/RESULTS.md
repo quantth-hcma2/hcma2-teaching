@@ -24,3 +24,16 @@ Commit by Platform Admin / Organization Admin / `curriculum.manage` holder (63 n
 
 ## Alignment of historical guards
 `index.html` is the only pinned file edited. The five edits are pinned as pairs in `p4s4-edits.mjs` (generated from `git diff -U0`; reversal restores the 6a05411 bytes and is idempotent); the P4-S3 chain (`p4s3-edits.mjs`) now starts with the P4-S4 reversal and the guards that read index.html directly read it through the reversal. One S3 integration assertion (disabled placeholder) was updated to the S4 confirm card; the S3 flow never acknowledges or clicks it.
+
+## Safety review (Architect CONDITIONAL PASS of 317e854) - added suites and results
+| Suite | Result | Run |
+|---|---|---|
+| `incomplete-import.rules.test.mjs` - A: production Rules matrix of every P3 mutation path on a committing / partial / completed import (3 actors); B: the same matrix on a TEST-ONLY copy with the proposed amendment; B2: amended workflow (commit 903 nodes for 3 writer types, abandon + rollback by another administrator, 400-write batches on a plain framework) | 3/3 | emulator command of `controller.rules.test.mjs` (Java 21) |
+| `race.rules.test.mjs` - A: reviewed candidate (plain completion): race is REAL; B: transactional completion closes alteration / deletion / rename / framework deletion; C: extra node = residual gap, reported as completed-drift; D: amended Rules close it in both modes; E: two controllers; F: 5,000-node completion transaction | 6/6 | same |
+| `controller.rules.test.mjs` (re-run after the controller change; phases now include `confirm`) | 23/23 | same |
+| `progress-atomic.probe.test.mjs` | 4/4 | same |
+| `ui.e2e.mjs` (+ completed-drift scenario) | 16/16 | `node test/library-v2-p4-s4/ui.e2e.mjs` |
+| `integration.e2e.mjs` (REAL app, REAL controller incl. the completion transaction, production Rules, emulators) | 8/8 | `node test/library-v2-p4-s4/integration.e2e.mjs` |
+| `verify.unit` 9, `run-helpers.unit` 7, `source-guard` 8 (+ safety-review pins); aligned older guards (p2-s2/s3/s4, p3-s3/s4/s5, p4-s2/s3, p4-s3 unit) | pass (96 pure in one run) | `node --test ...` |
+
+Facts established: the production Rules let a concurrent authorized writer rename / delete the framework and create / alter / reorder / delete nodes of a committing or partial import; with plain completion the batch becomes `completed` over drifted data (and the P3 lifecycle then activates it); a Firestore transaction closes alteration / deletion / rename / framework deletion but cannot see an extra node; only a Rules amendment closes that (proposal in `amended-rules.mjs`, NOT applied). The 5,000-node completion transaction re-reads all planned nodes (about 17 s of reads on the emulator, one attempt without contention); a full 5,000-node controller run on a loaded emulator took 209 s (commit + verification + completion transaction + confirmation) versus 45 s before the transaction.

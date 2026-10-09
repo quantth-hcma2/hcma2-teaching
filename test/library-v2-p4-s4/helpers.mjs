@@ -1,5 +1,5 @@
 // Shared helpers for the P4-S4 suites (commit / recovery / rollback controller). Synthetic data only; the emulator suites run the REAL controller against the PRODUCTION Rules artifact.
-import { startAfter, getDocFromServer, getDocsFromServer } from "firebase/firestore";
+import { startAfter, getDocFromServer, getDocsFromServer, runTransaction } from "firebase/firestore";
 import {
   doc, setDoc, updateDoc, getDoc, getDocs, deleteDoc, collection, query, where, limit, orderBy, documentId, writeBatch, serverTimestamp, Timestamp
 } from "../library-v2-p3-s1/helpers.mjs";
@@ -7,7 +7,7 @@ import { validateRaw } from "../library-v2-p4-s2/helpers.mjs";
 import { prepareCommit } from "../../import-plan.mjs";
 
 export const BATCH = "Ab12Cd34Ef56Gh78Ij90";
-export const BASE_FS = { collection, doc, getDocFromServer, getDocsFromServer, query, where, limit, orderBy, startAfter, documentId, writeBatch, setDoc, updateDoc, deleteDoc, serverTimestamp };
+export const BASE_FS = { collection, doc, getDocFromServer, getDocsFromServer, runTransaction, query, where, limit, orderBy, startAfter, documentId, writeBatch, setDoc, updateDoc, deleteDoc, serverTimestamp };
 export { doc, getDoc, getDocs, collection, query, where, limit, orderBy, documentId, setDoc, updateDoc, deleteDoc, serverTimestamp, Timestamp, writeBatch };
 
 // big(3, 20) -> 3 subjects, 20 lessons each (63 nodes)
@@ -34,6 +34,8 @@ export function faulty(base, hooks = {}, counters = {}) {
     ...base,
     getDocFromServer: (...args) => { counters.reads++; return base.getDocFromServer(...args); },
     getDocsFromServer: (...args) => { counters.reads++; return base.getDocsFromServer(...args); },
+    // hooks.afterReads({ attempt }) runs INSIDE a transaction callback after the callback finished reading/queuing and before the SDK commits: the exact "read -> commit" interval
+    runTransaction: (db, fn, options) => { counters.tx = 0; return base.runTransaction(db, async (tx) => { const attempt = ++counters.tx; const result = await fn(tx); if (hooks.afterReads) await hooks.afterReads({ attempt }); return result; }, options); },
     writeBatch: (db) => {
       const inner = base.writeBatch(db); const ops = [];
       return {

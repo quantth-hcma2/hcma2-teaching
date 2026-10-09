@@ -57,7 +57,7 @@ test("EDITS: index.html differs from the baseline by EXACTLY the five pinned edi
   assert.equal([...html.matchAll(/import\("\.\/import-center-engine\.mjs\?v=20261009-p4s4"\)/g)].length, 1, "the engine is still imported only dynamically (lazy)");
   assert.ok(!/^\s*import\s[^;]*import-(center-engine|commit-controller|run-helpers)/m.test(html), "no static import of the engine, controller or run helpers");
   assert.ok(html.includes("getDocFromServer, getDocsFromServer"), "server reads are imported");
-  assert.equal([...html.matchAll(/commitTools:\{ firestore:\{collection,doc,getDocFromServer,getDocsFromServer,query,where,limit,orderBy,startAfter,documentId,writeBatch,setDoc,updateDoc,deleteDoc,serverTimestamp\}, acquireLock:acquireImportLock \}/g)].length, 1);
+  assert.equal([...html.matchAll(/commitTools:\{ firestore:\{collection,doc,getDocFromServer,getDocsFromServer,runTransaction,query,where,limit,orderBy,startAfter,documentId,writeBatch,setDoc,updateDoc,deleteDoc,serverTimestamp\}, acquireLock:acquireImportLock \}/g)].length, 1);
   assert.equal([...html.matchAll(/getAdminFeature\("organizations"\)\.routeKey, label:"Đơn vị"/g)].length, 1, "no new menu entry");
   assert.ok(html.includes("function downloadImportFile(bytes,fileName,mime)") && html.includes("function downloadBlob(filename, content, mime)"), "the V1 download helper is untouched next to the import helpers");
   assert.ok(!/importBatches|import-xlsx|sheetjs-0\.20\.3/.test(html.replace(/\/\/.*$/gm, "")), "the page never names the batch collection or the reader/SheetJS modules");
@@ -85,8 +85,8 @@ test("NO CHEATING: no status value other than the frozen enum is ever written; c
   for (const s of statuses) assert.ok(["committing", "completed", "partial", "rolled_back", "active", "draft", "retired"].includes(s), "unexpected status literal: " + s);
   const written = [...src.matchAll(/updateDoc\(batchRef\(batchId\), \{ ([^}]*)\}/g)].map((m) => m[1]);
   for (const w of written) if (/status:/.test(w)) assert.ok(/status: "(partial|completed|rolled_back)"/.test(w), "status write outside the allowed transitions: " + w);
-  const completeAt = src.indexOf('status: "completed"'); const verifyAt = src.indexOf("verifyImportedDataset({ plan, framework: readBack.fw");
-  assert.ok(verifyAt > 0 && completeAt > verifyAt, "the completion write comes after the full verification");
+  const verifyAt = src.indexOf("verifyImportedDataset({ plan, framework: readBack.fw"); const completeAt = src.indexOf("const completed = await withRetry(async () => {");   // the completion step (plain write or transaction)
+  assert.ok(verifyAt > 0 && completeAt > verifyAt, "the completion step comes after the full verification");
   assert.ok(/if \(!verification\.ok\) \{/.test(src), "a failed verification returns before the completion write");
   assert.ok(!/fs\.getDoc\(|fs\.getDocs\(/.test(src), "no cached read: only getDocFromServer / getDocsFromServer");
   assert.ok((src.match(/await auth\(\)/g) || []).length >= 5 && (src.match(/checkAuthorized\(authorize\)/g) || []).length >= 4, "authorization is re-checked before the batch, framework, each chunk, verification, completion and every rollback phase");
@@ -108,4 +108,12 @@ test("UI: execution is available only when the page injects commitTools; the S3 
   assert.ok(/if \(run\.done\) \{[\s\S]*?Đã nhập xong và kiểm tra đầy đủ/.test(helpers));
   assert.ok(/if \(result\.ok\) \{\s*const nodes = plan\.verification\.expectedNodeCount;/.test(view), "success state is set only from a completed controller result");
   assert.ok(/organizationId: org\.id/.test(view) && /verifyPlanIntegrity|planDigest/.test(text("import-commit-controller.mjs")), "the locked organization and the plan digest travel with the commit");
+});
+test("SAFETY REVIEW: the page always completes inside the transaction (completionMode is a test seam the page never passes) and the completion transaction re-reads the batch, the framework and EVERY planned node", () => {
+  const html = text("index.html"), src = text("import-commit-controller.mjs").replace(/\/\/.*$/gm, "");
+  assert.ok(!/completionMode/.test(html) && !/completionMode/.test(text("import-center-view.mjs")), "no caller selects the legacy plain completion");
+  assert.ok(/completionMode = "transaction"/.test(src), "the default is the transaction");
+  assert.ok(/async function completeInTransaction/.test(src) && /fs\.runTransaction\(db, async \(tx\) =>/.test(src) && /tx\.get\(ref\)/.test(src) && /plan\.nodes\.slice\(from, from \+ NODE_TX_GROUP\)/.test(src), "every planned node is read inside the transaction");
+  assert.ok(/tx\.update\(batchRef\(batchId\), \{ status: "completed"/.test(src) && /if \(!verification\.ok\) return \{ ok: false, verification \};/.test(src), "the completion is written in the same transaction, only after the in-transaction verification");
+  assert.ok(/stop\("completed-drift"/.test(src) && /progress\("confirm"/.test(src), "the whole node set is confirmed again after the commit and a drift is never reported as success");
 });

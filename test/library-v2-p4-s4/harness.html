@@ -59,6 +59,7 @@ const H = {
 // ---- scriptable fake controller (same surface as createImportCommitController)
 H.fake = {
   newBatchId: () => H.fakeBatchId,
+  findCompletedBySourceHash: async () => ({ ok: true, found: false, count: 0, more: false, items: [] }),   // P4-S5-B: the advisory duplicate lookup (S4 scenarios: no earlier completed import)
   findIncomplete: async (orgId) => { H.calls.push({ op: "findIncomplete", orgId }); if (H.script.findIncomplete) return H.script.findIncomplete(orgId); return H.incomplete.filter((b) => b.organizationId === orgId).map((b) => ({ ...b })); },
   async commit(args) {
     const { plan, organizationId, actorUid, authorize, onProgress, resume } = args;

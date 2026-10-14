@@ -27,6 +27,15 @@ export const RUN_MESSAGES = freeze({
   archivedActions: "Đơn vị đã lưu trữ: không thể tiếp tục hoặc hoàn tác. Hãy khôi phục đơn vị trước.",
   recoveryLoadFailed: "Không kiểm tra được các lần nhập đang dở. Hãy tải lại màn hình này.",
   rollbackWarn: "Hoàn tác sẽ xóa các mục đã ghi và khung nháp của lần nhập này; bản ghi lần nhập được giữ lại với trạng thái “Đã hoàn tác”. Dữ liệu khác của đơn vị không bị ảnh hưởng.",
+  dupChecking: "Đang kiểm tra lịch sử nhập tệp…",
+  dupNone: "Đã kiểm tra: chưa có lần nhập hoàn tất nào của tệp này trong đơn vị.",
+  dupFoundTitle: "Tệp này đã được nhập thành công trước đó",
+  dupFoundBody: "Tệp có cùng nội dung (cùng mã SHA-256) đã được nhập hoàn tất vào đơn vị này. Bạn vẫn có thể nhập lại nếu cần: hệ thống sẽ tạo một khung nháp MỚI, không ghi đè khung cũ.",
+  dupUnavailableTitle: "Không thể kiểm tra lịch sử nhập tệp",
+  dupUnavailableBody: "Hệ thống chưa biết tệp này đã từng được nhập vào đơn vị hay chưa (đây KHÔNG có nghĩa là “chưa nhập”). Bạn có thể bấm KIỂM TRA LẠI, hoặc tiếp tục sau khi xác nhận bên dưới.",
+  dupUnavailableAck: "Tôi hiểu rằng chưa kiểm tra được lịch sử nhập tệp và vẫn muốn tiếp tục.",
+  dupHintChecking: "Đang kiểm tra lịch sử nhập tệp. Nút xác nhận sẽ mở khi có kết quả.",
+  dupHintAck: "Hãy bấm KIỂM TRA LẠI, hoặc đánh dấu xác nhận đã hiểu việc chưa kiểm tra được lịch sử nhập tệp, để tiếp tục.",
   notActivated: "Khung nháp chưa được kích hoạt. Việc kích hoạt là một bước riêng trong màn hình Chương trình (MỞ → KÍCH HOẠT)."
 });
 
@@ -63,8 +72,42 @@ export function describeStop(result) {
 export function createImportRunHelpers({ esc }) {
   const a = (v) => attr(esc, v);
 
-  function renderConfirmHtml({ organization, summary, file, acknowledged = false, blockedReason = "", resume = null, canAct = true }) {
-    const disabled = !acknowledged || !!blockedReason || !canAct;
+  // P4-S5-B: advisory duplicate-file block (only for a NEW import; never shown as "no duplicate" unless the lookup really answered)
+  function renderDuplicateHtml(dup, dupAcknowledged, canAct) {
+    if (!dup) return "";
+    if (dup.status === "checking") return `<div class="hint mt-14" id="impDup" data-dup="checking" role="status">⏳ ${esc(RUN_MESSAGES.dupChecking)}</div>`;
+    if (dup.status === "none") return `<div class="small mut mt-14" id="impDup" data-dup="none" role="status">✔ ${esc(RUN_MESSAGES.dupNone)}</div>`;
+    if (dup.status === "unavailable") {
+      return `<div class="card mt-14" id="impDup" data-dup="unavailable" role="alert" style="border-color:#f59e0b"><b>⚠️ ${esc(RUN_MESSAGES.dupUnavailableTitle)}</b>
+        <p class="mt-8">${esc(RUN_MESSAGES.dupUnavailableBody)}</p>
+        <div class="mt-8"><button class="btn btn-outline" type="button" id="impDupRetry" data-imp-action="dup-retry"${canAct ? "" : " disabled"}>KIỂM TRA LẠI</button></div>
+        <label class="mt-8" style="display:flex;gap:10px;align-items:center;min-height:44px;cursor:pointer"><input type="checkbox" id="impDupAck" data-imp-dupack="1"${dupAcknowledged ? " checked" : ""}${canAct ? "" : " disabled"} style="margin-top:4px;min-width:22px;min-height:22px"><span>${esc(RUN_MESSAGES.dupUnavailableAck)}</span></label></div>`;
+    }
+    if (dup.status !== "found") return "";
+    const rows = (dup.items || []).map((item) => `<li>${esc(formatWhen(item.finishedAt))}${Number.isFinite(item.nodes) ? " · " + item.nodes + " mục" : ""}</li>`).join("");
+    return `<div class="card mt-14" id="impDup" data-dup="found" role="status" style="border-color:#f59e0b"><b>⚠️ ${esc(RUN_MESSAGES.dupFoundTitle)}</b>
+      <p class="mt-8">${esc(RUN_MESSAGES.dupFoundBody)}</p>
+      <ul class="small mt-8" style="margin:0;padding-left:20px">${rows}${dup.more ? "<li>… và có thể còn các lần nhập khác.</li>" : ""}</ul></div>`;
+  }
+  function renderAuditHtml(run) {
+    const audit = run && run.audit;
+    if (!audit) return "";
+    const what = audit.kind === "completed" ? "Lần nhập đã hoàn tất" : audit.kind === "rolledBack" ? "Lần nhập đã được hoàn tác" : "Lần nhập đã dừng (một phần)";
+    const retry = `<div class="mt-8"><button class="btn btn-outline" type="button" id="impAuditRetry" data-imp-action="audit-retry">GHI LẠI NHẬT KÝ</button></div>`;
+    const line = (text, tone) => `<p class="small ${tone === "warn" ? "" : "mut"} mt-8" data-run="audit" data-audit-state="${a(audit.state)}" role="status">${tone === "warn" ? "⚠️ " : ""}${esc(text)}</p>`;
+    switch (audit.state) {
+      case "pending": return line("Đang ghi nhật ký hoạt động…");
+      case "recorded": return line("Đã ghi nhật ký hoạt động.");
+      case "already": return line("Nhật ký hoạt động của lần nhập này đã có sẵn.");
+      case "unverified": return line(what + ", nhưng chưa xác nhận được việc ghi nhật ký hoạt động. Dữ liệu không bị ảnh hưởng.", "warn") + retry;
+      default: return line(what + ", nhưng chưa ghi được nhật ký hoạt động. Dữ liệu nhập vẫn hợp lệ và không bị hoàn tác.", "warn") + retry;
+    }
+  }
+
+  function renderConfirmHtml({ organization, summary, file, acknowledged = false, blockedReason = "", resume = null, canAct = true, dup = null, dupAcknowledged = false }) {
+    const dupBlocks = !resume && !!dup && (dup.status === "checking" || (dup.status === "unavailable" && !dupAcknowledged));
+    const dupHint = !resume && dup && dup.status === "checking" ? RUN_MESSAGES.dupHintChecking : !resume && dup && dup.status === "unavailable" && !dupAcknowledged ? RUN_MESSAGES.dupHintAck : "";
+    const disabled = !acknowledged || !!blockedReason || !canAct || dupBlocks;
     const title = resume ? "Bước 6 · Xác nhận TIẾP TỤC lần nhập dở" : "Bước 6 · Xác nhận nhập";
     const lead = resume
       ? `Hệ thống sẽ <b>tiếp tục</b> lần nhập dở trong đơn vị <b>${esc(organization.name || "—")}</b>: chỉ ghi các mục còn thiếu, sau đó đọc lại và kiểm tra toàn bộ ${summary.nodeCount} mục.`
@@ -79,9 +122,10 @@ export function createImportRunHelpers({ esc }) {
         <dt class="small mut">Sẽ tạo</dt><dd style="margin:0" data-confirm="documents">${summary.totalDocuments} tài liệu (1 lô nhập + 1 khung + ${summary.nodeCount} mục) trong ${summary.chunkCount} đợt ghi</dd>
         <dt class="small mut">Trạng thái khung</dt><dd style="margin:0">Bản nháp, chưa kích hoạt</dd>
       </dl>
+      ${resume ? "" : renderDuplicateHtml(dup, dupAcknowledged, canAct)}
       <label class="mt-14" style="display:flex;gap:10px;align-items:center;min-height:44px;cursor:pointer"><input type="checkbox" id="impConfirmAck" data-imp-ack="1"${acknowledged ? " checked" : ""}${canAct ? "" : " disabled"} style="margin-top:4px;min-width:22px;min-height:22px"><span>Tôi xác nhận ${resume ? "tiếp tục nhập" : "nhập"} <b>${summary.nodeCount} mục</b> (${summary.subjectCount} môn, ${summary.lessonCount} bài) vào đơn vị <b>“${esc(organization.name || "—")}”</b> (<code>${esc(organization.code || "—")}</code>). Khung được tạo ở trạng thái Bản nháp.</span></label>
       <div class="mt-14"><button class="btn btn-ok" type="button" id="impConfirmBtn" data-imp-action="confirm"${disabled ? ' disabled aria-disabled="true"' : ""} aria-describedby="impConfirmHint">${resume ? "TIẾP TỤC NHẬP" : "XÁC NHẬN NHẬP"}</button></div>
-      <div class="hint mt-8" id="impConfirmHint">${blockedReason ? esc(blockedReason) : esc(RUN_MESSAGES.keepOpen)}</div></section>`;
+      <div class="hint mt-8" id="impConfirmHint">${blockedReason ? esc(blockedReason) : dupHint ? esc(dupHint) : esc(RUN_MESSAGES.keepOpen)}</div></section>`;
   }
 
   // run: { kind: "commit"|"rollback", phase, nodesWritten, nodesTotal, chunk, chunksTotal, verified, nodesDeleted, stop?: describeStop(...), done?: {...}, rollbackDone?: {...} }
@@ -93,11 +137,13 @@ export function createImportRunHelpers({ esc }) {
         <h3 id="impRunTitle" tabindex="-1" style="margin:0;outline:none">✅ Đã nhập xong và kiểm tra đầy đủ</h3>
         <p class="mt-8" data-run="result">Đã đọc lại <b>${d.nodes} mục</b> (${d.subjects} môn, ${d.lessons} bài) từ máy chủ và đối chiếu từng mục với kế hoạch: <b>khớp 100%</b> (không thiếu, không thừa, đúng quan hệ cha–con, thứ tự và mã).</p>
         <p class="mt-8" data-run="eligibility">${d.eligible ? "Khung nháp <b>" + esc(d.frameworkName) + "</b> đã sẵn sàng để kích hoạt theo quy trình hiện có." : "Khung nháp chưa đủ điều kiện kích hoạt (" + esc(d.eligibilityErrors.join(", ") || "không rõ") + ")."} ${esc(RUN_MESSAGES.notActivated)}</p>
+        ${renderAuditHtml(run)}
         <div class="mt-8"><button class="btn btn-ok" type="button" id="impRunBack" data-imp-action="run-finish">VỀ DANH SÁCH CHƯƠNG TRÌNH</button></div></section>`;
     }
     if (run.rollbackDone) {
       return `<section class="card mt-14" id="impRun" role="status" aria-labelledby="impRunTitle"><h3 id="impRunTitle" tabindex="-1" style="margin:0;outline:none">↩ Đã hoàn tác lần nhập</h3>
         <p class="mt-8" data-run="result">Đã xóa ${run.rollbackDone.nodesDeleted} mục và khung nháp. Bản ghi lần nhập được giữ lại với trạng thái “Đã hoàn tác”. Dữ liệu khác của đơn vị không bị ảnh hưởng.</p>
+        ${renderAuditHtml(run)}
         <div class="mt-8"><button class="btn btn-outline" type="button" data-imp-action="run-dismiss">ĐÓNG</button></div></section>`;
     }
     if (run.stop) {
@@ -105,6 +151,7 @@ export function createImportRunHelpers({ esc }) {
       return `<section class="card mt-14" id="impRun" role="alert" aria-labelledby="impRunTitle" style="border-color:${s.tone === "err" ? "#dc2626" : "#f59e0b"}">
         <h3 id="impRunTitle" tabindex="-1" style="margin:0;outline:none">${s.tone === "err" ? "⛔" : "⚠️"} ${run.kind === "rollback" ? "Hoàn tác chưa xong" : "Lần nhập chưa hoàn tất"}</h3>
         <p class="mt-8" data-run="stop">${esc(s.text)}</p>
+        ${renderAuditHtml(run)}
         <div class="flex gap-8 mt-8" style="flex-wrap:wrap">${s.resume ? `<button class="btn btn-ok" type="button" id="impRunResume" data-imp-action="run-resume">TIẾP TỤC</button>` : ""}${s.rollback ? `<button class="btn btn-outline" type="button" id="impRunRollback" data-imp-action="rollback-open" data-batch="${a(run.batchId)}">HOÀN TÁC NHẬP</button>` : ""}<button class="btn btn-ghost" type="button" data-imp-action="run-dismiss">ĐÓNG</button></div></section>`;
     }
     const total = num(run.nodesTotal);
@@ -147,5 +194,5 @@ export function createImportRunHelpers({ esc }) {
       <div class="flex gap-8 mt-8"><button class="btn btn-ok" type="button" id="impRbConfirm" data-imp-action="rollback-confirm" data-batch="${a(batch.id)}"${acknowledged ? "" : ' disabled aria-disabled="true"'}>HOÀN TÁC NHẬP</button><button class="btn btn-ghost" type="button" data-imp-action="rollback-cancel">HỦY</button></div></section>`;
   }
 
-  return freeze({ renderConfirmHtml, renderRunHtml, renderRecoveryHtml, renderRollbackConfirmHtml, describeStop, RUN_MESSAGES, RUN_PHASE_LABELS, formatWhen });
+  return freeze({ renderConfirmHtml, renderDuplicateHtml, renderAuditHtml, renderRunHtml, renderRecoveryHtml, renderRollbackConfirmHtml, describeStop, RUN_MESSAGES, RUN_PHASE_LABELS, formatWhen });
 }

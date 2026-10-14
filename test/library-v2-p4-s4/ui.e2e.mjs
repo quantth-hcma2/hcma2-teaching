@@ -45,7 +45,8 @@ const OK = workbookBytes({});                                                   
 const OTHER = workbookBytes({ subjects: [["Z1", "Môn Z", 1]], lessons: [] });
 const b64 = (bytes) => Buffer.from(bytes).toString("base64");
 const phase = () => ev(() => document.querySelector("#impRunPhase")?.dataset.phase || "");
-const valid = async (opts = {}) => { await mount(opts); await page.waitForSelector("#impPick:not([disabled])", { timeout: 30000 }); await choose(file("mau.xlsx", OK)); await page.waitForSelector("#impConfirm", { timeout: 30000 }); };
+const valid = async (opts = {}) => { await mount(opts); await page.waitForSelector("#impPick:not([disabled])", { timeout: 30000 }); await choose(file("mau.xlsx", OK)); await page.waitForSelector("#impConfirm", { timeout: 30000 }); await page.waitForFunction(() => { const d = document.querySelector("#impDup"); return !d || d.dataset.dup !== "checking"; }, null, { timeout: 15000 }); };   // P4-S5-B: the advisory duplicate lookup has settled
+
 const ack = async () => { await page.check("#impConfirmAck"); };
 const waitRun = (sel) => page.waitForSelector(sel, { timeout: 20000 });
 

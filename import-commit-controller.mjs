@@ -24,6 +24,9 @@ export const NODE_PAGE = 500;                                  // read pages of 
 export const MAX_ROLLBACK_ROUNDS = 40;                         // safety bound of the delete loop (5000 nodes = 13 rounds of 400)
 export const RETRY_DELAYS_MS = freeze([400, 1200]);            // 3 attempts per step
 export const STEP_TIMEOUT_MS = 90000;                          // a Firestore write queued while offline never settles: a write step that does not settle in time counts as a transient failure
+export const LOOKUP_TIMEOUT_MS = 20000;                        // P4-S5-B: the advisory duplicate lookup never keeps the confirmation waiting longer than this per attempt
+export const DUPLICATE_LOOKUP_LIMIT = 11;                      // completed imports of the same file fetched (the query itself filters status == completed, so other statuses can never crowd a completed batch out)
+export const DUPLICATE_SHOWN = 5;
 export const READ_TIMEOUT_MS = 120000;                         // server reads fail fast when offline; this only bounds a read that hangs
 export const RESULT_CODES = freeze({ verifyFailed: "VERIFY_FAILED", abandoned: "ABANDONED", rollbackStarted: "ROLLBACK_STARTED", rolledBack: "ROLLED_BACK" });
 const NODE_KEYS = freeze(["schemaVersion", "organizationId", "kind", "parentId", "ancestors", "order", "code", "name", "status", "createdAt", "updatedAt"]);
@@ -135,7 +138,7 @@ export function batchMatchesPlan(batch, plan, organizationId) {
 }
 
 // ================================================================ the controller
-export function createImportCommitController({ db, firestore, sleep, retryDelays = RETRY_DELAYS_MS, stepTimeoutMs = STEP_TIMEOUT_MS, readTimeoutMs = READ_TIMEOUT_MS } = {}) {
+export function createImportCommitController({ db, firestore, sleep, retryDelays = RETRY_DELAYS_MS, stepTimeoutMs = STEP_TIMEOUT_MS, readTimeoutMs = READ_TIMEOUT_MS, lookupTimeoutMs = LOOKUP_TIMEOUT_MS } = {}) {
   const fs = firestore || {};
   for (const name of ["collection", "doc", "getDocFromServer", "getDocsFromServer", "query", "where", "limit", "orderBy", "startAfter", "documentId", "writeBatch", "setDoc", "updateDoc", "deleteDoc", "serverTimestamp"]) {
     if (typeof fs[name] !== "function") throw new TypeError("createImportCommitController requires the Firestore function: " + name);
@@ -186,6 +189,22 @@ export function createImportCommitController({ db, firestore, sleep, retryDelays
     return found.sort((a, b) => (a.id < b.id ? -1 : 1));
   }
 
+  // ---------------------------------------------------------------- P4-S5-B: previously COMPLETED imports of the same file in this organization (advisory duplicate warning)
+  // ONE query with three equality filters (organizationId, sourceFile.sha256, status == completed): no orderBy, no composite index, and mixed statuses can never hide a completed batch.
+  // Never throws and never answers "none" when it does not know: { ok: false, kind } means UNKNOWN (permission | transient | invalid | unknown).
+  async function findCompletedBySourceHash(organizationId, sha256) {
+    if (!isValidId(organizationId) || typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256)) return freeze({ ok: false, kind: "invalid" });
+    const r = await withRetry(async () => {
+      const snapshot = await fs.getDocsFromServer(fs.query(fs.collection(db, "importBatches"), fs.where("organizationId", "==", organizationId), fs.where("sourceFile.sha256", "==", sha256), fs.where("status", "==", "completed"), fs.limit(DUPLICATE_LOOKUP_LIMIT)));
+      return snapshot.docs.map((d) => plainDoc(settledOrThrow(d)));
+    }, "duplicate-lookup");
+    if (!r.ok) return freeze({ ok: false, kind: r.kind });
+    const millis = (v) => (v && typeof v.toMillis === "function" ? v.toMillis() : v instanceof Date ? v.getTime() : 0);
+    const completed = r.value.filter((b) => b.organizationId === organizationId && b.status === "completed" && !!b.sourceFile && b.sourceFile.sha256 === sha256).sort((a, b) => millis(b.finishedAt) - millis(a.finishedAt) || (a.id < b.id ? -1 : 1));
+    return freeze({ ok: true, found: completed.length > 0, count: completed.length, more: r.value.length >= DUPLICATE_LOOKUP_LIMIT,
+      items: freeze(completed.slice(0, DUPLICATE_SHOWN).map((b) => freeze({ id: b.id, finishedAt: b.finishedAt || null, nodes: b.counts && Number.isFinite(b.counts.accepted) ? b.counts.accepted : null, importer: b.importer || null }))) });
+  }
+
   // ---------------------------------------------------------------- guarded steps
   // Runs one step with bounded retries and a settle timeout. A transient failure waits and retries; anything else (or the last transient failure) is reported, never swallowed.
   // Every read goes to the SERVER (getDocFromServer / getDocsFromServer): a locally queued write or a cached document is never mistaken for committed data.
@@ -195,7 +214,7 @@ export function createImportCommitController({ db, firestore, sleep, retryDelays
   });
   const WRITE_LABELS = /^(create-|chunk-|delete-|progress|partial|complete|rolled-back)/;
   async function withRetry(step, label) {
-    const ms = WRITE_LABELS.test(label) ? stepTimeoutMs : readTimeoutMs;  
+    const ms = WRITE_LABELS.test(label) ? stepTimeoutMs : label === "duplicate-lookup" ? lookupTimeoutMs : readTimeoutMs;  
     let last = null;
     for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
       try { return { ok: true, value: await settle(Promise.resolve().then(() => step(attempt)), ms) }; }
@@ -355,7 +374,10 @@ export function createImportCommitController({ db, firestore, sleep, retryDelays
   // verification failure that a resume cannot repair: durable `partial` (only rollback can follow) - the batch can never be completed afterwards
   async function failVerification({ plan, organizationId, verification, batchId, phase }) {
     const marked = await markPartial(batchId, RESULT_CODES.verifyFailed);
-    return stop("verification-failed", { phase, verification, markedPartial: marked.ok, organizationId });
+    // P4-S5-B: the durable `partial` state is CONFIRMED by a server read before it is reported (the audit event is built only from this confirmed batch)
+    const confirmed = marked.ok ? await readBatch(batchId).catch(() => null) : null;
+    const partialBatch = confirmed && confirmed.status === "partial" ? confirmed : null;
+    return stop("verification-failed", { phase, verification, markedPartial: marked.ok, organizationId, ...(partialBatch ? { batch: partialBatch } : {}) });
   }
 
   // Draft activation eligibility: only a COMPLETED batch + a never-activated draft framework + a ready tree (the P3 lifecycle then activates it; the Rules enforce the batch).
@@ -445,6 +467,6 @@ export function createImportCommitController({ db, firestore, sleep, retryDelays
 
   return freeze({
     newBatchId: () => fs.doc(fs.collection(db, "importBatches")).id,
-    findIncomplete, commit, rollback, abandon, readBatch, readFramework, readNodes, activationEligibility
+    findIncomplete, findCompletedBySourceHash, commit, rollback, abandon, readBatch, readFramework, readNodes, activationEligibility
   });
 }

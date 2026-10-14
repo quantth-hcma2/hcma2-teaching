@@ -347,6 +347,7 @@ export function createImportViewHelpers() {
 // invalidates the first, so a stale async result can never paint into a different organization).
 export function createImportCenter(deps) {
   const { actorUid, isPlatformAdmin, esc, toast, organizationQueries, db, loadEngine, downloadFile, makeReader } = deps;
+  const auditTools = deps.auditTools && deps.auditTools.firestore && typeof deps.auditTools.actor === "function" ? deps.auditTools : null;   // P4-S5-B: audit events are written only when the page injects them
   const commitTools = deps.commitTools && deps.commitTools.firestore ? deps.commitTools : null;   // P4-S4: execution is available only when the page injects it
   const accountActive = deps.accountActive !== false;   // the signed-in account is active (the application only lets active accounts in; the Rules re-check it on every read)
   const H = createImportViewHelpers();
@@ -377,7 +378,7 @@ export function createImportCenter(deps) {
     let alive = true, generation = 0, busy = false, engine = null, reader = null, templateWriter = null;
     const state = { unsupported: null, file: null, phase: "idle", failure: "", reading: null, result: null, summary: null, planFailure: "", filters: { severity: "all", sheet: "all" }, limit: DIAGNOSTIC_PAGE, inspect: null, active: null, cursor: -1,
       preview: null, open: new Set(), shown: new Map(), highlight: null, templateStatus: "",
-      run: null, recovery: [], recoveryFailed: false, resume: null, resumeMismatch: false, ack: false, rollbackTarget: null, rollbackAck: false };
+      run: null, recovery: [], recoveryFailed: false, resume: null, resumeMismatch: false, ack: false, rollbackTarget: null, rollbackAck: false, dup: null, dupAck: false };
     const commitEnabled = () => !!commitTools;
     host.innerHTML = H.renderShellHtml({ organization: org, esc, commit: commitEnabled() });
     const $ = (selector) => host.querySelector(selector);
@@ -453,7 +454,7 @@ export function createImportCenter(deps) {
       if (!ready) { region("#impFutureHost", commitEnabled() && state.resumeMismatch && engine ? `<section class="card mt-14" id="impResumeMismatch" role="alert" style="border-color:#dc2626"><p>${esc(getRunHelpers().RUN_MESSAGES.resumeMismatch)}</p></section>` : ""); return; }
       const rh = getRunHelpers();
       const blocked = !state.resume && state.recovery.length ? rh.RUN_MESSAGES.blockedIncomplete : "";
-      region("#impFutureHost", rh.renderConfirmHtml({ organization: org, summary: state.summary, file: state.file, acknowledged: state.ack, blockedReason: blocked, resume: state.resume, canAct: !running() }));
+      region("#impFutureHost", rh.renderConfirmHtml({ organization: org, summary: state.summary, file: state.file, acknowledged: state.ack, blockedReason: blocked, resume: state.resume, canAct: !running(), dup: state.resume ? null : state.dup, dupAcknowledged: state.dupAck }));
     }
     async function loadRecovery() {
       if (!commitEnabled() || !engine) return;
@@ -461,6 +462,36 @@ export function createImportCenter(deps) {
       try { state.recovery = await getController().findIncomplete(org.id); }
       catch (error) { warn("recovery", error); state.recovery = []; state.recoveryFailed = true; }
       if (alive) { paintRecovery(); paintConfirm(); }
+    }
+    // ---- P4-S5-B: advisory duplicate-file check. Only COMPLETED imports of the same SHA-256 in THIS organization count. An unknown answer is never shown as "no duplicate":
+    // it blocks confirmation until the user retries successfully or explicitly acknowledges. Not used when resuming (the same file is expected there).
+    async function checkDuplicate() {
+      if (!commitEnabled() || !engine || state.resume || !state.file || !state.file.sha256 || !state.result || !state.result.ok) { state.dup = null; return; }
+      const mine = generation, sha = state.file.sha256;
+      state.dup = { status: "checking" }; state.dupAck = false; paintConfirm();
+      let found;
+      try { found = await getController().findCompletedBySourceHash(org.id, sha); } catch (error) { warn("duplicate", error); found = { ok: false, kind: "unknown" }; }
+      if (!alive || mine !== generation || state.resume || !state.file || state.file.sha256 !== sha) return;
+      state.dup = !found.ok ? { status: "unavailable" } : found.found ? { status: "found", items: found.items, more: found.more, count: found.count } : { status: "none" };
+      paintConfirm();
+    }
+    // ---- P4-S5-B: audit events. Built ONLY from a batch whose durable state the controller confirmed by a server read; best-effort and idempotent (deterministic id); the business
+    // result is never changed by the audit outcome - the user is told exactly what happened to the audit entry and can retry the write.
+    let auditWriter = null;
+    function getAudit() { if (!auditWriter && auditTools && engine) auditWriter = engine.createImportAudit({ db, firestore: auditTools.firestore, actor: auditTools.actor }); return auditWriter; }
+    async function recordAudit(target, event) {
+      const writer = getAudit(); if (!writer) return;
+      target.auditEvent = event; target.audit = { state: "pending", kind: event.kind }; if (alive && state.run === target) paintRun();
+      let outcome;
+      try { outcome = await writer.record(event); } catch (error) { warn("audit", error); outcome = { state: "failed", reason: "ERROR" }; }
+      target.audit = { state: outcome.state, kind: event.kind, reason: outcome.reason || null };
+      if (alive && state.run === target) paintRun();
+    }
+    function auditConfirmed(target, input) {
+      if (!getAudit()) return;
+      const built = engine.buildImportAuditEvent({ ...input, organizationId: org.id });
+      if (!built.ok) { warn("audit-skip", { name: built.reason }); return; }
+      void recordAudit(target, built.event);
     }
     function progressInto(run, event) {
       run.phase = event.phase;
@@ -486,9 +517,11 @@ export function createImportCenter(deps) {
         const nodes = plan.verification.expectedNodeCount;
         state.run = { done: { nodes, subjects: plan.verification.subjectCount, lessons: plan.verification.lessonCount, frameworkName: plan.framework.name, eligible: result.eligibility.eligible, eligibilityErrors: result.eligibility.errors }, kind: "commit", batchId: plan.batch.id };
         state.resume = null; state.ack = false; resetResult(); state.file = null; state.phase = "idle";
+        auditConfirmed(state.run, { kind: "completed", batch: result.batch, resumed: !!resume });
         live("Đã nhập xong và kiểm tra đầy đủ");
       } else {
         state.run = { stop: getRunHelpers().describeStop(result), kind: "commit", batchId: plan.batch.id, plan };
+        if (result.state === "verification-failed" && result.markedPartial === true && result.batch) auditConfirmed(state.run, { kind: "partial", batch: result.batch, phase: result.phase });
         live(state.run.stop.text);
       }
       await loadRecovery(); paintAll();
@@ -506,7 +539,7 @@ export function createImportCenter(deps) {
       catch (error) { warn("rollback", error); result = { ok: false, state: "error" }; }
       finally { setUnloadGuard(false); if (releaseLock) { try { releaseLock(); } catch { /* ignore */ } releaseLock = null; } busy = false; }
       if (!alive) return;
-      if (result.ok) { state.run = { rollbackDone: { nodesDeleted: result.nodesDeleted || 0 }, kind: "rollback", batchId }; if (state.resume && state.resume.id === batchId) state.resume = null; live("Đã hoàn tác lần nhập"); }
+      if (result.ok) { state.run = { rollbackDone: { nodesDeleted: result.nodesDeleted || 0 }, kind: "rollback", batchId }; if (state.resume && state.resume.id === batchId) state.resume = null; auditConfirmed(state.run, { kind: "rolledBack", batch: result.batch, nodesDeleted: result.nodesDeleted }); live("Đã hoàn tác lần nhập"); }
       else { state.run = { stop: { ...getRunHelpers().describeStop(result), resume: false }, kind: "rollback", batchId }; live(state.run.stop.text); }
       await loadRecovery(); paintAll();
       const title = $("#impRunTitle"); if (title) title.focus();
@@ -514,6 +547,7 @@ export function createImportCenter(deps) {
     // New import: a fresh Firestore auto id for BOTH documents, the plan rebuilt with it (validation stage 10) and frozen. Resume: the plan rebuilt with the stored batch id.
     async function confirmAndRun() {
       if (running() || !engine || !state.result || !state.result.ok || !state.ack) return;
+      if (!state.resume && state.dup && (state.dup.status === "checking" || (state.dup.status === "unavailable" && !state.dupAck))) return;   // P4-S5-B: an unknown duplicate check never passes silently
       const verdict = await authorizeNow().catch(() => ({ allowed: false, reason: "ACCESS_CHECK_FAILED" }));
       if (!verdict.allowed) { state.run = { stop: getRunHelpers().describeStop({ state: "denied" }), kind: "commit", batchId: "" }; paintAll(); return; }
       const batchId = state.resume ? state.resume.id : getController().newBatchId();
@@ -567,7 +601,7 @@ export function createImportCenter(deps) {
     // ---------------------------------------------------------- file -> parse -> validate -> preview
     function resetResult() {
       state.reading = null; state.result = null; state.summary = null; state.planFailure = ""; state.preview = null; state.filters = { severity: "all", sheet: "all" }; state.limit = DIAGNOSTIC_PAGE;
-      state.inspect = null; state.active = null; state.cursor = -1; state.open = new Set(); state.shown = new Map(); state.highlight = null; state.failure = "";
+      state.inspect = null; state.active = null; state.cursor = -1; state.open = new Set(); state.shown = new Map(); state.highlight = null; state.failure = ""; state.dup = null; state.dupAck = false;
     }
     async function handleFile(file) {
       if (!file || busy || running() || archived() || state.unsupported || !engine) return;
@@ -588,7 +622,7 @@ export function createImportCenter(deps) {
           const previewId = state.resume ? state.resume.id : "preview" + String(state.file.sha256 || "0000000000000").slice(0, 14);
           const prepared = engine.prepareCommit(result.model, { organization: { id: org.id, status: org.status }, batchId: previewId, actorUid });
           if (state.resume && prepared.ok && !engine.batchMatchesPlan(state.resume, prepared.plan, org.id)) { state.resumeMismatch = true; state.summary = null; state.planFailure = ""; }
-          if (prepared.ok && !state.resumeMismatch) state.summary = H.planSummary(prepared.plan); else if (!prepared.ok) state.planFailure = "Không lập được kế hoạch nhập: " + (prepared.diagnostics[0] ? prepared.diagnostics[0].message : "dữ liệu không hợp lệ") ;
+          if (prepared.ok && !state.resumeMismatch) { state.summary = H.planSummary(prepared.plan); if (commitEnabled() && !state.resume && state.file.sha256) { state.dup = { status: "checking" }; state.dupAck = false; } } else if (!prepared.ok) state.planFailure = "Không lập được kế hoạch nhập: " + (prepared.diagnostics[0] ? prepared.diagnostics[0].message : "dữ liệu không hợp lệ") ;
         }
       } catch (error) {
         warn("read", error);
@@ -599,6 +633,7 @@ export function createImportCenter(deps) {
       }
       if (!alive || mine !== generation) return;
       paintAll();
+      if (state.result && state.result.ok && state.summary && !state.resume) void checkDuplicate();
       const counts = state.result ? H.countDiagnostics(state.result.diagnostics) : null;
       live(state.result ? (state.result.ok ? "Kiểm tra xong: tệp hợp lệ" : "Kiểm tra xong: " + counts.errors + " lỗi") : state.failure);
       const target = state.result ? $("#impResultTitle") : $("#impFailed");
@@ -644,6 +679,8 @@ export function createImportCenter(deps) {
       if (action === "back") { if (running()) { live(getRunHelpers().RUN_MESSAGES.backBlocked); return; } if (typeof onBack === "function") onBack(); return; }
       if (action === "confirm") return void confirmAndRun();
       if (action === "run-resume") { const run = state.run; if (run && run.plan) { state.run = null; return void runCommit({ plan: run.plan, resume: false }); } return; }
+      if (action === "dup-retry") { void checkDuplicate(); return; }
+      if (action === "audit-retry") { const run = state.run; if (run && run.auditEvent && run.audit && (run.audit.state === "failed" || run.audit.state === "unverified")) void recordAudit(run, run.auditEvent); return; }
       if (action === "run-dismiss") { state.run = null; paintAll(); return; }
       if (action === "run-finish") { state.run = null; if (typeof onBack === "function") onBack(); return; }
       if (action === "resume-pick") { const batch = state.recovery.find((b) => b.id === button.dataset.batch); if (batch && batch.status === "committing") { state.resume = batch; state.resumeMismatch = false; state.ack = false; state.run = null; resetResult(); state.file = null; state.phase = "idle"; paintAll(); live(getRunHelpers().RUN_MESSAGES.resumeHint); const pick = $("#impPick"); if (pick) pick.focus(); } return; }
@@ -664,6 +701,8 @@ export function createImportCenter(deps) {
       if (action === "close-all") { state.open.clear(); paintPreview(); return; }
     };
     const onChange = (event) => {
+      const dupAck = event.target.closest && event.target.closest("[data-imp-dupack]");
+      if (dupAck) { state.dupAck = !!dupAck.checked; paintConfirm(); const again = $("#impDupAck"); if (again) again.focus(); return; }
       const ack = event.target.closest && event.target.closest("[data-imp-ack]");
       if (ack) { state.ack = !!ack.checked; paintConfirm(); const again = $("#impConfirmAck"); if (again) again.focus(); return; }
       const rb = event.target.closest && event.target.closest("[data-imp-rback]");

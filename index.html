@@ -639,7 +639,7 @@ import { createCurriculumEditor, createCurriculumNodeWriter } from "./curriculum
 // Library V2 P4-S3: Template Center + Import Center (UI / PREVIEW ONLY, Platform Admin). The view is small and imported here; the engine (P4-S2 reader host, validator, plan,
 // template writer) is loaded LAZILY (a dynamic import) when the Import Center screen opens, and SheetJS 0.20.3 only inside the parsing Worker / on the first template download.
 // The V1 roster-export library (vendor/xlsx.full.min.js 0.18.5) is untouched. No Firestore import write exists in this release.
-import { createImportCenter } from "./import-center-view.mjs?v=20261009-p4s4";
+import { createImportCenter } from "./import-center-view.mjs?v=20261014-p5b";
 import { createImportStatusReader } from "./import-batch-status.mjs?v=20261009-p4s4";
 import { createActiveOrganizationLookup, createTeacherEnrollmentFlow } from "./teacher-organization-enrollment.mjs?v=20261005-o2";
 // GATE 5F.C: Knowledge Co-creation dashboard launch/close control for the Classroom Second Brain
@@ -1804,9 +1804,10 @@ function adminOrganizations(c){
     importCenter:createImportCenter({
       db, actorUid:STATE.user.uid, isPlatformAdmin:STATE.profile?.role==="admin",
       esc, toast, mapError, organizationQueries:ORGANIZATION_QUERIES,
-      loadEngine:()=>import("./import-center-engine.mjs?v=20261009-p4s4"),
+      loadEngine:()=>import("./import-center-engine.mjs?v=20261014-p5b"),
       downloadFile:downloadImportFile,
-      commitTools:{ firestore:{collection,doc,getDocFromServer,getDocsFromServer,query,where,limit,orderBy,startAfter,documentId,writeBatch,setDoc,updateDoc,deleteDoc,serverTimestamp}, acquireLock:acquireImportLock }
+      commitTools:{ firestore:{collection,doc,getDocFromServer,getDocsFromServer,query,where,limit,orderBy,startAfter,documentId,writeBatch,setDoc,updateDoc,deleteDoc,serverTimestamp}, acquireLock:acquireImportLock },
+      auditTools:{ firestore:{doc,setDoc,getDocFromServer,serverTimestamp}, actor:()=>({uid:STATE.user?.uid||null,email:STATE.profile?.email||STATE.user?.email||"",name:STATE.profile?.displayName||"",role:STATE.profile?.role||""}) }
     }),
     // P2-S4: ordinary membership management inside Organization Detail (Platform Admin only; no Organization Admin / capability work).
     membershipSection:createOrganizationMembershipSection({

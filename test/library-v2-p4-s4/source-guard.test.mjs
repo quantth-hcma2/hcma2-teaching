@@ -9,6 +9,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { INDEX_EDITS_P4S4, SECTION_VIEW_EDITS_P4S4, reverseP4S4IndexEdits, reverseP4S4SectionViewEdits } from "./p4s4-edits.mjs";
+import { reverseP4S5IndexEdits } from "../library-v2-p4-s5/p4s5-edits.mjs";   // P4-S5-B: the page assertions below describe the P4-S4 state (the production web release c6c66ed)
 import { FREEZE_ANCHORS, deployedRules } from "./import-freeze-rules.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -23,7 +24,7 @@ const shaBuf = (b) => createHash("sha256").update(b).digest("hex");
 const stripLiterals = (s) => s.replace(/"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g, '""');
 const code = (p) => stripLiterals(text(p).split("\n").map((line) => (line.includes("//") ? line.slice(0, line.indexOf("//")) : line)).join("\n"));
 const noComments = (p) => text(p).replace(/\/\/.*$/gm, "");
-const ADDED_OK = [/^import-(commit-controller|run-helpers|batch-status)\.mjs$/, /^test\/library-v2-p4-s4\/[A-Za-z0-9._-]+$/];
+const ADDED_OK = [/^import-(commit-controller|run-helpers|batch-status|audit)\.mjs$/, /^test\/library-v2-p4-s[45]\/[A-Za-z0-9._-]+$/];   // P4-S5-B aligned: + the audit module and the P4-S5 tests
 const MODIFIED_OK = new Set([
   "index.html", "import-center-view.mjs", "import-center-engine.mjs", "curriculum-admin-view.mjs", "firestore.rules.production-candidate"                 // the slice's own edits
 ]);
@@ -68,8 +69,8 @@ test("EDITS: index.html and the P3 curriculum list module differ from the baseli
   assert.equal(SECTION_VIEW_EDITS_P4S4.length, 10);
   assert.equal(shaBuf(Buffer.from(reverseP4S4SectionViewEdits(text("curriculum-admin-view.mjs")), "utf8")), shaBuf(gitBuf(BASE, "curriculum-admin-view.mjs")));
   const removed = git("diff", "-U0", "--no-color", BASE, "--", "index.html").split("\n").filter((l) => l.startsWith("-") && !l.startsWith("---")).length;
-  assert.ok(removed <= 8, "index.html removed " + removed + " lines");
-  const html = text("index.html");
+  assert.ok(removed <= 12, "index.html removed " + removed + " lines");   // P4-S5-B aligned: + the 3 lines the S5 edits rewrite
+  const html = reverseP4S5IndexEdits(text("index.html"));   // the P4-S4 page state
   assert.ok(html.includes('import { createImportCenter } from "./import-center-view.mjs?v=20261009-p4s4";'));
   assert.ok(html.includes('import { createImportStatusReader } from "./import-batch-status.mjs?v=20261009-p4s4";') && html.includes("importStatus:createImportStatusReader({collection,query,where,limit,getDocs})"));
   assert.equal([...html.matchAll(/import\("\.\/import-center-engine\.mjs\?v=20261009-p4s4"\)/g)].length, 1, "the engine is still imported only dynamically (lazy)");
@@ -113,8 +114,8 @@ test("COLLECTIONS: only the commit controller names the import/curriculum collec
   assert.ok(!/^\s*import\s/m.test(text("import-center-view.mjs")) && !/^\s*import\s/m.test(text("import-run-helpers.mjs")), "the view and the run helpers import nothing (every dependency is injected)");
   const imports = [...text("import-commit-controller.mjs").matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]).sort();
   assert.deepEqual(imports, ["./curriculum-model.mjs", "./import-plan.mjs", "./import-sha256.mjs"], "the controller reuses the approved plan, model and hash modules only");
-  const engine = [...text("import-center-engine.mjs").matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]).sort();
-  assert.deepEqual(engine, ["./import-capabilities.mjs", "./import-commit-controller.mjs", "./import-plan.mjs", "./import-run-helpers.mjs", "./import-template-writer.mjs", "./import-template.mjs", "./import-validate.mjs", "./import-xlsx-reader.mjs"]);
+  const engine = [...text("import-center-engine.mjs").matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1].replace(/\?v=[0-9a-z-]+$/, "")).sort();   // P4-S5-B: cache tokens on the modules this slice changed
+  assert.deepEqual(engine, ["./import-audit.mjs", "./import-capabilities.mjs", "./import-commit-controller.mjs", "./import-plan.mjs", "./import-run-helpers.mjs", "./import-template-writer.mjs", "./import-template.mjs", "./import-validate.mjs", "./import-xlsx-reader.mjs"]);
 });
 test("NO CHEATING: no status value other than the frozen enum is ever written; completion only after the seal and the full read-back verification; every read goes to the server; authorization is re-checked before each write phase", () => {
   const src = noComments("import-commit-controller.mjs");

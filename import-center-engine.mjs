@@ -8,5 +8,7 @@ export { prepareCommit, CHUNK_WRITES } from "./import-plan.mjs";
 export { createTemplateWriter, XLSX_MIME } from "./import-template-writer.mjs";
 export { IMPORT_LIMITS, TEMPLATE_ID, TEMPLATE_SCHEMA_VERSION, TEMPLATE_SHEET_NAMES, SHEET_COLUMNS, TEMPLATE_STRICTNESS } from "./import-template.mjs";
 // P4-S4: the commit / recovery / rollback controller and the execution UI helpers are part of the same lazy engine (never loaded by ordinary pages).
-export { createImportCommitController, verifyImportedDataset, batchMatchesPlan, classifyError, RESULT_CODES } from "./import-commit-controller.mjs";
-export { createImportRunHelpers } from "./import-run-helpers.mjs";
+export { createImportCommitController, verifyImportedDataset, batchMatchesPlan, classifyError, RESULT_CODES } from "./import-commit-controller.mjs?v=20261014-p5b";
+export { createImportRunHelpers } from "./import-run-helpers.mjs?v=20261014-p5b";
+// P4-S5-B: audit events (curriculum.import.completed / rolledBack / partial), idempotent by deterministic document id.
+export { createImportAudit, buildImportAuditEvent, importAuditId, IMPORT_AUDIT_EVENTS, IMPORT_AUDIT_STATES } from "./import-audit.mjs?v=20261014-p5b";

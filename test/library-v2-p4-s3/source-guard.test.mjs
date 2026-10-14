@@ -21,7 +21,7 @@ const sha = (p) => createHash("sha256").update(["index.html", "curriculum-admin-
 const shaText = (t) => createHash("sha256").update(Buffer.from(t, "utf8")).digest("hex");
 const code = (p) => text(p).split("\n").map((line) => (line.includes("//") ? line.slice(0, line.indexOf("//")) : line)).join("\n");
 const NEW_MODULES = ["import-center-view.mjs", "import-center-engine.mjs", "import-template-writer.mjs"];
-const ADDED_OK = [/^import-(center-view|center-engine|template-writer|commit-controller|run-helpers|batch-status)\.mjs$/, /^test\/library-v2-p4-s[34]\/[A-Za-z0-9._-]+$/];   // P4-S4 aligned: + the commit controller, the run helpers and the P4-S4 tests
+const ADDED_OK = [/^import-(center-view|center-engine|template-writer|commit-controller|run-helpers|batch-status|audit)\.mjs$/, /^test\/library-v2-p4-s[345]\/[A-Za-z0-9._-]+$/];   // P4-S4 aligned: + the commit controller, the run helpers and the P4-S4 tests
 const MODIFIED_OK = new Set([
   "index.html", "curriculum-admin-view.mjs", "organization-admin-view.mjs", "import-template.mjs", "firestore.rules.production-candidate",                                              // the slice's own edits (pinned below)
   "test/library-v2-p2-s2/source-guard.test.mjs", "test/library-v2-p2-s3/source-guard.test.mjs", "test/library-v2-p2-s4/source-guard.test.mjs",   // historical guards aligned
@@ -74,7 +74,7 @@ test("READ-ONLY: no new module can write Firestore or Storage, upload, persist, 
   assert.ok(!/^\s*import\s/m.test(view) && !/\bimport\s*\(/.test(code("import-center-view.mjs")), "the view imports nothing (every dependency is injected)");
   assert.ok(!/\bdb\.|\bgetDoc|\bgetDocs/.test(code("import-center-view.mjs")), "the view never touches the database object");
   const imports = [...text("import-center-engine.mjs").matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]).sort();
-  assert.deepEqual(imports, ["./import-capabilities.mjs", "./import-commit-controller.mjs", "./import-plan.mjs", "./import-run-helpers.mjs", "./import-template-writer.mjs", "./import-template.mjs", "./import-validate.mjs", "./import-xlsx-reader.mjs"]);
+  assert.deepEqual(imports.map((s) => s.replace(/\?v=[0-9a-z-]+$/, "")), ["./import-audit.mjs", "./import-capabilities.mjs", "./import-commit-controller.mjs", "./import-plan.mjs", "./import-run-helpers.mjs", "./import-template-writer.mjs", "./import-template.mjs", "./import-validate.mjs", "./import-xlsx-reader.mjs"]);
   assert.ok(!code("import-template-writer.mjs").includes("xlsx.full.min.js") && !/window\.XLSX/.test(code("import-template-writer.mjs")), "the V1 library is not referenced by code");
 });
 test("CONFIRM: the only 'confirm import' control in the view is rendered disabled with no handler; there is no enabling path", () => {

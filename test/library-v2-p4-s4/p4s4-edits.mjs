@@ -1,6 +1,7 @@
 // P4-S4 edits to files that EARLIER slices pinned (index.html, curriculum-admin-view.mjs): the exact edits plus reversals that restore the previously verified bytes (P4-S3 closure state, commit
 // 6a05411), so every older byte-pin keeps its meaning and any OTHER change is still detected. GENERATED from git diff -U0 against 6a05411 (test/library-v2-p4-s4/source-guard.test.mjs pins these pairs
-// and the resulting hashes). The reversal is IDEMPOTENT (a source that holds none of the edits is returned unchanged). Imports nothing.
+// and the resulting hashes). The reversal is IDEMPOTENT (a source that holds none of the edits is returned unchanged). P4-S5-B: the only import is the S5 index reversal (applied first).
+import { reverseP4S5IndexEdits } from "../library-v2-p4-s5/p4s5-edits.mjs";
 const NL = String.fromCharCode(10), CRLF = String.fromCharCode(13, 10);
 export const withNl = (s, crlf) => (crlf ? s.split(NL).join(CRLF) : s);
 function transform(source, edits, label) {
@@ -90,5 +91,5 @@ export const SECTION_VIEW_EDITS_P4S4 = [
   ""
  ]
 ];
-export const reverseP4S4IndexEdits = (src) => transform(src, INDEX_EDITS_P4S4, "P4-S4 index.html");
+export const reverseP4S4IndexEdits = (src) => transform(reverseP4S5IndexEdits(src), INDEX_EDITS_P4S4, "P4-S4 index.html");   // P4-S5-B: the S5 edits are reversed FIRST (S5 -> S4 -> S3 ...)
 export const reverseP4S4SectionViewEdits = (src) => transform(src, SECTION_VIEW_EDITS_P4S4, "P4-S4 curriculum-admin-view");

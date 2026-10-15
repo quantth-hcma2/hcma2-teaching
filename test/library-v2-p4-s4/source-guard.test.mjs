@@ -82,7 +82,7 @@ test("EDITS: index.html and the P3 curriculum list module differ from the baseli
   assert.ok(!/importBatches|import-xlsx|sheetjs-0\.20\.3/.test(html.replace(/\/\/.*$/gm, "")), "the page never names the batch collection or the reader/SheetJS modules");
 });
 test("HISTORICAL TESTS: every modified earlier-slice test changes only a Rules SHA-256 pin, except the explicitly aligned guards whose extra lines are the list of the new allowed files / reversal chain", () => {
-  const files = git("diff", "--name-only", BASE, "--", "test").split("\n").filter((p) => p && !p.startsWith("test/library-v2-p4-s4/"));
+  const files = git("diff", "--name-only", BASE, "--", "test").split("\n").filter((p) => p && !p.startsWith("test/library-v2-p4-s4/") && !p.startsWith("test/library-v2-p4-s5/"));   // P4-S5: the slice's own NEW tests are not earlier-slice tests (ADDED_OK above already allows them)
   const aligned = new Set(["test/library-v2-p2-s2/source-guard.test.mjs", "test/library-v2-p2-s3/source-guard.test.mjs", "test/library-v2-p2-s4/source-guard.test.mjs", "test/library-v2-p3-s3/source-guard.test.mjs",
     "test/library-v2-p3-s4/source-guard.test.mjs", "test/library-v2-p3-s5/source-guard.test.mjs", "test/library-v2-p4-s3/source-guard.test.mjs", "test/library-v2-p4-s3/p4s3-edits.mjs", "test/library-v2-p4-s3/integration.e2e.mjs",
     "test/library-v2-p4-s1/atomic.rules.test.mjs", "test/library-v2-p4-s1/import-batch.rules.test.mjs", "test/library-v2-p4-s1/regression.test.mjs"]);          // the two P4-S1 Rules suites now run on the DEPLOYED ruleset text (one import + one line each)

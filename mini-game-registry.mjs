@@ -20,10 +20,11 @@ export const MINI_GAMES = freeze([
     title: "TRẮC NGHIỆM TƯƠNG TÁC",
     description: "Trò chơi trắc nghiệm theo thời gian thực: trình chiếu câu hỏi, học viên trả lời trên điện thoại, chấm điểm tự động, bảng xếp hạng và báo cáo.",
     action: "MỞ TRÒ CHƠI ↗",
-    url: "https://hcma2-interactive.hcma2-interactive-v1.workers.dev/",
+    // SSO R1: mo qua /sso/begin -> Mini Game xin xac nhan tai Teaching (mini-game-sso.mjs), khong can nhap mat khau lan hai
+    url: "https://hcma2-interactive.hcma2-interactive-v1.workers.dev/sso/begin",
     notes: freeze([
       "Mở trong tab mới, là ứng dụng riêng của HCMA2 (không nằm trong trang này).",
-      "Giảng viên đăng nhập bằng tài khoản Mini Game riêng do quản trị Mini Game cấp — không dùng tài khoản HCMA2 Teaching.",
+      "Đăng nhập bằng chính tài khoản HCMA2 Teaching (xác nhận một lần, không nhập lại mật khẩu).",
       "Học viên không cần tài khoản: tham gia bằng mã PIN hoặc quét mã QR trên màn chiếu."
     ])
   })

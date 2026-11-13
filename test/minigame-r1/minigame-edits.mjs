@@ -1,3 +1,4 @@
+import { reverseSsoIndexEdits } from "../minigame-sso-r1/sso-edits.mjs";
 // MINI GAME TAB R1 edits to index.html: the exact five additive edits plus a reversal that restores the production web release
 // ce89869 bytes, so every older byte-pin keeps its meaning and any OTHER change is still detected. The P4-S5 reversal
 // (test/library-v2-p4-s5/p4s5-edits.mjs) applies THIS reversal FIRST (Mini Game -> P4-S5 -> P4-S4 ...). Both directions are
@@ -37,5 +38,6 @@ export const INDEX_EDITS_MINIGAME = [
   ['  if(key==="groups") return groupModule(c, true);\n  if(key==="minigames") return mountMiniGameHub(c, esc);', '  if(key==="groups") return groupModule(c, true);'],
   ['  if(key==="groups") return groupModule(c, false);\n  if(key==="minigames") return mountMiniGameHub(c, esc);', '  if(key==="groups") return groupModule(c, false);']
 ];
-export const reverseMiniGameIndexEdits = (src) => transform(src, INDEX_EDITS_MINIGAME, "MINIGAME-R1 index.html", false);
+// MINI GAME SSO R1: its own index.html reversal is applied FIRST (SSO -> Mini Game R1 -> P4-S5 ...).
+export const reverseMiniGameIndexEdits = (src) => transform(reverseSsoIndexEdits(src), INDEX_EDITS_MINIGAME, "MINIGAME-R1 index.html", false);
 export const applyMiniGameIndexEdits = (src) => transform(src, INDEX_EDITS_MINIGAME, "MINIGAME-R1 index.html", true);

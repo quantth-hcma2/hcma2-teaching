@@ -6,7 +6,7 @@ import { MINI_GAMES, MINI_GAME_ROUTE_KEY, MINI_GAME_ALLOWED_ORIGINS, isAllowedMi
 
 // same escaping as index.html esc()
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const QUIZ = "https://hcma2-interactive.hcma2-interactive-v1.workers.dev/";
+const QUIZ = "https://hcma2-interactive.hcma2-interactive-v1.workers.dev/sso/begin";   // MINI GAME SSO R1 aligned: the card opens the SSO entry point
 
 test("registry: exactly one active game (Trắc nghiệm tương tác) on the approved origin; route key is 'minigames'; data is frozen", () => {
   assert.equal(MINI_GAME_ROUTE_KEY, "minigames");
@@ -23,7 +23,7 @@ test("registry: exactly one active game (Trắc nghiệm tương tác) on the ap
 
 test("url allow-list: https on an approved origin only; no credentials, other hosts, look-alikes or schemes", () => {
   assert.equal(isAllowedMiniGameUrl(QUIZ), true);
-  assert.equal(isAllowedMiniGameUrl(QUIZ + "play/?pin=123456"), true, "paths on the approved origin are allowed");
+  assert.equal(isAllowedMiniGameUrl("https://hcma2-interactive.hcma2-interactive-v1.workers.dev/play/?pin=123456"), true, "paths on the approved origin are allowed");
   for (const bad of [
     "http://hcma2-interactive.hcma2-interactive-v1.workers.dev/",
     "https://evil.workers.dev/",
@@ -51,7 +51,7 @@ test("render: the active game is a plain <a> link opening a NEW tab with noopene
   assert.ok(a.includes('data-minigame-open="quiz"'));
   assert.ok(!/<iframe|<script|\son[a-z]+=|javascript:/i.test(html));
   assert.ok(html.includes("TRẮC NGHIỆM TƯƠNG TÁC") && html.includes("MỞ TRÒ CHƠI"));
-  assert.ok(/tab mới/.test(html) && /tài khoản Mini Game riêng/.test(html) && /PIN/.test(html), "explains new tab, separate account, PIN/QR");
+  assert.ok(/tab mới/.test(html) && /tài khoản HCMA2 Teaching/.test(html) && /PIN/.test(html), "explains new tab, Teaching account (SSO), PIN/QR");   // MINI GAME SSO R1 aligned
 });
 
 test("extensible: a second active game renders a second card; an upcoming game renders a disabled card without a link; unknown status and disallowed urls render nothing", () => {

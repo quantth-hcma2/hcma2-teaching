@@ -8,7 +8,8 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { INDEX_EDITS_MINIGAME, reverseMiniGameIndexEdits, MINIGAME_IMPORT, MINIGAME_MENU_ENTRY } from "./minigame-edits.mjs";
+import { INDEX_EDITS_MINIGAME, reverseMiniGameIndexEdits, applyMiniGameIndexEdits, MINIGAME_IMPORT, MINIGAME_MENU_ENTRY } from "./minigame-edits.mjs";
+import { reverseSsoIndexEdits } from "../minigame-sso-r1/sso-edits.mjs";   // MINI GAME SSO R1 aligned
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const BASE = "ce898696034cd1f9f9ec4904cb569f1c4f822bd5";   // production web release (origin/main) = the approved baseline of this slice
@@ -16,7 +17,7 @@ const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8"
 const gitBuf = (rev, p) => execFileSync("git", ["show", rev + ":" + p], { cwd: root, maxBuffer: 64 * 1024 * 1024 });
 const text = (p) => readFileSync(root + p, "utf8");
 const sha = (b) => createHash("sha256").update(b).digest("hex");
-const ADDED_OK = [/^mini-game-registry\.mjs$/, /^test\/minigame-r1\/[A-Za-z0-9._-]+$/];
+const ADDED_OK = [/^mini-game-registry\.mjs$/, /^test\/minigame-r1\/[A-Za-z0-9._-]+$/, /^mini-game-sso\.mjs$/, /^test\/minigame-sso-r1\/[A-Za-z0-9._-]+$/];   // MINI GAME SSO R1 aligned
 const MODIFIED_OK = new Set([
   "index.html",                                                                                   // the slice's own five additive lines
   "test/library-v2-p4-s5/p4s5-edits.mjs",                                                         // chain: Mini Game reversal applied first
@@ -47,10 +48,10 @@ test("EDITS: index.html differs from ce89869 by EXACTLY five additive lines; rev
   assert.equal(INDEX_EDITS_MINIGAME.length, 5);
   const html = text("index.html");
   assert.equal(sha(Buffer.from(reverseMiniGameIndexEdits(html), "utf8")), sha(gitBuf(BASE, "index.html")));
-  const diff = git("diff", "-U0", "--no-color", BASE, "--", "index.html").split("\n");
-  const removed = diff.filter((l) => l.startsWith("-") && !l.startsWith("---"));
-  const added = diff.filter((l) => l.startsWith("+") && !l.startsWith("+++")).map((l) => l.slice(1).replace(/\r$/, ""));
-  assert.equal(removed.length, 0, "no line removed or changed");
+  // MINI GAME SSO R1 aligned: after reversing the later SSO edits, index.html is EXACTLY ce89869 + these five additive lines
+  const base = gitBuf(BASE, "index.html").toString("utf8");
+  assert.equal(reverseSsoIndexEdits(html), applyMiniGameIndexEdits(base));
+  const added = reverseSsoIndexEdits(html).split(String.fromCharCode(10)).map((l) => l.replace(/\r$/, "")).filter((l) => !base.split(String.fromCharCode(10)).map((x) => x.replace(/\r$/, "")).includes(l));
   assert.deepEqual(added, [MINIGAME_IMPORT, "  " + MINIGAME_MENU_ENTRY, '  if(key==="minigames") return mountMiniGameHub(c, esc);', "  " + MINIGAME_MENU_ENTRY, '  if(key==="minigames") return mountMiniGameHub(c, esc);']);
 });
 

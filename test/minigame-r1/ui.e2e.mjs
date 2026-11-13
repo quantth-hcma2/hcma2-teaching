@@ -2,6 +2,7 @@
 // Serves TWO static trees on 127.0.0.1: "before" = the production web release ce89869 (git archive) and "after" = this working tree,
 // both talking only to the LOCAL Auth/Firestore emulators (project demo-hcma2-production-prep, live Rules bytes). The Mini Game
 // origin is intercepted by the browser (a stub page), so the test never contacts the real Mini Game or any production service.
+// MINI GAME SSO R1 aligned: the card now opens <origin>/sso/begin (the SSO entry point).
 // Run: node test/minigame-r1/ui.e2e.mjs      Needs: firebase CLI, Java 21+, Playwright (PLAYWRIGHT_PACKAGE or "playwright"), ports 8080/9099 free.
 // Optional: MINIGAME_SHOTS=<dir> (default test-results-minigame-r1 inside the system temp dir).
 import { spawn, execSync, execFileSync } from "node:child_process";
@@ -128,15 +129,15 @@ try {
     check("AFTER teacher: clicking Mini Game opens the hub and marks the menu entry active", active === "minigames");
     const card = p.locator('[data-minigame-open="quiz"]');
     const attrs = await card.evaluate((a) => ({ tag: a.tagName, href: a.getAttribute("href"), target: a.getAttribute("target"), rel: a.getAttribute("rel"), rp: a.getAttribute("referrerpolicy") }));
-    check("AFTER teacher: Trắc nghiệm tương tác card is a plain link to the Mini Game, new tab, noopener noreferrer", attrs.tag === "A" && attrs.href === MINIGAME_ORIGIN + "/" && attrs.target === "_blank" && /noopener/.test(attrs.rel) && /noreferrer/.test(attrs.rel) && attrs.rp === "no-referrer", JSON.stringify(attrs));
+    check("AFTER teacher: Trắc nghiệm tương tác card is a plain link to the Mini Game, new tab, noopener noreferrer", attrs.tag === "A" && attrs.href === MINIGAME_ORIGIN + "/sso/begin" && attrs.target === "_blank" && /noopener/.test(attrs.rel) && /noreferrer/.test(attrs.rel) && attrs.rp === "no-referrer", JSON.stringify(attrs));
     check("AFTER teacher: no iframe anywhere on the page", (await p.locator("iframe").count()) === 0);
     const hubText = await p.locator("#mainContent").innerText();
-    check("AFTER teacher: hub explains new tab, separate Mini Game account and PIN/QR for students", /tab mới/.test(hubText) && /tài khoản Mini Game riêng/.test(hubText) && /PIN/.test(hubText));
+    check("AFTER teacher: hub explains new tab, separate Mini Game account and PIN/QR for students", /tab mới/.test(hubText) && /tài khoản HCMA2 Teaching/.test(hubText) && /PIN/.test(hubText));
     await p.screenshot({ path: path.join(SHOTS, "after-teacher-minigame-hub.png") });
     const [popup] = await Promise.all([ctx.waitForEvent("page"), card.click()]);
     await popup.waitForLoadState();
     const stub = JSON.parse(await popup.locator("#stub").innerText());
-    check("AFTER teacher: card opens the Mini Game in a NEW tab without opener or referrer; the Teaching tab stays put", popup.url() === MINIGAME_ORIGIN + "/" && stub.opener === "null" && stub.referrer === "" && p.url().startsWith(AFTER), JSON.stringify({ url: popup.url(), ...stub }));
+    check("AFTER teacher: card opens the Mini Game in a NEW tab without opener or referrer; the Teaching tab stays put", popup.url() === MINIGAME_ORIGIN + "/sso/begin" && stub.opener === "null" && stub.referrer === "" && p.url().startsWith(AFTER), JSON.stringify({ url: popup.url(), ...stub }));
     check("AFTER teacher: nothing about the Teaching user is put in the Mini Game URL", !/[?#]/.test(popup.url()));
     await popup.close();
     // other navigation still works (regression): Thảo luận nhóm and THƯ VIỆN

@@ -111,17 +111,21 @@ async function teachingLogin(p, email) {
   await p.fill("#loginEmail", email); await p.fill("#loginPass", PASS); await p.click("#loginBtn");
 }
 const mgMe = (p) => p.evaluate(async () => (await (await fetch("/api/me")).json()).user);
-/** Teaching -> Mini Game tab -> card -> confirmation -> lands in Mini Game. Returns the Mini Game page. */
+/** Teaching -> Mini Game tab -> card -> lands in Mini Game. Returns the Mini Game page.
+ *  MINI GAME SAME-TAB R1 aligned: the card replaces its tab and the click IS the confirmation (test/minigame-sametab-r1 covers the
+ *  flow in depth); a second tab of the same browser session is used so that `p` stays on Teaching for the later steps. */
 async function ssoFromTeaching(ctx, p, shotPrefix) {
-  await p.click('#sidebarNav .navlink[data-nav="minigames"]');
-  await p.waitForSelector('[data-minigame-open="quiz"]', { timeout: 15000 });
-  const [tab] = await Promise.all([ctx.waitForEvent("page"), p.click('[data-minigame-open="quiz"]')]);
-  await tab.waitForSelector("#mgSsoOverlay", { timeout: 60000 });
-  if (shotPrefix) await tab.screenshot({ path: path.join(SHOTS, shotPrefix + "-confirm.png") });
-  check(`${shotPrefix}: the new tab shows the Teaching confirmation and the SSO parameters were removed from its address`, tab.url().startsWith(TEACHING) && !/mg_sso_/.test(tab.url()), tab.url());
-  await tab.click('[data-mg-sso="go"]');
-  await tab.waitForURL((u) => u.toString().startsWith(MGO + "/"), { timeout: 30000 });
+  const tab = await ctx.newPage();
+  await tab.goto(`${TEACHING}/index.html?emulator=1`);
+  await tab.waitForSelector(".navlink", { timeout: 60000 });
+  await tab.waitForTimeout(800);
+  await tab.click('#sidebarNav .navlink[data-nav="minigames"]');
+  await tab.waitForSelector('[data-minigame-open="quiz"]', { timeout: 15000 });
+  await tab.click('[data-minigame-open="quiz"]');
+  await tab.waitForURL((u) => u.toString().startsWith(MGO + "/") && !u.toString().includes("/sso/"), { timeout: 30000 });
   await tab.waitForLoadState("networkidle");
+  if (shotPrefix) await tab.screenshot({ path: path.join(SHOTS, shotPrefix + "-same-tab.png") });
+  check(`${shotPrefix}: card click in the same tab = confirmation; Mini Game opens with no SSO parameter, code or token in its address`, !/mg_sso_|code=|token/.test(tab.url()), tab.url());
   return tab;
 }
 
@@ -229,8 +233,9 @@ try {
   await teachingLogin(tC, people.binh[0]);
   await tC.waitForSelector(".navlink", { timeout: 60000 });
   await tC.waitForTimeout(800);
-  await tC.click('#sidebarNav .navlink[data-nav="minigames"]');
-  const [ctab] = await Promise.all([ctxC.waitForEvent("page"), tC.click('[data-minigame-open="quiz"]')]);
+  // MINI GAME SAME-TAB R1 aligned: the confirmation (with Huỷ) appears when the request did NOT start from a card click in that tab
+  const ctab = await ctxC.newPage();
+  await ctab.goto(`${MGO}/sso/begin`);
   await ctab.waitForSelector("#mgSsoOverlay", { timeout: 60000 });
   await ctab.click('[data-mg-sso="cancel"]');
   await ctab.waitForTimeout(1000);

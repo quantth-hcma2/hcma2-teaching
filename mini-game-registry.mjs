@@ -1,7 +1,8 @@
 // MINI GAME hub (Mini Game tab R1).
 // Pure registry + rendering for the teacher/admin "MINI GAME" tab. No Firestore, no Auth, no network, no storage, no imports:
-// every game is an INDEPENDENT application opened in a NEW TAB through a plain link (never an iframe). Nothing about the
-// signed-in HCMA2 Teaching user (uid, email, token, role) is ever passed to a game.
+// every game is an INDEPENDENT application opened through a plain link (never an iframe). SAME-TAB R1: the link replaces the current
+// tab (no new tab); the game offers "Quay về HCMA2 Teaching". Nothing about the signed-in HCMA2 Teaching user (uid, email, token,
+// role) is ever put in a URL (SSO: mini-game-sso.mjs sends a fresh ID token only in an Authorization header).
 // Adding a future game = adding ONE registry entry (status "active" with an https url on the allow-list, or "upcoming").
 // Games that are not registered are never rendered, so the hub never shows speculative cards.
 
@@ -19,11 +20,11 @@ export const MINI_GAMES = freeze([
     icon: "🎯",
     title: "TRẮC NGHIỆM TƯƠNG TÁC",
     description: "Trò chơi trắc nghiệm theo thời gian thực: trình chiếu câu hỏi, học viên trả lời trên điện thoại, chấm điểm tự động, bảng xếp hạng và báo cáo.",
-    action: "MỞ TRÒ CHƠI ↗",
+    action: "MỞ TRÒ CHƠI →",
     // SSO R1: mo qua /sso/begin -> Mini Game xin xac nhan tai Teaching (mini-game-sso.mjs), khong can nhap mat khau lan hai
     url: "https://hcma2-interactive.hcma2-interactive-v1.workers.dev/sso/begin",
     notes: freeze([
-      "Mở trong tab mới, là ứng dụng riêng của HCMA2 (không nằm trong trang này).",
+      "Mở ngay trong tab này (ứng dụng riêng của HCMA2); trong Mini Game bấm “Quay về HCMA2 Teaching” để trở lại.",
       "Đăng nhập bằng chính tài khoản HCMA2 Teaching (xác nhận một lần, không nhập lại mật khẩu).",
       "Học viên không cần tài khoản: tham gia bằng mã PIN hoặc quét mã QR trên màn chiếu."
     ])
@@ -47,7 +48,7 @@ export function activeMiniGames(games = MINI_GAMES) {
 
 function renderActiveCard(game, esc) {
   const notes = (game.notes || []).map((n) => `<li>${esc(n)}</li>`).join("");
-  return `<a class="library-hub-card" style="text-decoration:none" href="${esc(game.url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer" data-minigame-open="${esc(game.id)}" aria-label="${esc(game.title)} — mở trong tab mới">
+  return `<a class="library-hub-card" style="text-decoration:none" href="${esc(game.url)}" rel="noreferrer" referrerpolicy="no-referrer" data-minigame-open="${esc(game.id)}" aria-label="${esc(game.title)} — mở Mini Game trong tab này">
           <span class="library-card-icon" aria-hidden="true">${esc(game.icon)}</span>
           <span class="library-card-title">${esc(game.title)}</span>
           <span class="library-card-copy">${esc(game.description)}</span>
@@ -71,7 +72,7 @@ export function renderMiniGameHubHtml(esc, games = MINI_GAMES) {
     .map((g) => (g.status === "active" ? (isAllowedMiniGameUrl(g.url) ? renderActiveCard(g, esc) : "") : g.status === "upcoming" ? renderUpcomingCard(g, esc) : ""))
     .filter(Boolean)
     .join("");
-  return `<div class="section-title"><div><h2>MINI GAME</h2><p class="mut">Trò chơi tương tác dùng trong giờ học. Mỗi trò chơi mở trong tab mới.</p></div></div>
+  return `<div class="section-title"><div><h2>MINI GAME</h2><p class="mut">Trò chơi tương tác dùng trong giờ học. Trò chơi mở ngay trong tab này.</p></div></div>
       <div class="library-hub-grid" aria-label="Các Mini Game" data-minigame-hub="1">
         ${cards || `<p class="mut">Chưa có Mini Game nào.</p>`}
       </div>`;

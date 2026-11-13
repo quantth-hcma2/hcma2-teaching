@@ -129,17 +129,23 @@ try {
     check("AFTER teacher: clicking Mini Game opens the hub and marks the menu entry active", active === "minigames");
     const card = p.locator('[data-minigame-open="quiz"]');
     const attrs = await card.evaluate((a) => ({ tag: a.tagName, href: a.getAttribute("href"), target: a.getAttribute("target"), rel: a.getAttribute("rel"), rp: a.getAttribute("referrerpolicy") }));
-    check("AFTER teacher: Trắc nghiệm tương tác card is a plain link to the Mini Game, new tab, noopener noreferrer", attrs.tag === "A" && attrs.href === MINIGAME_ORIGIN + "/sso/begin" && attrs.target === "_blank" && /noopener/.test(attrs.rel) && /noreferrer/.test(attrs.rel) && attrs.rp === "no-referrer", JSON.stringify(attrs));
+    check("AFTER teacher: Trắc nghiệm tương tác card is a plain link to the Mini Game, SAME tab, noreferrer", attrs.tag === "A" && attrs.href === MINIGAME_ORIGIN + "/sso/begin" && attrs.target === null && attrs.rel === "noreferrer" && attrs.rp === "no-referrer", JSON.stringify(attrs));   // MINI GAME SAME-TAB R1 aligned
     check("AFTER teacher: no iframe anywhere on the page", (await p.locator("iframe").count()) === 0);
     const hubText = await p.locator("#mainContent").innerText();
-    check("AFTER teacher: hub explains new tab, separate Mini Game account and PIN/QR for students", /tab mới/.test(hubText) && /tài khoản HCMA2 Teaching/.test(hubText) && /PIN/.test(hubText));
+    check("AFTER teacher: hub explains same tab, Teaching account and PIN/QR for students", /tab này/.test(hubText)   // MINI GAME SAME-TAB R1 aligned
+       && /tài khoản HCMA2 Teaching/.test(hubText) && /PIN/.test(hubText));
     await p.screenshot({ path: path.join(SHOTS, "after-teacher-minigame-hub.png") });
-    const [popup] = await Promise.all([ctx.waitForEvent("page"), card.click()]);
-    await popup.waitForLoadState();
-    const stub = JSON.parse(await popup.locator("#stub").innerText());
-    check("AFTER teacher: card opens the Mini Game in a NEW tab without opener or referrer; the Teaching tab stays put", popup.url() === MINIGAME_ORIGIN + "/sso/begin" && stub.opener === "null" && stub.referrer === "" && p.url().startsWith(AFTER), JSON.stringify({ url: popup.url(), ...stub }));
-    check("AFTER teacher: nothing about the Teaching user is put in the Mini Game URL", !/[?#]/.test(popup.url()));
-    await popup.close();
+    // MINI GAME SAME-TAB R1 aligned: the card replaces THIS tab (no popup); Back returns to Teaching
+    const pagesBefore = ctx.pages().length;
+    await card.click();
+    await p.waitForURL(MINIGAME_ORIGIN + "/sso/begin", { timeout: 15000 });
+    const stub = JSON.parse(await p.locator("#stub").innerText());
+    check("AFTER teacher: card opens the Mini Game in the SAME tab (no new tab) without referrer", ctx.pages().length === pagesBefore && stub.referrer === "", JSON.stringify({ url: p.url(), ...stub }));
+    check("AFTER teacher: nothing about the Teaching user is put in the Mini Game URL", !/[?#]/.test(p.url()));
+    await p.goBack({ waitUntil: "commit" });
+    await p.waitForURL((u) => u.toString().startsWith(AFTER), { timeout: 30000 });
+    await p.waitForSelector(".navlink", { timeout: 60000 });
+    await p.waitForTimeout(1200);
     // other navigation still works (regression): Thảo luận nhóm and THƯ VIỆN
     await p.click('#sidebarNav .navlink[data-nav="library"]');
     await p.waitForFunction(() => /THƯ VIỆN/.test(document.querySelector("#mainContent")?.innerText || ""), null, { timeout: 15000 });

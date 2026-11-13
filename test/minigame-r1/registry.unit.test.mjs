@@ -38,20 +38,20 @@ test("url allow-list: https on an approved origin only; no credentials, other ho
   ]) assert.equal(isAllowedMiniGameUrl(bad), false, String(bad));
 });
 
-test("render: the active game is a plain <a> link opening a NEW tab with noopener noreferrer and no-referrer; no iframe, no script, no handler", () => {
+test("render: the active game is a plain <a> link opening in the SAME tab with noreferrer and no-referrer; no iframe, no script, no handler", () => {   // MINI GAME SAME-TAB R1 aligned
   const html = renderMiniGameHubHtml(esc);
   assert.match(html, /<h2>MINI GAME<\/h2>/);
   const links = html.match(/<a [^>]*>/g) || [];
   assert.equal(links.length, 1);
   const a = links[0];
   assert.ok(a.includes(`href="${QUIZ}"`));
-  assert.ok(a.includes('target="_blank"'));
-  assert.ok(a.includes('rel="noopener noreferrer"'));
+  assert.ok(!a.includes("target="));   // MINI GAME SAME-TAB R1 aligned
+  assert.ok(a.includes('rel="noreferrer"'));
   assert.ok(a.includes('referrerpolicy="no-referrer"'));
   assert.ok(a.includes('data-minigame-open="quiz"'));
   assert.ok(!/<iframe|<script|\son[a-z]+=|javascript:/i.test(html));
   assert.ok(html.includes("TRẮC NGHIỆM TƯƠNG TÁC") && html.includes("MỞ TRÒ CHƠI"));
-  assert.ok(/tab mới/.test(html) && /tài khoản HCMA2 Teaching/.test(html) && /PIN/.test(html), "explains new tab, Teaching account (SSO), PIN/QR");   // MINI GAME SSO R1 aligned
+  assert.ok(/tab này/.test(html) && /tài khoản HCMA2 Teaching/.test(html) && /PIN/.test(html), "explains same tab, Teaching account (SSO), PIN/QR");   // MINI GAME SSO R1 + SAME-TAB R1 aligned
 });
 
 test("extensible: a second active game renders a second card; an upcoming game renders a disabled card without a link; unknown status and disallowed urls render nothing", () => {

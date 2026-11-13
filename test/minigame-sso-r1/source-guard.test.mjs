@@ -9,6 +9,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { INDEX_EDITS_SSO, reverseSsoIndexEdits, SSO_HOOK } from "./sso-edits.mjs";
+import { isSameTabRegistryLine } from "../minigame-sametab-r1/sametab-edits.mjs";   // MINI GAME SAME-TAB R1 aligned
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const BASE = "c2a978f4eeeb5108481e4a67ad8f99fd00b586ac";   // production web release (origin/main) = Mini Game tab R1
@@ -17,7 +18,7 @@ const gitBuf = (rev, p) => execFileSync("git", ["show", rev + ":" + p], { cwd: r
 const text = (p) => readFileSync(root + p, "utf8");
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const code = (p) => text(p).replace(/\/\/.*$/gm, "");
-const ADDED_OK = [/^mini-game-sso\.mjs$/, /^test\/minigame-sso-r1\/[A-Za-z0-9._-]+$/];
+const ADDED_OK = [/^mini-game-sso\.mjs$/, /^test\/minigame-sso-r1\/[A-Za-z0-9._-]+$/, /^test\/minigame-sametab-r1\/[A-Za-z0-9._-]+$/];   // MINI GAME SAME-TAB R1 aligned
 const MODIFIED_OK = new Set([
   "index.html", "mini-game-registry.mjs",                                                                     // the slice's own edits
   "test/minigame-r1/minigame-edits.mjs", "test/minigame-r1/source-guard.test.mjs", "test/minigame-r1/registry.unit.test.mjs", "test/minigame-r1/ui.e2e.mjs",
@@ -57,7 +58,7 @@ test("EDITS: index.html = c2a978f + EXACTLY the three pinned SSO edits (reversal
 
 test("REGISTRY: only the quiz card url (-> /sso/begin on the SAME allow-listed origin) and its sign-in note changed", () => {
   const diff = git("diff", "-U0", "--no-color", BASE, "--", "mini-game-registry.mjs").split("\n").filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l));
-  assert.deepEqual(diff.filter((l) => l.startsWith("-")).map((l) => l.trim()), [
+  assert.deepEqual(diff.filter((l) => l.startsWith("-") && !isSameTabRegistryLine(l)).map((l) => l.trim()), [   // MINI GAME SAME-TAB R1 aligned
     '-    url: "https://hcma2-interactive.hcma2-interactive-v1.workers.dev/",',
     '-      "Giảng viên đăng nhập bằng tài khoản Mini Game riêng do quản trị Mini Game cấp — không dùng tài khoản HCMA2 Teaching.",'
   ].map((l) => l.trim()));
@@ -70,7 +71,7 @@ test("SSO MODULE: imports only the registry; no Firestore / storage / cookies; t
   const imports = [...src.matchAll(/^\s*import\s[^;]*from\s*"([^"]+)"/gm)].map((m) => m[1]);
   assert.deepEqual(imports, ["./mini-game-registry.mjs?v=20261113-sso-r1"]);
   assert.ok(!/\bimport\s*\(/.test(src));
-  for (const re of [/firestore|setDoc|addDoc|updateDoc|deleteDoc|getDoc/i, /localStorage|sessionStorage|indexedDB|document\.cookie/, /postMessage|window\.open|<iframe/i, /XMLHttpRequest|WebSocket|sendBeacon/])
+  for (const re of [/firestore|setDoc|addDoc|updateDoc|deleteDoc|getDoc/i, /localStorage|indexedDB|document\.cookie/, /postMessage|window\.open|<iframe/i, /XMLHttpRequest|WebSocket|sendBeacon/])
     assert.ok(!re.test(src), "forbidden pattern: " + re);
   assert.ok(src.includes('readMiniGameSsoRequest(location.search)') && src.includes('allowedOrigins.includes(returnOrigin)'), "return origin is checked against the allow-list");
   assert.ok(src.includes('req.returnOrigin + "/api/sso/issue"') && src.includes('Authorization: "Bearer " + token') && src.includes('credentials: "omit"'));

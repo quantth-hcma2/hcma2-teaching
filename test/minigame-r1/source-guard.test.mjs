@@ -17,7 +17,7 @@ const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8"
 const gitBuf = (rev, p) => execFileSync("git", ["show", rev + ":" + p], { cwd: root, maxBuffer: 64 * 1024 * 1024 });
 const text = (p) => readFileSync(root + p, "utf8");
 const sha = (b) => createHash("sha256").update(b).digest("hex");
-const ADDED_OK = [/^mini-game-registry\.mjs$/, /^test\/minigame-r1\/[A-Za-z0-9._-]+$/, /^mini-game-sso\.mjs$/, /^test\/minigame-sso-r1\/[A-Za-z0-9._-]+$/];   // MINI GAME SSO R1 aligned
+const ADDED_OK = [/^mini-game-registry\.mjs$/, /^test\/minigame-r1\/[A-Za-z0-9._-]+$/, /^mini-game-sso\.mjs$/, /^test\/minigame-sso-r1\/[A-Za-z0-9._-]+$/, /^test\/minigame-sametab-r1\/[A-Za-z0-9._-]+$/];   // MINI GAME SSO R1 + SAME-TAB R1 aligned
 const MODIFIED_OK = new Set([
   "index.html",                                                                                   // the slice's own five additive lines
   "test/library-v2-p4-s5/p4s5-edits.mjs",                                                         // chain: Mini Game reversal applied first

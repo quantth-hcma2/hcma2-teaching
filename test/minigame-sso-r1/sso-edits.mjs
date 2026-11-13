@@ -29,7 +29,7 @@ function transform(source, edits, label, forward) {
 const R1_IMPORT = 'import { mountMiniGameHub } from "./mini-game-registry.mjs?v=20261113-minigame-r1";';
 export const SSO_REGISTRY_IMPORT = 'import { mountMiniGameHub } from "./mini-game-registry.mjs?v=20261113-sso-r1";';
 export const SSO_MODULE_IMPORT = 'import { startMiniGameSsoIfRequested } from "./mini-game-sso.mjs?v=20261113-sso-r1";';
-export const SSO_HOOK = '  startMiniGameSsoIfRequested({ location:window.location, history:window.history, getIdToken:()=>auth.currentUser?auth.currentUser.getIdToken(true):Promise.reject(new Error("Chưa đăng nhập")), profile:STATE.profile, esc });';
+export const SSO_HOOK = '  startMiniGameSsoIfRequested({ location:window.location, history:window.history, getIdToken:()=>auth.currentUser?auth.currentUser.getIdToken(true):Promise.reject(new Error("Chưa đăng nhập")), getCachedToken:(f)=>auth.currentUser?auth.currentUser.getIdToken(!!f):Promise.reject(new Error("Chưa đăng nhập")), profile:STATE.profile, esc });';
 const ADMIN_NAV = '  wireShellNav(ADMIN_MENU, (key)=>{ STATE.adminNav = key; clearListeners(); adminRoute(key); });';
 const TEACHER_NAV = '  wireShellNav(TEACHER_MENU, navigateTeacherTopLevel);';
 export const INDEX_EDITS_SSO = [

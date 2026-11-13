@@ -26,6 +26,60 @@ export function cleanedUrl(loc) {
   return loc.pathname + (s ? "?" + s : "") + (loc.hash || "");
 }
 
+// ---------------------------------------------------------------- OD01: dang xuat Teaching -> thu hoi phien Mini Game
+// Giu san mot ID token (lam moi dinh ky) de khi bam "Dang xuat" gui NGAY (truoc khi Teaching dang xuat) toi
+// <origin Mini Game duoc phep>/api/sso/signout - chi trong header Authorization, khong cookie, keepalive.
+const SIGNOUT_REFRESH_MS = 10 * 60_000;
+const SIGNOUT_TOKEN_MAX_AGE_S = 40 * 60; // Mini Game chap nhan token dang xuat toi 60 phut tuoi
+export function tokenAgeSeconds(token, nowMs = Date.now()) {
+  try {
+    const p = JSON.parse(atob(String(token).split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return Math.floor(nowMs / 1000) - Number(p.iat || 0);
+  } catch {
+    return Infinity;
+  }
+}
+export function armMiniGameSignout(deps) {
+  const doc = deps.document || document;
+  const origins = deps.allowedOrigins || MINI_GAME_ALLOWED_ORIGINS;
+  const fetchImpl = deps.fetchImpl || fetch.bind(globalThis);
+  if (doc.__mgSignout) {
+    doc.__mgSignout.getToken = deps.getCachedToken; // lan render khung menu sau: chi cap nhat ham lay token
+    return doc.__mgSignout;
+  }
+  const state = { token: null, getToken: deps.getCachedToken };
+  state.refresh = async () => {
+    try {
+      let t = await state.getToken(false);
+      if (tokenAgeSeconds(t) > SIGNOUT_TOKEN_MAX_AGE_S) t = await state.getToken(true);
+      state.token = t;
+    } catch {
+      state.token = null;
+    }
+  };
+  void state.refresh();
+  state.timer = setInterval(() => void state.refresh(), SIGNOUT_REFRESH_MS);
+  doc.addEventListener("click", (ev) => {
+    const t = ev.target;
+    const btn = t && t.closest ? t.closest("#btnLogoutTop") : null;
+    if (!btn || !state.token) return;
+    const token = state.token;
+    state.token = null;
+    for (const origin of origins)
+      fetchImpl(origin + "/api/sso/signout", {
+        method: "POST",
+        keepalive: true,
+        headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+        body: "{}",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        cache: "no-store",
+      }).catch(() => {});
+  }, true);
+  doc.__mgSignout = state;
+  return state;
+}
+
 export function eligible(profile) {
   return !!profile && profile.status === "active" && (profile.role === "teacher" || profile.role === "admin");
 }
@@ -50,6 +104,7 @@ export async function startMiniGameSsoIfRequested(deps) {
   const { location, history, esc } = deps;
   const doc = deps.document || document;
   const fetchImpl = deps.fetchImpl || fetch.bind(globalThis);
+  if (deps.getCachedToken) armMiniGameSignout({ document: doc, getCachedToken: deps.getCachedToken, fetchImpl });
   const req = readMiniGameSsoRequest(location.search);
   if (!req) return { status: "none" };
   try { history.replaceState(null, "", cleanedUrl(location)); } catch { /* bo qua */ }

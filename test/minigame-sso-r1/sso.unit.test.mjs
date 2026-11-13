@@ -158,3 +158,33 @@ test("server refusal (e.g. pending in Firestore): message shown, no navigation, 
   assert.match(doc.nodes[0].querySelector("#mgSsoMsg").textContent, /chờ duyệt/);
   assert.equal(go.disabled, false);
 });
+
+test("OD01 signout: a click on Teaching's 'Đăng xuất' immediately sends the cached token ONLY to allow-listed Mini Game origins (/api/sso/signout, keepalive, no cookies); armed once; refresh replaces a token older than 40 minutes", async () => {
+  const { armMiniGameSignout, tokenAgeSeconds } = await import("../../mini-game-sso.mjs");
+  const now = Math.floor(Date.now() / 1000);
+  const mk = (iat) => "h." + Buffer.from(JSON.stringify({ iat })).toString("base64url") + ".s";
+  assert.ok(Math.abs(tokenAgeSeconds(mk(now - 100)) - 100) <= 1);
+  assert.equal(tokenAgeSeconds("garbage"), Infinity);
+  const listeners = [];
+  const doc = { addEventListener: (type, fn, capture) => listeners.push({ type, fn, capture }) };
+  const calls = [];
+  const asked = [];
+  const getCachedToken = (force) => { asked.push(!!force); return Promise.resolve(force ? mk(now) : mk(now - 3000)); };
+  const st = armMiniGameSignout({ document: doc, getCachedToken, fetchImpl: (url, init) => { calls.push({ url, init }); return Promise.resolve({ ok: true }); }, allowedOrigins: ["https://mg.example"] });
+  await new Promise((r) => setTimeout(r, 10));
+  clearInterval(st.timer);
+  assert.deepEqual(asked, [false, true], "an old cached token (50 min) is force-refreshed");
+  armMiniGameSignout({ document: doc, getCachedToken, fetchImpl: () => assert.fail("must not re-arm") });
+  assert.equal(listeners.length, 1);
+  assert.equal(listeners[0].capture, true, "capture phase: runs before Teaching's own sign-out handler");
+  listeners[0].fn({ target: { closest: () => null } });
+  assert.equal(calls.length, 0, "other clicks do nothing");
+  listeners[0].fn({ target: { closest: (sel) => (sel === "#btnLogoutTop" ? {} : null) } });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://mg.example/api/sso/signout");
+  assert.equal(calls[0].init.keepalive, true);
+  assert.equal(calls[0].init.credentials, "omit");
+  assert.equal(calls[0].init.headers.Authorization, "Bearer " + mk(now));
+  listeners[0].fn({ target: { closest: () => ({}) } });
+  assert.equal(calls.length, 1, "token used once");
+});

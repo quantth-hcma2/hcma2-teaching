@@ -74,7 +74,9 @@ test("SSO MODULE: imports only the registry; no Firestore / storage / cookies; t
     assert.ok(!re.test(src), "forbidden pattern: " + re);
   assert.ok(src.includes('readMiniGameSsoRequest(location.search)') && src.includes('allowedOrigins.includes(returnOrigin)'), "return origin is checked against the allow-list");
   assert.ok(src.includes('req.returnOrigin + "/api/sso/issue"') && src.includes('Authorization: "Bearer " + token') && src.includes('credentials: "omit"'));
-  assert.equal(src.split("fetchImpl(").length - 1, 1, "exactly one network call");
+  assert.equal(src.split("fetchImpl(").length - 1, 2, "exactly two network calls: issue (consent) and signout (OD01)");
+  assert.ok(src.includes('origin + "/api/sso/signout"') && src.includes("for (const origin of origins)") && src.includes("deps.allowedOrigins || MINI_GAME_ALLOWED_ORIGINS"), "signout only to allow-listed origins");
+  assert.equal((src.match(/credentials: "omit"/g) || []).length, 2, "no cookies on either call");
   assert.ok(!/searchParams\.set\("(token|id_token|idToken)"/.test(src), "the ID token is never put in a URL");
   assert.ok(src.includes('target.searchParams.set("code", data.code)') && src.includes('target.searchParams.set("state", req.state)'));
 });

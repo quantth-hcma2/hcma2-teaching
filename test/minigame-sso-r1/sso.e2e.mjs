@@ -81,7 +81,7 @@ const TEACHING = `http://127.0.0.1:${tServer.address().port}`;
 // ---------------------------------------------------------------- Mini Game (wrangler dev, https, SSO on)
 const mgPort = 20000 + Math.floor(Math.random() * 20000);
 const SETUP = "setup-" + randomBytes(12).toString("hex");
-const vars = { SETUP_TOKEN: SETUP, SSO_ENABLED: "1", SSO_PROJECT_ID: PROJECT, SSO_TEACHING_ORIGIN: TEACHING, SSO_FIRESTORE_BASE: "http://127.0.0.1:8080", SSO_JWKS_URL: "http://127.0.0.1:9/unused", SSO_ALLOW_EMULATOR_TOKENS: "1", SSO_SESSION_HOURS: "8", JOIN_LIMIT_PER_MIN: "100000", API_LIMIT_PER_MIN: "100000" };
+const vars = { SETUP_TOKEN: SETUP, SSO_ENABLED: "1", SSO_PROJECT_ID: PROJECT, SSO_TEACHING_ORIGIN: TEACHING, SSO_FIRESTORE_BASE: "http://127.0.0.1:8080", SSO_JWKS_URL: "http://127.0.0.1:9/unused", SSO_ALLOW_EMULATOR_TOKENS: "1", SSO_SESSION_MAX_S: "14400", SSO_IDLE_S: "1800", SSO_REVERIFY_S: "3600", SSO_RATE_PER_MIN: "100000", JOIN_LIMIT_PER_MIN: "100000", API_LIMIT_PER_MIN: "100000" };
 const args = [path.join(MG, "node_modules", "wrangler", "bin", "wrangler.js"), "dev", "--ip", "127.0.0.1", "--port", String(mgPort), "--inspector-port", String(mgPort + 1), "--local-protocol", "https", "--persist-to", mkdtempSync(path.join(os.tmpdir(), "hcma2-sso-mg-")), "--log-level", "error", "--show-interactive-dev-session=false"];
 for (const [k, v] of Object.entries(vars)) args.push("--var", k + ":" + v);
 mg = spawn(process.execPath, args, { cwd: MG, env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" }, stdio: ["ignore", "pipe", "pipe"] });
@@ -177,8 +177,27 @@ try {
   await tQ.waitForSelector(".navlink", { timeout: 60000 });
   await tQ.waitForTimeout(1500);
   const mgQ = await ssoFromTeaching(ctxQ, tQ, "05-admin");
-  const adm = await mgQ.evaluate(async () => ({ me: (await (await fetch("/api/me")).json()).user.role, users: (await fetch("/api/users")).status }));
-  check("Teaching admin: Mini Game role admin with account management", adm.me === "admin" && adm.users === 200, JSON.stringify(adm));
+  const adm = await mgQ.evaluate(async () => ({ me: (await (await fetch("/api/me")).json()).user, users: (await fetch("/api/users")).status }));
+  check("OD01: Teaching admin is NOT automatically a Mini Game admin (teacher until granted)", adm.me.role === "teacher" && adm.users === 403, JSON.stringify(adm));
+  // quan tri du phong (mat khau) cap quyen tuong minh qua giao dien Tai khoan
+  const ctxBG = await newCtx("breakglass");
+  const bg = await ctxBG.newPage();
+  await bg.goto(MGO + "/");
+  await bg.fill('input[autocomplete="username"]', "admin");
+  await bg.fill('input[autocomplete="current-password"]', "break-glass-123");
+  await bg.getByRole("button", { name: "Đăng nhập", exact: true }).click();
+  await bg.waitForSelector('a[href="#/users"]', { timeout: 20000 });
+  await bg.goto(MGO + "/#/users");
+  await bg.waitForSelector('[data-testid="grant-' + adm.me.username + '"]', { timeout: 20000 });
+  await bg.click('[data-testid="grant-' + adm.me.username + '"]');
+  await bg.waitForTimeout(1500);
+  const after = await mgQ.evaluate(async () => ({ me: (await (await fetch("/api/me")).json()).user.role, users: (await fetch("/api/users")).status }));
+  check("OD01: break-glass admin grants Mini Game admin explicitly -> admin with account management", after.me === "admin" && after.users === 200, JSON.stringify(after));
+  await bg.reload();
+  await bg.waitForSelector('[data-testid="auth-events"]', { timeout: 20000 });
+  const evText = await bg.locator('[data-testid="auth-events"]').innerText();
+  check("OD01: login / grant journal visible to the admin (break-glass login, SSO logins, grant)", /quản trị dự phòng/.test(evText) && /qua HCMA2 Teaching/.test(evText) && /Cấp quyền quản trị/.test(evText));
+  await bg.screenshot({ path: path.join(SHOTS, "09-users-grant-and-journal.png"), fullPage: true });
 
   // E. pending teacher: Teaching shows the pending screen (no shell, no confirmation); no Mini Game session
   const ctxP = await newCtx("pending");
@@ -218,6 +237,14 @@ try {
   const mgCheck = await ctxC.newPage();
   await mgCheck.goto(`${MGO}/`);
   check("cancel: stays on Teaching, no Mini Game session", ctab.url().startsWith(TEACHING) && (await mgMe(mgCheck)) === null);
+
+  // G2. OD01: signing out of HCMA2 Teaching revokes the Mini Game session of that account (Binh), not others (Anh)
+  check("before Teaching sign-out: Binh has a Mini Game session", (await mgMe(mgB)) !== null);
+  await tB.click("#btnLogoutTop");
+  await tB.waitForSelector("#loginEmail", { timeout: 30000 });
+  let binhAfter = "pending";
+  for (let i = 0; i < 20 && binhAfter !== null; i++) { await tB.waitForTimeout(250); binhAfter = await mgMe(mgB); }
+  check("OD01: Teaching sign-out -> Binh's Mini Game session revoked; Anh's session untouched", binhAfter === null && (await mgMe(mgA)) !== null, JSON.stringify({ binhAfter }));
 
   // H. Mini Game login page offers Teaching sign-in; logout ends the SSO session
   await mgCheck.waitForSelector('[data-testid="sso-login"]', { timeout: 20000 });

@@ -623,6 +623,7 @@ import { uploadThenCreateGroupSubmission, reportGroupSubmissionImageLoadError } 
 // GROUP PDF V1: per-group PDF export. This import is small; the PDF library and fonts load lazily on first export.
 import { exportGroupPdf } from "./group-pdf-runtime.mjs?v=20261002-pdf-v1";
 import { libraryLocationForTarget, resolveLibraryLocation, renderLibraryHubHtml, renderLibraryChildHtml } from "./library-hub-registry.mjs?v=20261002-library-p1";
+import { mountMiniGameHub } from "./mini-game-registry.mjs?v=20261113-minigame-r1";
 import { createOrganizationQueries, createPlatformAdminOrganizationQueries } from "./organization-queries.mjs?v=20261004-p2s4";
 import { createOrganizationWriteContract } from "./organization-write-contract.mjs?v=20261003-p2s3";
 import { getAdminFeature } from "./admin-feature-registry.mjs?v=20261003-p2s3";
@@ -1620,6 +1621,7 @@ const ADMIN_MENU = [
   {key:"sessions", label:"Phiên tương tác", icon:"🗳️"},
   {key:"qrlinks", label:"QR vĩnh viễn", icon:"🔗"},
   {key:"groups", label:"Thảo luận nhóm", icon:"👥"},
+  {key:"minigames", label:"Mini Game", icon:"🎮"},
   {key:"library", label:"Thư viện câu hỏi", icon:"📚"},
   {key:"audit", label:"Nhật ký hoạt động", icon:"🧾"},
   {key:"stats", label:"Thống kê hệ thống", icon:"📈"},
@@ -1731,6 +1733,7 @@ function adminRoute(key){
   if(key==="sessions") return adminSessionsView(c);
   if(key==="qrlinks") return qrManager(c, true);
   if(key==="groups") return groupModule(c, true);
+  if(key==="minigames") return mountMiniGameHub(c, esc);
   if(key==="library") return adminLibrary(c);
   if(key==="audit") return adminAuditLog(c);
   if(key==="stats") return adminStats(c);
@@ -3029,6 +3032,7 @@ const TEACHER_MENU = [
   {key:"classes", label:"Lớp học", icon:"🏫"},
   {key:"create", label:"Tạo tương tác", icon:"➕"},
   {key:"groups", label:"Thảo luận nhóm", icon:"👥"},
+  {key:"minigames", label:"Mini Game", icon:"🎮"},
   {key:"library", label:"THƯ VIỆN", icon:"📚"},
   {key:"qrlinks", label:"QR vĩnh viễn", icon:"🔗"},
   {key:"trash", label:"Thùng rác", icon:"🗑️"},
@@ -3112,6 +3116,7 @@ function teacherRoute(){
   if(key==="library") return teacherLibraryHub(c);
   if(key==="qrlinks") return qrManager(c, false);
   if(key==="groups") return groupModule(c, false);
+  if(key==="minigames") return mountMiniGameHub(c, esc);
   if(key==="trash") return teacherTrash(c);
   if(key==="account") return teacherAccount(c);
 }

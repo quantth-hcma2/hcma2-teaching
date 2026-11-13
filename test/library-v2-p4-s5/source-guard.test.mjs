@@ -18,10 +18,11 @@ const text = (p) => readFileSync(root + p, "utf8");
 const sha = (p) => createHash("sha256").update(readFileSync(root + p)).digest("hex");
 const shaBuf = (b) => createHash("sha256").update(b).digest("hex");
 const noComments = (p) => text(p).replace(/\/\/.*$/gm, "");
-const ADDED_OK = [/^import-audit\.mjs$/, /^test\/library-v2-p4-s5\/[A-Za-z0-9._-]+$/];
+const ADDED_OK = [/^import-audit\.mjs$/, /^test\/library-v2-p4-s5\/[A-Za-z0-9._-]+$/, /^mini-game-registry\.mjs$/, /^test\/minigame-r1\/[A-Za-z0-9._-]+$/];   // MINI GAME R1 aligned: + the Mini Game registry and its tests
 const MODIFIED_OK = new Set([
   "index.html", "import-center-view.mjs", "import-center-engine.mjs", "import-commit-controller.mjs", "import-run-helpers.mjs",                                // the slice's own edits
-  "test/library-v2-p4-s4/source-guard.test.mjs", "test/library-v2-p4-s4/p4s4-edits.mjs", "test/library-v2-p4-s4/harness.html", "test/library-v2-p4-s4/ui.e2e.mjs", "test/library-v2-p4-s3/source-guard.test.mjs", "test/library-v2-p2-s2/source-guard.test.mjs"   // earlier guards aligned
+  "test/library-v2-p4-s4/source-guard.test.mjs", "test/library-v2-p4-s4/p4s4-edits.mjs", "test/library-v2-p4-s4/harness.html", "test/library-v2-p4-s4/ui.e2e.mjs", "test/library-v2-p4-s3/source-guard.test.mjs", "test/library-v2-p2-s2/source-guard.test.mjs",   // earlier guards aligned
+  "test/onboarding-o2/source-guard.test.mjs"   // MINI GAME R1 aligned: O2 menu pins compare the menus without the Mini Game entry
 ]);
 
 test("SCOPE: relative to the production web release c6c66ed the tree only ADDS the audit module and this slice's tests/launcher, and modifies ONLY the approved files (no deletion or rename)", () => {

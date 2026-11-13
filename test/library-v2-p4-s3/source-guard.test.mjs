@@ -21,7 +21,7 @@ const sha = (p) => createHash("sha256").update(["index.html", "curriculum-admin-
 const shaText = (t) => createHash("sha256").update(Buffer.from(t, "utf8")).digest("hex");
 const code = (p) => text(p).split("\n").map((line) => (line.includes("//") ? line.slice(0, line.indexOf("//")) : line)).join("\n");
 const NEW_MODULES = ["import-center-view.mjs", "import-center-engine.mjs", "import-template-writer.mjs"];
-const ADDED_OK = [/^import-(center-view|center-engine|template-writer|commit-controller|run-helpers|batch-status|audit)\.mjs$/, /^test\/library-v2-p4-s[345]\/[A-Za-z0-9._-]+$/];   // P4-S4 aligned: + the commit controller, the run helpers and the P4-S4 tests
+const ADDED_OK = [/^import-(center-view|center-engine|template-writer|commit-controller|run-helpers|batch-status|audit)\.mjs$/, /^test\/library-v2-p4-s[345]\/[A-Za-z0-9._-]+$/, /^mini-game-registry\.mjs$/, /^test\/minigame-r1\/[A-Za-z0-9._-]+$/];   // MINI GAME R1 aligned: + the Mini Game registry and its tests   // P4-S4 aligned: + the commit controller, the run helpers and the P4-S4 tests
 const MODIFIED_OK = new Set([
   "index.html", "curriculum-admin-view.mjs", "organization-admin-view.mjs", "import-template.mjs", "firestore.rules.production-candidate",                                              // the slice's own edits (pinned below)
   "test/library-v2-p2-s2/source-guard.test.mjs", "test/library-v2-p2-s3/source-guard.test.mjs", "test/library-v2-p2-s4/source-guard.test.mjs",   // historical guards aligned

@@ -1,3 +1,4 @@
+import { reverseMiniGameIndexEdits } from "../minigame-r1/minigame-edits.mjs";
 // P4-S5-B edits to index.html (the only earlier-pinned file this slice edits): the exact edits plus a reversal that restores the P4-S4 state (commit c6c66ed, the production web release) so every older
 // byte-pin keeps its meaning and any OTHER change is still detected. p4s4-edits.mjs applies this reversal FIRST (S5 -> S4 -> S3 ...). The reversal is IDEMPOTENT (a source holding none of the edits is returned
 // unchanged). Imports nothing. test/library-v2-p4-s5/source-guard.test.mjs pins these pairs and the resulting hashes.
@@ -23,4 +24,5 @@ export const INDEX_EDITS_P4S5 = [
   ['loadEngine:()=>import("./import-center-engine.mjs?v=20261014-p5b"),', 'loadEngine:()=>import("./import-center-engine.mjs?v=20261009-p4s4"),'],
   ['acquireLock:acquireImportLock },\n      auditTools:{ firestore:{doc,setDoc,getDocFromServer,serverTimestamp}, actor:()=>({uid:STATE.user?.uid||null,email:STATE.profile?.email||STATE.user?.email||"",name:STATE.profile?.displayName||"",role:STATE.profile?.role||""}) }', 'acquireLock:acquireImportLock }']
 ];
-export const reverseP4S5IndexEdits = (src) => transform(src, INDEX_EDITS_P4S5, "P4-S5-B index.html");
+// MINI GAME TAB R1: its own index.html reversal is applied FIRST (Mini Game -> P4-S5 -> P4-S4 ...).
+export const reverseP4S5IndexEdits = (src) => transform(reverseMiniGameIndexEdits(src), INDEX_EDITS_P4S5, "P4-S5-B index.html");

@@ -11,7 +11,8 @@ const shaOf = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 const NL = String.fromCharCode(10), CRLF = String.fromCharCode(13, 10);
 import { reverseO2Edits, IMPORT_ADDED, BLOCK_ADDED, APPROVE_O2 } from "./o2-edits.mjs";
 import { reverseO1Edits } from "../o1-search/o1-edits.mjs";
-import { reverseS3IndexEdits, reverseS3AdminViewEdits } from "../library-v2-p3-s3/s3-edits.mjs";   // P3-S3 aligned: older byte-pins keep their meaning by reversing the P3-S3 edits first
+import { reverseS3IndexEdits, reverseS3AdminViewEdits } from "../library-v2-p3-s3/s3-edits.mjs";
+import { reverseMiniGameIndexEdits } from "../minigame-r1/minigame-edits.mjs";   // MINI GAME R1 aligned: the menu pins below compare the menus without the Mini Game entry   // P3-S3 aligned: older byte-pins keep their meaning by reversing the P3-S3 edits first
 const html = text("index.html");
 const mod = text("teacher-organization-enrollment.mjs");
 const code = (src) => src.split(NL).filter((l) => !l.trim().startsWith("//")).join(NL);
@@ -45,9 +46,10 @@ test("neighbouring V1 handlers and entry points are untouched: suspend, reactiva
   assert.ok(html.includes('$$("[data-approve]").forEach(b=>b.onclick=()=>approveTeacher(b.dataset.approve, ()=>adminOverview(c)));'), "overview entry point");
   assert.ok(html.includes('if(act==="approve") approveTeacher(id);'), "teachers-screen entry point");
   assert.equal((html.match(/approveTeacher\(/g) || []).length, 3, "definition + exactly the two existing call sites");
-  const menu = html.slice(html.indexOf("const ADMIN_MENU = ["), html.indexOf("];", html.indexOf("const ADMIN_MENU = [")));
+  const mh = reverseMiniGameIndexEdits(html);   // MINI GAME R1 aligned
+  const menu = mh.slice(mh.indexOf("const ADMIN_MENU = ["), mh.indexOf("];", mh.indexOf("const ADMIN_MENU = [")));
   assert.equal(shaOf(menu), "b6d282dc85f835c37c8311a2b9a57385b31e93d26f35014d6ce1a66ab057ea8e");
-  const teacher = html.slice(html.indexOf("const TEACHER_MENU = ["), html.indexOf("];", html.indexOf("const TEACHER_MENU = [")));
+  const teacher = mh.slice(mh.indexOf("const TEACHER_MENU = ["), mh.indexOf("];", mh.indexOf("const TEACHER_MENU = [")));
   assert.equal(shaOf(teacher), "3bff38d3c4cdadc2c370985252e7909c256905d0973356e7d605892a2e9f46d8");
 });
 

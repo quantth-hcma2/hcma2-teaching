@@ -8,7 +8,7 @@
 // 2 minutes, one use); when the same tab comes back with the SSO request for that Mini Game origin, the click IS the confirmation
 // and the code is requested at once. Any other arrival (Mini Game login button, another site, a stale or reused intent) still shows
 // the confirmation dialog. location.replace keeps history to [Teaching, Mini Game] (Back returns to Teaching, no loop).
-import { MINI_GAME_ALLOWED_ORIGINS } from "./mini-game-registry.mjs?v=20261113-sso-r1";
+import { MINI_GAME_ALLOWED_ORIGINS } from "./mini-game-registry.mjs?v=20261115-mg-p1";
 
 const B64URL_32 = /^[A-Za-z0-9_-]{43}$/;
 const PARAMS = ["mg_sso_state", "mg_sso_challenge", "mg_sso_return"];

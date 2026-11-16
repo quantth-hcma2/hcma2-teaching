@@ -21,18 +21,23 @@ export const MINI_GAMES = freeze([
     title: "TRẮC NGHIỆM TƯƠNG TÁC",
     description: "Trò chơi trắc nghiệm theo thời gian thực: trình chiếu câu hỏi, học viên trả lời trên điện thoại, chấm điểm tự động, bảng xếp hạng và báo cáo.",
     action: "MỞ TRÒ CHƠI →",
-    // SSO R1: mo qua /sso/begin -> Mini Game xin xac nhan tai Teaching (mini-game-sso.mjs), khong can nhap mat khau lan hai
-    url: "https://hcma2-interactive.hcma2-interactive-v1.workers.dev/sso/begin",
+    // MINI GAME IN-TEACHING P1: mo ngay trong Teaching, CUNG ORIGIN (GitHub Pages /minigame/), dang nhap = tai khoan Teaching.
+    // Ban Cloudflare (workers.dev) giu nguyen nhung khong con hien o day; van nam trong MINI_GAME_ALLOWED_ORIGINS (dang xuat SSO cu).
+    url: "/minigame/",
     notes: freeze([
-      "Mở ngay trong tab này (ứng dụng riêng của HCMA2); trong Mini Game bấm “Quay về HCMA2 Teaching” để trở lại.",
-      "Đăng nhập bằng chính tài khoản HCMA2 Teaching (xác nhận một lần, không nhập lại mật khẩu).",
+      "Mở ngay trong HCMA2 Teaching (cùng trang); bấm “Quay về HCMA2 Teaching” để trở lại.",
+      "Dùng chính tài khoản giảng viên HCMA2 Teaching, không cần đăng nhập lần hai.",
       "Học viên không cần tài khoản: tham gia bằng mã PIN hoặc quét mã QR trên màn chiếu."
     ])
   })
 ]);
 
+/** Duong dan CUNG ORIGIN duoc phep (Mini Game tich hop trong Teaching). */
+export const MINI_GAME_SAME_ORIGIN_PATHS = freeze(["/minigame/"]);
+
 export function isAllowedMiniGameUrl(url, origins = MINI_GAME_ALLOWED_ORIGINS) {
   if (typeof url !== "string" || !url) return false;
+  if (MINI_GAME_SAME_ORIGIN_PATHS.includes(url)) return true;
   let u;
   try {
     u = new URL(url);
@@ -81,4 +86,15 @@ export function renderMiniGameHubHtml(esc, games = MINI_GAMES) {
 export function mountMiniGameHub(container, esc, games = MINI_GAMES) {
   if (!container) return;
   container.innerHTML = renderMiniGameHubHtml(esc, games);
+  // Ban thu cuc bo (Emulator): giu ?emulator=1 khi sang /minigame/ (production khong bao gio co tham so nay)
+  try {
+    const loop = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+    if (loop && new URLSearchParams(location.search).get("emulator") === "1")
+      for (const a of container.querySelectorAll("a[data-minigame-open]")) {
+        const h = a.getAttribute("href") || "";
+        if (h.startsWith("/")) a.setAttribute("href", h + "?emulator=1");
+      }
+  } catch {
+    /* bo qua */
+  }
 }
